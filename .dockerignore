@@ -1,0 +1,43 @@
+# VCS + project meta
+.git/
+.gitignore
+.github/
+.dockerignore
+.prettierrc
+.prettierignore
+
+# Python caches / envs / build artifacts
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+poetry.lock
+
+# Node
+node_modules/
+
+# Secrets + local config (bind-mounted at runtime, never baked into the image)
+config.yaml
+*-config.yaml
+secrets/
+deploy.env
+
+# Runtime data + bind-mounted dirs (provided at runtime, not at build)
+data/
+profiles/
+
+# Not used by any Dockerfile
+docs/
+sandbox/
+scripts/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

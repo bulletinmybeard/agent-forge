@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.12'
+  # Pin Ruff so `ruff format --check` matches local output (formatter behaviour
+  # can drift between versions). Bump together with the dev dependency.
+  RUFF_VERSION: '0.14.10'
+
+jobs:
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Ruff
+        run: pip install "ruff==${{ env.RUFF_VERSION }}"
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+  build:
+    name: Build & Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install package (editable, dev extra)
+        run: pip install -e ".[dev]"
+
+      # `--help` short-circuits in argparse before tool registration, and the
+      # package's top-level imports are core-only — so this validates that a
+      # plain `pip install agent-forge` yields a working CLI.
+      - name: Smoke test CLI
+        run: agentforge --help
+
+      # The web/server tests import FastAPI and the rest of the service stack,
+      # which the core install omits. Add the service extra here (after the
+      # core-only smoke test, before the tests) so those tests can run. The
+      # core-only guarantee stays covered by the wheel-install step below.
+      - name: Install service extra (for web/service tests)
+        run: pip install -e ".[service]"
+
+      - name: Run tests (if any)
+        run: |
+          if [ -d tests ] && ls tests/test_*.py >/dev/null 2>&1; then
+            pytest -q
+          else
+            echo "no tests yet — skipping"
+          fi
+
+      - name: Build wheel + sdist
+        run: |
+          pip install build
+          python -m build
+
+      - name: Verify wheel installs core-only + CLI runs
+        run: |
+          python -m venv /tmp/verify
+          /tmp/verify/bin/pip install dist/*.whl
+          /tmp/verify/bin/agentforge --help
+
+      - name: Inspect artifact contents
+        run: |
+          ls -la dist/
+          python -c "import glob, zipfile; z = zipfile.ZipFile(glob.glob('dist/*.whl')[0]); print('\n'.join(z.namelist()[:25]))"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: agentforge-dist-${{ github.sha }}
+          path: dist/
+          retention-days: 7
+
+  ci-summary:
+    name: CI Summary
+    needs: [lint, build]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## CI Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Job | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Lint & Format | ${{ needs.lint.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Build & Smoke | ${{ needs.build.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ needs.lint.result }}" = "success" ] && [ "${{ needs.build.result }}" = "success" ]; then
+            echo "All CI checks passed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Some CI checks failed — see the jobs above." >> "$GITHUB_STEP_SUMMARY"
+          fi

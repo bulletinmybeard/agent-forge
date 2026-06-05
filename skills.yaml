@@ -1,0 +1,306 @@
+# skills.yaml — Skill definitions for AgentForge
+#
+# Skills are domain-specific instruction sets that get injected into the LLM
+# system prompt when relevant.  Unlike custom agents (which are entire modes
+# with their own tool subsets and profiles), skills are *additive guidance*
+# that enrich an existing mode's behaviour.
+#
+# A skill can be activated in two ways:
+#   1. Explicit @alias trigger  — the user types @skill-alias at any position
+#      in the prompt (not just the start).  The alias is stripped before
+#      execution.
+#   2. Auto-detection           — the LLM classifier or keyword matcher picks
+#      the skill based on the prompt content + the skill's `keywords` list.
+#      Multiple skills can auto-activate simultaneously.
+#
+# ─── Fields ────────────────────────────────────────────────────────────────
+#
+# id:               Unique identifier for the skill (used in API responses).
+#
+# description:      Short label shown in the Help modal and /api/skills.
+#
+# instruction_file: Path to a .md file relative to agentforge/ containing
+#                   the full skill instructions injected into the system prompt.
+#
+# condensed:        (Optional) A short summary (1-5 lines) of the skill's key
+#                   rules, used on follow-up turns instead of the full markdown
+#                   to save tokens.  If omitted, a truncated version of the
+#                   full instructions is used (first 300 chars).
+#
+# aliases:          (Optional) List of @-prefixes that explicitly activate this
+#                   skill.  Can appear anywhere in the prompt (not just start).
+#                   e.g., ["@deploy", "@dockerfile"]
+#
+# keywords:         (Optional) List of terms for auto-detection.  If ≥2 keywords
+#                   from this list appear in the query, the skill is auto-selected.
+#                   This works alongside the LLM classifier.
+#
+# modes:            (Optional) List of modes this skill applies to.  If set, the
+#                   skill is only injected when the resolved mode matches.  If
+#                   omitted, the skill can apply to any mode.
+#                   e.g., ["agent", "custom:docker-ops"]
+#
+# auto_detect:      (Optional, default: true) Whether the skill participates in
+#                   keyword/LLM auto-detection.  Set to false for skills that
+#                   should only activate via explicit @alias.
+#
+# priority:         (Optional, default: 0) Higher priority skills are injected
+#                   first when multiple skills match.  Useful for ordering.
+#
+# max_skills:       Global setting — maximum number of skills that can be
+#                   injected per query (to avoid blowing the context window).
+#                   Default: 3.
+#
+# ─── Example ──────────────────────────────────────────────────────────────
+#
+#   docker-best-practices:
+#     description: "Docker deployment and Dockerfile best practices"
+#     instruction_file: markdown/skills/docker-best-practices.md
+#     condensed: |
+#       Key rules: multi-stage builds, pin base versions, non-root user,
+#       .dockerignore, HEALTHCHECK, least-privilege.
+#     aliases: ["@deploy", "@dockerfile"]
+#     keywords: ["docker", "dockerfile", "container", "compose", "deploy"]
+#     modes: ["agent", "custom:docker-ops"]
+#     auto_detect: true
+#     priority: 0
+#
+# ───────────────────────────────────────────────────────────────────────────
+
+# Global settings
+max_skills: 3
+
+skills:
+
+  # ── Docker Best Practices ─────────────────────────────────────────────
+  docker-best-practices:
+    description: "Docker deployment and Dockerfile best practices"
+    instruction_file: markdown/skills/docker-best-practices.md
+    condensed: |
+      [Skill: Docker Best Practices]
+      Key rules: multi-stage builds, pin base image versions, non-root USER,
+      .dockerignore for build context, HEALTHCHECK directive, least-privilege
+      file permissions, combine RUN layers, use COPY not ADD.
+    aliases: ["@deploy", "@dockerfile"]
+    keywords: ["docker", "dockerfile", "container", "compose", "image", "deploy"]
+    modes: ["agent", "custom:docker-ops"]
+    disable_for_modes: ["custom:docker-ops"]
+    auto_detect: true
+    priority: 0
+
+  # ── Code Review Guidelines ───────────────────────────────────────────
+  code-review-guidelines:
+    description: "Structured code review checklist and best practices"
+    instruction_file: markdown/skills/code-review-guidelines.md
+    condensed: |
+      [Skill: Code Review Guidelines]
+      Check: security (injection, auth, secrets), performance (N+1, indexes),
+      error handling (edge cases, cleanup), naming/readability, test coverage,
+      backwards compatibility, logging. Rate severity: critical/major/minor/nit.
+    aliases: ["@cr", "@codereview"]
+    keywords: ["review", "code review", "pull request", "PR", "diff", "refactor"]
+    modes: ["agent", "custom:code-reviewer"]
+    auto_detect: true
+    priority: 0
+
+  # ── API Design Standards ─────────────────────────────────────────────
+  api-design-standards:
+    description: "REST API design conventions and patterns"
+    instruction_file: markdown/skills/api-design-standards.md
+    condensed: |
+      [Skill: API Design Standards]
+      Key rules: RESTful resource naming (plural nouns), proper HTTP verbs,
+      consistent error format (RFC 7807), pagination via cursor/offset,
+      versioning in URL path, idempotent PUT/DELETE, HATEOAS links optional.
+    aliases: ["@api-design"]
+    keywords: ["api", "endpoint", "rest", "openapi", "swagger", "route", "schema"]
+    modes: ["agent", "search", "custom:api-test"]
+    disable_for_modes: ["custom:api-test"]
+    auto_detect: true
+    priority: 0
+
+  # ── Security Audit Guidelines ──────────────────────────────────────
+  security-audit-guidelines:
+    description: "Security scanning — secrets, dependencies, code patterns, config"
+    instruction_file: markdown/skills/security-audit-guidelines.md
+    condensed: |
+      [Skill: Security Audit]
+      Check: secrets in code/config/env, dependency CVEs, injection vulnerabilities,
+      auth bypass, SSRF, path traversal, exposed ports, debug mode, CORS misconfiguration,
+      Docker root user, TLS validation. Classify: CRITICAL/HIGH/MEDIUM/LOW.
+    aliases: ["@security-audit", "@sec"]
+    keywords: ["security", "vulnerability", "CVE", "secrets", "audit", "injection", "XSS", "SSRF"]
+    modes: ["agent", "custom:security-audit"]
+    disable_for_modes: ["custom:security-audit"]
+    auto_detect: true
+    priority: 1
+
+  # ── Performance Profiling ──────────────────────────────────────────
+  performance-profiling:
+    description: "Performance analysis — database, application, network, frontend"
+    instruction_file: markdown/skills/performance-profiling.md
+    condensed: |
+      [Skill: Performance Profiling]
+      Check: N+1 queries, missing indexes, full table scans, memory leaks, async bottlenecks,
+      bundle size, render blocking, container resource limits. Tools: py-spy, cProfile,
+      pg_stat_statements, EXPLAIN ANALYZE. Prioritize by impact.
+    aliases: ["@perf-guide", "@profiling"]
+    keywords: ["performance", "slow", "bottleneck", "profiling", "latency", "optimization", "N+1"]
+    modes: ["agent", "custom:perf-analysis"]
+    disable_for_modes: ["custom:perf-analysis"]
+    auto_detect: true
+    priority: 0
+
+  # ── Testing Strategy ───────────────────────────────────────────────
+  testing-strategy:
+    description: "Test planning — pyramid, pytest patterns, coverage, CI integration"
+    instruction_file: markdown/skills/testing-strategy.md
+    condensed: |
+      [Skill: Testing Strategy]
+      Pyramid: 70% unit, 25% integration, 5% E2E. Pytest: AAA pattern, fixtures,
+      parametrize, mock. Coverage: branch > line, focus critical paths.
+      Edge cases: boundaries, error paths, null/empty. CI: parallel, flaky detection.
+    aliases: ["@testing", "@test-plan"]
+    keywords: ["test", "testing", "pytest", "coverage", "unit test", "integration test", "TDD"]
+    modes: ["agent", "custom:test"]
+    disable_for_modes: ["custom:test"]
+    auto_detect: true
+    priority: 0
+
+  # ── Log Analysis Patterns ──────────────────────────────────────────
+  log-analysis-patterns:
+    description: "Log parsing — formats, correlation, error classification, alerting"
+    instruction_file: markdown/skills/log-analysis-patterns.md
+    condensed: |
+      [Skill: Log Analysis]
+      Formats: syslog, JSON structured, Apache/Nginx, Docker. Correlation: request ID tracing,
+      timestamp alignment. Classification: stack trace grouping, error rates, first occurrence.
+      Alerts: error spikes, cascading failures, resource warnings.
+    aliases: ["@log-guide", "@log-patterns"]
+    keywords: ["log", "logs", "logging", "syslog", "error log", "access log", "stack trace"]
+    modes: ["agent", "logs"]
+    disable_for_modes: ["logs"]
+    auto_detect: true
+    priority: 0
+
+  # ── Git Workflow ────────────────────────────────────────────────────
+  git-workflow:
+    description: "Git best practices — branching, commits, PRs, release workflow"
+    instruction_file: markdown/skills/git-workflow.md
+    condensed: |
+      [Skill: Git Workflow]
+      Branches: feature/bugfix/hotfix/release/ prefixes. Commits: conventional format
+      (feat/fix/chore/docs). PRs: small, descriptive, linked issues. Merge: squash for features,
+      merge commit for releases. Tags: semver, annotated.
+    aliases: ["@git", "@pr"]
+    keywords: ["git", "branch", "commit", "pull request", "PR", "merge", "rebase", "changelog"]
+    modes: ["agent", "custom:code-reviewer"]
+    auto_detect: true
+    priority: 0
+
+  # ── SQL Optimization ───────────────────────────────────────────────
+  sql-optimization:
+    description: "SQL tuning — EXPLAIN analysis, indexes, query patterns, DuckDB"
+    instruction_file: markdown/skills/sql-optimization.md
+    condensed: |
+      [Skill: SQL Optimization]
+      Read EXPLAIN ANALYZE output. Index strategy: composite, partial, covering.
+      Anti-patterns: SELECT *, functions on indexed cols, implicit casts.
+      PostgreSQL: CTEs, pg_stat_statements. DuckDB: columnar pushdown, Parquet.
+    aliases: ["@sql-guide", "@query-opt"]
+    keywords: ["sql", "query", "index", "EXPLAIN", "slow query", "database", "optimize", "DuckDB"]
+    modes: ["agent", "sql"]
+    disable_for_modes: ["sql"]
+    auto_detect: true
+    priority: 0
+
+  # ── Observability & Monitoring ─────────────────────────────────────
+  observability-monitoring:
+    description: "Monitoring setup — metrics, logs, traces, alerting, dashboards"
+    instruction_file: markdown/skills/observability-monitoring.md
+    condensed: |
+      [Skill: Observability]
+      Three pillars: metrics (counters/gauges/histograms), logs (structured JSON),
+      traces (distributed spans). Alerting: SLO-based, error budgets, avoid fatigue.
+      Dashboards: RED method (rate/errors/duration), USE method (utilization/saturation/errors).
+    aliases: ["@observability", "@alerts"]
+    keywords: ["monitoring", "observability", "alerting", "SLO", "dashboard", "metrics", "traces"]
+    modes: ["agent", "monitor"]
+    auto_detect: true
+    priority: 0
+
+  # ── Infrastructure Health ──────────────────────────────────────────
+  infrastructure-health:
+    description: "System diagnostics — CPU, memory, disk, Docker, network, certs"
+    instruction_file: markdown/skills/infrastructure-health.md
+    condensed: |
+      [Skill: Infrastructure Health]
+      Check: CPU/memory/disk/network, container status/OOM/restarts, DNS/TLS/ports,
+      service endpoints, cert expiry, connection pools. Report: OK/WARN/CRIT status
+      per component with remediation steps.
+    aliases: ["@infra", "@health-check"]
+    keywords: ["health", "infrastructure", "disk", "memory", "CPU", "OOM", "certificate", "DNS"]
+    modes: ["agent", "custom:infra-health"]
+    disable_for_modes: ["custom:infra-health"]
+    auto_detect: true
+    priority: 0
+
+  # ── OpenAPI Spec Writing ───────────────────────────────────────────
+  openapi-spec-writing:
+    description: "OpenAPI 3.1 spec authoring — paths, schemas, auth, pagination"
+    instruction_file: markdown/skills/openapi-spec-writing.md
+    condensed: |
+      [Skill: OpenAPI Spec Writing]
+      Structure: paths → components → security. Schemas: $ref reuse, allOf/oneOf composition.
+      Errors: RFC 7807. Auth: OAuth2 flows, API key, Bearer. Pagination: cursor-based preferred.
+      Versioning: URL path (/v1/). Always include realistic examples.
+    aliases: ["@openapi", "@swagger"]
+    keywords: ["openapi", "swagger", "spec", "schema", "API documentation", "yaml spec"]
+    modes: ["agent", "search"]
+    auto_detect: true
+    priority: 0
+
+  # ── Python Best Practices ──────────────────────────────────────────
+  python-best-practices:
+    description: "Python patterns — types, async, errors, project structure, testing"
+    instruction_file: markdown/skills/python-best-practices.md
+    condensed: |
+      [Skill: Python Best Practices]
+      Types: 3.10+ syntax, X | None over Optional. Async: TaskGroup, no blocking in event loop.
+      Errors: custom exceptions, chain with `from`. Structure: src layout, no circular imports.
+      Quality: Ruff + mypy strict. Performance: generators, __slots__, lru_cache.
+    aliases: ["@python", "@py"]
+    keywords: ["python", "type hints", "async", "asyncio", "pytest", "pydantic", "ruff", "mypy"]
+    modes: ["agent"]
+    auto_detect: true
+    priority: 0
+
+  # ── Web Scraping Patterns ──────────────────────────────────────────
+  web-scraping-patterns:
+    description: "Scraping — extraction priority, anti-detection, Playwright, validation"
+    instruction_file: markdown/skills/web-scraping-patterns.md
+    condensed: |
+      [Skill: Web Scraping]
+      Priority: JSON-LD > structured data > CSS selectors > regex. Anti-detection: UA rotation,
+      delays, fingerprint randomization. Playwright: wait strategies, headed mode for Akamai.
+      Validation: schema checks, type coercion. Storage: dedup, incremental updates.
+    aliases: ["@scraping", "@crawl"]
+    keywords: ["scrape", "scraping", "crawl", "extract", "playwright", "selector", "JSON-LD", "Akamai"]
+    modes: ["agent"]
+    auto_detect: true
+    priority: 0
+
+  # ── DuckDB Analytics ───────────────────────────────────────────────
+  duckdb-analytics:
+    description: "DuckDB — columnar queries, Parquet, window functions, analytics"
+    instruction_file: markdown/skills/duckdb-analytics.md
+    condensed: |
+      [Skill: DuckDB Analytics]
+      Columnar OLAP: vectorized execution, zero-copy. Parquet: predicate pushdown,
+      partition pruning. SQL: window functions, QUALIFY, PIVOT, ASOF joins, LIST/STRUCT.
+      Concurrency: single-writer, read-only replicas. Python: DB-API, pandas interop.
+    aliases: ["@duckdb", "@analytics"]
+    keywords: ["duckdb", "analytics", "parquet", "columnar", "window function", "OLAP", "time series"]
+    modes: ["agent", "sql"]
+    auto_detect: true
+    priority: 0

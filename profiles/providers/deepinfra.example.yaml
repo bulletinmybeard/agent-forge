@@ -1,0 +1,52 @@
+# profiles / providers / deepinfra.example.yaml  —  TEMPLATE (optional provider)
+#
+# Copy to `deepinfra.yaml` ONLY if you use DeepInfra (AGENTFORGE_PROVIDER=deepinfra
+# or ai.provider_override: deepinfra). Not needed for an Ollama-only deployment.
+#     cp profiles/providers/deepinfra.example.yaml profiles/providers/deepinfra.yaml
+#
+# Loader rules: every key under `profiles:` MUST start with 'deepinfra-'. This
+# file's `provider_override_map:` merges into ai.provider_override_map.deepinfra
+# and layers over the Ollama base — unmapped tiers fall back to Ollama.
+# DeepInfra is OpenAI-compatible; `api_key` + `base_url` live in `ai.deepinfra`
+# in framework-config.yaml, NOT here.
+#
+# Tip: prefer non-reasoning models for tool/agent lanes — reasoning-first models
+# burn the token budget on <think> before emitting a tool call and can hang the
+# agent loop. Use parse_thinking + a larger max_tokens for a deliberate thinking lane.
+
+profiles:
+  # Reliable tool/agent + general lane.
+  deepinfra-claude-haiku-4-5:
+    abstract: true
+    provider: deepinfra
+    model: "anthropic/claude-haiku-4-5"   # use the exact id from deepinfra.com/models
+    temperature: 0.3
+    max_tokens: 4000
+
+  # Cheap general/code MoE.
+  deepinfra-qwen3-coder-480b:
+    abstract: true
+    provider: deepinfra
+    model: "Qwen/Qwen3-Coder-480B-A35B-Instruct"
+    temperature: 0.2
+    max_tokens: 4000
+
+  # Deliberate thinking lane (reasoning model — keep parse_thinking + headroom).
+  deepinfra-qwen3-235b-a22b-thinking-2507:
+    abstract: true
+    provider: deepinfra
+    model: "Qwen/Qwen3-235B-A22B-Thinking-2507"
+    parse_thinking: true
+    temperature: 0.2
+    max_tokens: 8000
+
+# Map only the tiers you want DeepInfra to serve. `embed` is intentionally
+# omitted -> embeddings fall back to the Ollama base (local embedding model).
+provider_override_map:
+  general:  deepinfra-claude-haiku-4-5
+  light:    deepinfra-claude-haiku-4-5
+  coder:    deepinfra-qwen3-coder-480b
+  heavy:    deepinfra-claude-haiku-4-5
+  reasoner: deepinfra-qwen3-235b-a22b-thinking-2507
+  # Role-keyed direct-selects also work (take precedence over tier keys), e.g.:
+  # agent:  deepinfra-claude-haiku-4-5

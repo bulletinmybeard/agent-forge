@@ -1,0 +1,48 @@
+# profiles / providers / openrouter.example.yaml  —  TEMPLATE (optional provider)
+#
+# Copy to `openrouter.yaml` ONLY if you use OpenRouter (AGENTFORGE_PROVIDER=openrouter
+# or ai.provider_override: openrouter). Not needed for an Ollama-only deployment.
+#     cp profiles/providers/openrouter.example.yaml profiles/providers/openrouter.yaml
+#
+# Loader rules: every key under `profiles:` MUST start with 'openrouter-'. This
+# file's `provider_override_map:` merges into ai.provider_override_map.openrouter
+# and layers over the Ollama base — unmapped tiers fall back to Ollama.
+# OpenRouter is OpenAI-compatible; `api_key` + `base_url` live in `ai.openrouter`
+# in framework-config.yaml, NOT here.
+#
+# NOTE: only pick models that support tool/function calling for the agent/tool
+# lanes — some OpenRouter models 404 with "no endpoints support tool use".
+
+profiles:
+  # Reliable tool/agent + general/code lane.
+  openrouter-claude-haiku-4-5:
+    abstract: true
+    provider: openrouter
+    model: "anthropic/claude-haiku-4.5"
+    temperature: 0.3
+    max_tokens: 4000
+
+  # Cheap, verified non-reasoning light lane.
+  openrouter-glm-4-7-flash:
+    abstract: true
+    provider: openrouter
+    model: "z-ai/glm-4.7-flash"
+    temperature: 0.4
+    max_tokens: 2000
+
+  # Vision lane.
+  openrouter-gemini-3-1-flash-lite:
+    abstract: true
+    provider: openrouter
+    model: "google/gemini-3.1-flash-lite"
+    temperature: 0.5
+    max_tokens: 4000
+
+# Map only the tiers you want OpenRouter to serve. `embed` is omitted ->
+# embeddings fall back to the Ollama base (OpenRouter has no embedding lane).
+provider_override_map:
+  general:  openrouter-claude-haiku-4-5
+  coder:    openrouter-claude-haiku-4-5
+  light:    openrouter-glm-4-7-flash
+  visual:   openrouter-gemini-3-1-flash-lite
+  worker:   openrouter-claude-haiku-4-5

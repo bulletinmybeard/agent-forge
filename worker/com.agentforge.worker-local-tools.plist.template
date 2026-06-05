@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Native LOCAL SAQ tools-worker (macOS). Runs role "local": it consumes the
+      `agentforge:tools:local` queue and executes host-access tool calls (shell,
+      SSH keys, gh, Docker, filesystem) that the deployed remote stack dispatches
+      to your machine. Talks to the remote's Redis/Qdrant/Ollama/web.
+
+      Generated from this template by scripts/setup-local-worker.sh — do not edit
+      the installed copy directly.
+    -->
+    <key>Label</key>
+    <string>com.agentforge.worker-local-tools</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__VENV__/bin/saq</string>
+        <string>-v</string>
+        <string>web.server.queue.settings_tools.settings</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>AGENTFORGE_WORKER_ROLE</key>
+        <string>local</string>
+        <key>REDIS_URL</key>
+        <string>redis://__REMOTE_HOST__:6379</string>
+        <key>AGENTFORGE_WEB_URL</key>
+        <string>http://__REMOTE_HOST__:8200</string>
+        <key>QDRANT_HOST</key>
+        <string>__REMOTE_HOST__</string>
+        <key>OLLAMA_HOST</key>
+        <string>http://__REMOTE_HOST__:11434</string>
+        <key>AGENTFORGE_TOOL_PLUGINS</key>
+        <string>__TOOL_PLUGINS__</string>
+        <key>PYTHONPATH</key>
+        <string>__REPO__</string>
+        <key>PATH</key>
+        <string>__VENV__/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>NetworkState</key>
+        <true/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/com.agentforge.worker-local-tools/worker.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/com.agentforge.worker-local-tools/worker.log</string>
+</dict>
+</plist>

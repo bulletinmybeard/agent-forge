@@ -1,0 +1,26 @@
+# Hand-tuned config + data — never let Prettier reflow these
+config.yaml
+*-config.yaml
+*.example.yaml
+profiles/
+custom_agents*.yaml
+tool_routing*.yaml
+skills.yaml
+data/
+secrets/
+
+# Generated / vendored
+.venv/
+dist/
+build/
+*.egg-info/
+node_modules/
+poetry.lock
+
+# Runtime LLM prompts + agent/skill content — functional text, not prose to
+# reformat. Re-wrapping can change model behaviour, and some are format strings
+# where a stray { } would crash startup.
+agentforge/prompts/
+**/prompt.md
+markdown/
+user_context*.md

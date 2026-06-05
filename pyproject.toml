@@ -1,0 +1,141 @@
+[project]
+name = "agent-forge"
+version = "0.1.0"
+description = "AgentForge — a composable, multi-backend agent + pipeline framework with a pluggable tool system."
+readme = "README.md"
+requires-python = ">=3.12,<4.0"
+license = { text = "MIT" }
+authors = [{ name = "Robin Schulz", email = "bulletinmybeard@gmail.com" }]
+keywords = ["ai", "agent", "llm", "ollama", "bedrock", "tools", "pipeline"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "chalkbox>=2.3.5",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "httpx>=0.27.0",
+    "ollama>=0.4.0",
+]
+
+[project.optional-dependencies]
+bedrock = ["boto3>=1.35.0"]
+browser = ["playwright>=1.40.0", "playwright-stealth>=2.0.0", "curl_cffi>=0.7.0"]
+pdf = ["pymupdf>=1.24.0", "pdfplumber>=0.10.0"]
+data = ["deepdiff>=7.0.0"]
+web = ["beautifulsoup4>=4.12.0", "lxml>=5.0.0"]
+connectors = ["cryptography>=42.0", "google-auth>=2.0.0"]
+redaction = ["detect-secrets>=1.5.0"]
+docker = ["docker>=7.1.0"]
+# Live database schema extraction for the `agentforge-chunk-db` mapper.
+db = ["sqlalchemy>=2.0.0", "pymysql>=1.1.0", "psycopg2-binary>=2.9.0"]
+# Full headless service: the FastAPI RAG/agent API (app/) + web/server backend
+# (queue, workers, SQLite, botty/canvas/scheduler/monitor). Docker installs this.
+service = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.49.0",
+    "qdrant-client>=1.12.0",
+    "numpy>=1.26.0",
+    "pydantic-settings>=2.6.0",
+    "python-multipart>=0.0.32",
+    "sqlalchemy>=2.0.0",
+    "pymysql>=1.1.0",
+    "psycopg2-binary>=2.9.0",
+    "saq[hiredis]>=0.12.0",
+    "redis[hiredis]>=5.0.0",
+    "slack-bolt>=1.18.0",
+    "aiohttp>=3.14.0",
+    "timezonefinder>=6.5.0",
+    "maxminddb>=2.6.0",
+    "apscheduler>=3.10.0,<4",
+    # framework optional deps the service exercises at runtime
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.0.0",
+    "playwright>=1.40.0",
+    "playwright-stealth>=2.0.0",
+    "curl_cffi>=0.7.0",
+    "deepdiff>=7.0.0",
+    "pymupdf>=1.24.0",
+    "pdfplumber>=0.10.0",
+    "boto3>=1.35.0",
+    "detect-secrets>=1.5.0",
+    "cryptography>=42.0",
+    "google-auth>=2.0.0",
+    "docker>=7.1.0",
+]
+dev = ["ruff>=0.8.0", "pytest>=8.0.0", "pytest-asyncio>=0.24.0"]
+all = [
+    "boto3>=1.35.0",
+    "playwright>=1.40.0", "playwright-stealth>=2.0.0", "curl_cffi>=0.7.0",
+    "pymupdf>=1.24.0", "pdfplumber>=0.10.0",
+    "deepdiff>=7.0.0",
+    "beautifulsoup4>=4.12.0", "lxml>=5.0.0",
+    "cryptography>=42.0", "google-auth>=2.0.0",
+    "detect-secrets>=1.5.0",
+    "docker>=7.1.0",
+]
+
+[project.scripts]
+agentforge = "agentforge.cli:main"
+agentforge-chunk-openapi = "chunking.openapi.cli:main"
+agentforge-chunk-sql = "chunking.sql.cli:main"
+agentforge-chunk-code = "chunking.code.cli:main"
+agentforge-chunk-docs = "chunking.cli_docs.cli:main"
+agentforge-chunk-document = "chunking.document.cli:main"
+agentforge-chunk-db = "chunking.db.cli:main"
+
+# Third-party packages register their own tool sets by advertising a
+# `register(registry) -> int` callable under this entry-point group. The
+# built-in loader (agentforge.tools.load_plugin_tools) discovers them at
+# startup. Example in a plugin's pyproject:
+#   [project.entry-points."agentforge.tools"]
+#   myplugin = "myplugin.tools:register"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["agentforge", "chunking"]
+
+[tool.poetry]
+# Use Poetry only for the dev environment + dependency resolution. Packaging
+# (the wheel / editable install) is hatchling's job — see the build-system +
+# [tool.hatch.build.targets.wheel] above, which already targets `agentforge`.
+# This stops Poetry's root-install from looking for an `agent_forge` folder.
+# For an editable install of the framework + CLI, run: pip install -e .
+package-mode = false
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+# `ruff format` enforces line length for code; E501 only fires on long docstrings
+# and copy-pasteable prompt/command examples we keep verbatim. The N/E codes below
+# flag intentional local style: UPPER-case local constants + tool-spec dicts (N806),
+# short index/loop names (E741), and one domain exception not suffixed `Error` (N818).
+ignore = ["E501", "N806", "E741", "N818"]
+
+[tool.ruff.lint.isort]
+# Pin first-party packages so import grouping is identical locally and in CI.
+# Otherwise ruff auto-detects first-party from the environment and classifies
+# `agentforge` as third-party in CI (its lint job doesn't install the package),
+# demanding a group-separating blank line the local run never asks for.
+known-first-party = ["agentforge", "app", "web", "sidecar", "sandbox", "plugins", "chunking"]
+
+[tool.ruff.lint.per-file-ignores]
+# Intentional late imports: FastAPI apps register auth/routes after the app
+# object exists; ws_endpoint resolves the agentforge package path before it
+# imports the package. Moving these to the top would break that ordering.
+"app/main.py" = ["E402"]
+"web/server/app.py" = ["E402"]
+"web/server/api.py" = ["E402"]
+"web/server/ws_endpoint.py" = ["E402"]
+# Sandbox scripts MUST `import sandbox` first (it patches sys.path + sets env)
+# before any agentforge/app import — an ordering isort can't be allowed to touch.
+"sandbox/scripts/*" = ["E402", "I001"]

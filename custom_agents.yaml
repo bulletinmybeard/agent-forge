@@ -1,0 +1,252 @@
+# custom_agents.yaml — user-defined custom agents for AgentForge
+#
+# Each agent is a specialised mode with its own system prompt, tool subset,
+# and Ollama profile.  Agents are triggered by typing their alias at the start
+# of a message, just like built-in modes (@logs, @search, etc.).
+#
+# ─── Fields ────────────────────────────────────────────────────────────────
+#
+# aliases:          List of @-prefixes that activate this agent.
+#                   The first alias is the "canonical" one shown in the Help modal.
+#
+# profile:          Ollama profile name from config.yaml
+#                   (e.g., cloud-heavy, cloud-light, log-analyzer).
+#
+# tools:            Allowlist of tool names (must be registered in ToolRegistry),
+#                   or the special value "all" to grant access to every tool.
+#
+# system_prompt:    Either an inline string (use | for multiline YAML) or a path
+#                   to a .md file relative to agentforge/ (e.g.,
+#                   markdown/custom-agents/my_agent.md).
+#
+# max_iterations:   Maximum agent loop iterations before giving up (default: 10).
+#
+# iter_timeout:     Per-iteration model call timeout in seconds (default: 300).
+#                   Increase for agents that read many large files or work with
+#                   very long contexts.  120 is the AgentLoop hard-coded default
+#                   when this field is omitted from a non-custom runner.
+#
+# description:      Short label shown in the Help modal and /api/agents listing.
+#
+# no_history:       When true, messages are persisted as "incognito" (private).
+#                   Within-session follow-ups work (the agent sees its own prior
+#                   turns), but cross-session semantic memory, fact extraction,
+#                   and similarity search are skipped.  This prevents stale data
+#                   (old file listings, transfer states) from leaking into future
+#                   sessions.  Default: false.
+#
+# ─── Example ───────────────────────────────────────────────────────────────
+#
+#   my-agent:
+#     aliases: ["@myagent", "@ma"]
+#     profile: agent
+#     tools: [shell, read_file, web_search]
+#     system_prompt: markdown/custom-agents/my_agent.md
+#     max_iterations: 8
+#     description: "My custom agent description"
+#
+# ───────────────────────────────────────────────────────────────────────────
+
+agents:
+
+  # ── Docker & Container Ops ──────────────────────────────────────────────
+  docker-ops:
+    aliases: ["@docker"]
+    profile: agent
+    tools:
+      - shell                   # docker ps, exec, run, stop, etc.
+      - ssh                     # remote Docker hosts
+      - docker_ps               # list containers (structured)
+      - docker_logs             # container log output (structured)
+      - docker_compose_status   # compose service health
+      - read_file                # read Dockerfiles / compose files
+      - write_file               # create/edit compose files or configs
+      - web_search              # look up Docker errors or image versions
+      - web_fetch               # read Docker Hub or docs pages
+    system_prompt: markdown/custom-agents/docker_ops.md
+    max_iterations: 35
+    description: "Docker container and Compose management specialist"
+
+  # ── Code Review ─────────────────────────────────────────────────────────
+  # NOTE: @review is now a built-in parallel mode (4 sub-agents) — see
+  # _run_review() in ws_endpoint.py.  The old single-agent code-reviewer
+  # entry has been removed.
+
+  # ── Root Cause Investigation ───────────────────────────────────────────
+  debug:
+    aliases: ["@debug"]
+    profile: agent
+    tools:
+      - shell
+      - ssh
+      - docker_ps
+      - docker_logs
+      - docker_compose_status
+      - read_file
+      - write_file
+      - find_files
+      - grep_text
+      - git_log
+      - git_diff
+      - git_status
+      - analyze_logs
+      - health_check
+      - web_search
+      - web_fetch
+    system_prompt: markdown/custom-agents/debug.md
+    max_iterations: 35
+    description: "Systematic root-cause investigation across logs, code, and infrastructure"
+
+  # ── Security Audit ────────────────────────────────────────────────────
+  security-audit:
+    aliases: ["@security"]
+    profile: agent
+    tools:
+      - shell
+      - read_file
+      - find_files
+      - grep_text
+      - git_log
+      - git_status
+      - docker_ps
+      - docker_compose_status
+      - dns_lookup
+      - health_check
+      - linter_run
+      - web_search
+      - web_fetch
+    system_prompt: markdown/custom-agents/security_audit.md
+    max_iterations: 35
+    description: "Security scan — secrets, dependencies, Docker, SSL, configurations"
+
+  # ── Performance Analysis ──────────────────────────────────────────────
+  perf-analysis:
+    aliases: ["@perf"]
+    profile: agent
+    tools:
+      - shell
+      - ssh
+      - docker_ps
+      - docker_logs
+      - docker_compose_status
+      - read_file
+      - grep_text
+      - analyze_logs
+      - health_check
+      - web_search
+    system_prompt: markdown/custom-agents/perf_analysis.md
+    max_iterations: 35
+    description: "Performance profiling — slow queries, resource bottlenecks, latency"
+
+  # ── Infrastructure Health Check ─────────────────────────────────────────
+  infra-health:
+     aliases: ["@health"]
+     profile: agent
+     tools:
+       - shell
+       - ssh
+       - health_check
+       - docker_ps
+       - docker_compose_status
+       - analyze_logs
+       - web_search
+     system_prompt: |
+       You are an infrastructure health-check assistant.
+       Your job is to verify that all services are running and healthy.
+       Check Docker containers, system resources, and service endpoints.
+       Report any anomalies with a clear remediation plan.
+     max_iterations: 35
+     description: "Full-stack infrastructure health check"
+
+  # ── Test Execution & Analysis ──────────────────────────────────────────
+  test-mode:
+    aliases: ["@test"]
+    profile: agent
+    tools:
+      - test_runner              # Docker-first pytest/jest/vitest
+      - k6_load_test             # HTTP load testing
+      - docker_logs              # container logs for failure investigation
+      - docker_ps                # check running containers
+      - docker_compose_status    # compose service health
+      - read_file                # read test files, source code, fixtures
+      - find_files               # locate test files and source
+      - grep_text                # search for patterns in code
+      - git_log                  # recent changes that may have caused failures
+      - git_diff                 # uncommitted changes
+      - shell                    # fallback for edge cases
+    system_prompt: markdown/custom-agents/test_mode.md
+    max_iterations: 35
+    iter_timeout: 300
+    description: "Run tests, diagnose failures, and suggest fixes"
+
+  # Private / deployment-specific agents live in custom_agents.local.yaml
+  # (gitignored), which the loader merges on top of this file. Drop your own
+  # agents there to keep them out of the published repo.
+
+  # ── GitLab — migrated to connector system (framework/connectors/gitlab/)
+  # Connect via /connectors page with host URL + API token.
+
+  # ── Email (Gmail) — migrated to connector system (framework/connectors/gmail/)
+  # Create connections via /connectors page. Aliases @email, @gmail are
+  # dynamically registered by ConnectionManager.
+
+  # ── API Testing & Exploration ──────────────────────────────────────────
+  api-test:
+    aliases: ["@api"]
+    profile: agent
+    tools:
+      - shell                    # httpie / curl requests
+      - k6_load_test             # load testing endpoints
+      - docker_ps                # check running services
+      - docker_logs              # container logs for error investigation
+      - docker_compose_status    # compose service health
+      - read_file                # read OpenAPI specs, route definitions
+      - find_files               # locate specs and source files
+      - grep_text                # search for routes, handlers
+      - health_check             # endpoint health checks
+      - web_search               # look up API best practices, status codes
+      - web_fetch                # read API documentation pages
+    system_prompt: markdown/custom-agents/api_test.md
+    max_iterations: 35
+    iter_timeout: 300
+    description: "API endpoint testing, validation, and exploration"
+
+  # ── Felix — diagnose. fix. verify. ──────────────────────────────────────
+  felix:
+    aliases: ["@felix"]
+    profile: agent
+    tools:
+      # diagnostics (read-only)
+      - docker_ps
+      - docker_logs
+      - docker_inspect
+      - docker_compose_status
+      - docker_df
+      - docker_images
+      - docker_networks
+      - docker_volumes
+      - docker_cleanup_preview
+      - system_overview
+      - disk_usage
+      - memory_info
+      - process_list
+      - http_check
+      - health_check
+      - dns_lookup
+      - net_probe
+      - analyze_logs
+      - read_file
+      - find_files
+      - grep_text
+      # repair (gated by the command guard / confirmations)
+      - shell
+      - ssh
+      - write_file
+      - code_edit       # config edits with diff preview + snapshot
+      - revert_file     # first-class rollback for code_edit
+      # research
+      - web_search
+      - web_fetch
+    system_prompt: markdown/custom-agents/felix.md
+    max_iterations: 40
+    description: "Autonomous diagnostic-repair agent — diagnose, fix, verify (Docker, disk/system, HTTP)"

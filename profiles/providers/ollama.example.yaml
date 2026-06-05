@@ -1,0 +1,118 @@
+# profiles / providers / ollama.example.yaml  —  TEMPLATE
+#
+# Copy this to `ollama.yaml` (same dir) and edit for your setup:
+#     cp profiles/providers/ollama.example.yaml profiles/providers/ollama.yaml
+#
+# Ollama is the DEFAULT provider and the BASE layer: this map underlies every
+# other provider, so a tier a cloud provider doesn't map falls back to the
+# Ollama concrete here. `ollama.yaml` is the MINIMUM needed to run AgentForge —
+# the bedrock/deepinfra/openrouter files are optional and only needed if you set
+# AGENTFORGE_PROVIDER (or ai.provider_override) to one of those.
+#
+# Loader rules (agentforge/config.py :: _load_split_profiles):
+#   - Every key under `profiles:` MUST start with 'ollama-' (filename stem).
+#   - This file's `provider_override_map:` is merged into
+#     ai.provider_override_map.ollama (the base every tier resolves against).
+#   - Files named *.example.yaml are skipped by the loader (templates only).
+#
+# Capability tiers (light/general/heavy/...) are model-less shells defined in
+# framework-config.yaml; the concrete model + sampling live here.
+
+profiles:
+  # light — fastest / cheapest small model
+  ollama-ministral-3:
+    abstract: true
+    provider: ollama
+    model: "ministral-3:14b-cloud"
+    temperature: 0.5
+    max_tokens: 2000
+
+  # general — default general-purpose lane (code-capable)
+  ollama-devstral-small:
+    abstract: true
+    provider: ollama
+    model: "devstral-small-2:24b-cloud"
+    temperature: 0.2
+    max_tokens: 4000
+    # Auto-recover when Ollama Cloud returns 503/500: similar code-tool lane
+    # first, then a lightweight always-up fallback, then a different family.
+    fallbacks:
+      - coder
+      - light
+      - visual
+
+  # heavy — flagship reasoning
+  ollama-mistral-large:
+    abstract: true
+    provider: ollama
+    model: "mistral-large-3:675b-cloud"
+    parse_thinking: true
+    temperature: 0.2           # higher temps drift to inline tool={...} text
+    max_tokens: 16000          # long structured reports need headroom
+    fallbacks:
+      - reasoner
+      - general
+
+  # coder — coding specialist; near-deterministic
+  ollama-qwen3-coder:
+    abstract: true
+    provider: ollama
+    model: "qwen3-coder-next:cloud"
+    temperature: 0.1
+    max_tokens: 4000
+
+  # visual — native vision (Google-recommended sampling)
+  ollama-gemma4:
+    abstract: true
+    provider: ollama
+    model: "gemma4:31b-cloud"
+    temperature: 1.0
+    top_p: 0.95
+    top_k: 64
+    max_tokens: 8000
+
+  # reasoner — deep reasoning
+  ollama-kimi-thinking:
+    abstract: true
+    provider: ollama
+    model: "kimi-k2-thinking:cloud"
+    temperature: 0.2
+    max_tokens: 8000
+    parse_thinking: true
+
+  # worker — fast MoE bug-fix worker
+  ollama-kimi-k2:
+    abstract: true
+    provider: ollama
+    model: "kimi-k2:1t-cloud"
+    temperature: 0.3
+    max_tokens: 4000
+
+  # agent-light — light multimodal agent
+  ollama-kimi-k2-6:
+    abstract: true
+    provider: ollama
+    model: "kimi-k2.6:cloud"
+    temperature: 0.3
+    max_tokens: 4000
+
+  # embed — embedding model (no sampling params).
+  # NOTE: Ollama Cloud has no embedding model, so this runs a LOCAL embedding
+  # model — point your Ollama host at a machine that has it pulled.
+  ollama-embed:
+    abstract: true
+    provider: ollama
+    model: "qwen3-embedding:8b"
+
+# Base tier -> concrete map. Every key here MUST reference a profile defined
+# above (or the load fails). This is the fallback layer for all providers.
+provider_override_map:
+  light:       ollama-ministral-3
+  general:     ollama-devstral-small
+  heavy:       ollama-mistral-large
+  coder:       ollama-qwen3-coder
+  visual:      ollama-gemma4
+  reasoner:    ollama-kimi-thinking
+  worker:      ollama-kimi-k2
+  agent-light: ollama-kimi-k2-6
+  embed:       ollama-embed

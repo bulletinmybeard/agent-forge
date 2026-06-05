@@ -1,0 +1,44 @@
+# profiles / providers / bedrock.example.yaml  —  TEMPLATE (optional provider)
+#
+# Copy to `bedrock.yaml` ONLY if you use AWS Bedrock (AGENTFORGE_PROVIDER=bedrock
+# or ai.provider_override: bedrock). Not needed for an Ollama-only deployment.
+#     cp profiles/providers/bedrock.example.yaml profiles/providers/bedrock.yaml
+#
+# Loader rules: every key under `profiles:` MUST start with 'bedrock-'. This
+# file's `provider_override_map:` merges into ai.provider_override_map.bedrock
+# and layers over the Ollama base — tiers you DON'T map fall back to Ollama.
+# AWS region + credentials live in `ai.bedrock` in framework-config.yaml, NOT here.
+
+profiles:
+  # General/code lane — strong, fast, reliable tool caller.
+  bedrock-claude-sonnet:
+    abstract: true
+    provider: bedrock
+    model: "eu.anthropic.claude-sonnet-4-6"   # an inference-profile / model id in YOUR region
+    temperature: 0.3
+    max_tokens: 4000
+    prompt_caching: true
+
+  # Cheap/fast light lane.
+  bedrock-claude-haiku:
+    abstract: true
+    provider: bedrock
+    model: "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+    temperature: 0.3
+    max_tokens: 4000
+    prompt_caching: true
+
+  # Embedding lane (Bedrock has a real embedding model, unlike Ollama Cloud).
+  bedrock-cohere-embed-v4:
+    abstract: true
+    provider: bedrock
+    model: "cohere.embed-v4"
+
+# Map only the tiers you want Bedrock to serve; the rest fall back to Ollama.
+provider_override_map:
+  general:  bedrock-claude-sonnet
+  heavy:    bedrock-claude-sonnet
+  light:    bedrock-claude-haiku
+  coder:    bedrock-claude-sonnet
+  visual:   bedrock-claude-sonnet
+  embed:    bedrock-cohere-embed-v4

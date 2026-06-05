@@ -1,0 +1,65 @@
+# Tool routing — maps tool names to host roles, and host roles to queues.
+#
+# Generic split-host model (same worker code everywhere, only the role differs):
+#   - role `local`  — a native worker on your own machine (any OS: Windows /
+#                     Linux / macOS). Runs host-access tools that need your
+#                     shell, SSH keys, gh auth, Docker, and filesystem.
+#   - role `remote` — the deployed stack's container workers. Runs the agent
+#                     jobs + web fetch/render via the sidecar.
+#
+# The agent loop dispatches each tool call to the queue of the tool's role; the
+# worker for that role (AGENTFORGE_WORKER_ROLE) picks it up.
+#
+# Single-host (no separate native worker)? Keep `dispatch.mode: in_process`
+# below — the agent then runs every tool in its own worker and no separate
+# native worker is needed. The `roles`/`rules` split-host map is only consulted
+# when mode is `split`.
+
+# How the agent loop dispatches tool calls.
+#   in_process — run every tool in the current worker; ignore the role map.
+#                Single-host / dev default. No separate native worker needed.
+#   split      — route each tool to its role's queue (multi-host); needs a
+#                worker running for every role a tool can route to.
+# Env AGENTFORGE_DISPATCH_MODE overrides this (e.g., a deployed worker forces
+# `split` without editing the file).
+dispatch:
+  mode: in_process
+  # SAQ job timeouts (seconds). Only used in `split` mode.
+  #   tool  — a cross-role tool call; 900s matches the shell tool's upper bound
+  #           so long installs (brew/npm/pip) aren't killed mid-run.
+  #   agent — a full agent run (LLM + tool loop + RAG); discovery/research can
+  #           take minutes. The Stop button still cancels inside the window.
+  # Env AGENTFORGE_SAQ_TOOL_TIMEOUT / AGENTFORGE_SAQ_AGENT_TIMEOUT override.
+  tool_timeout_seconds: 900
+  agent_timeout_seconds: 900
+
+default_role: local
+
+roles:
+  local:
+    queue: agentforge:tools:local
+    description: Native worker on your machine — shell, SSH keys, gh, Docker, filesystem
+  remote:
+    queue: agentforge:tools:remote
+    description: Deployed stack's container workers — web fetch/render via the sidecar
+
+# First match wins. Glob patterns (`*`, `?`) match against the tool name.
+rules:
+  - tools:
+      - web_search
+      - web_fetch
+      - web_fetch_rendered
+    role: remote
+  - tools:
+      - "*"
+    role: local
+
+# Whole-mode pinning. Most modes route per-tool through the agent loop (the
+# `rules` map above), but a few run their own driver and call tools in-process,
+# so the per-tool map never sees those calls. `@coding` runs its
+# code_find/narrow/transform driver directly, so the ENTIRE job must execute on
+# the host that owns the target files. Pin it to `local` and the whole run lands
+# on your machine's worker (which also picks up agent jobs). Only consulted in
+# `split` mode; ignored under `in_process`.
+modes:
+  coding: local

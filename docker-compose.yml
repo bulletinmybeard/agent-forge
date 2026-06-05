@@ -1,0 +1,168 @@
+# AgentForge — headless agent + RAG stack (no web UI).
+#
+# Before first run:
+#   cp framework-config.example.yaml framework-config.yaml   # AI backends + profiles
+#   cp config.example.yaml config.yaml                       # service config
+#   # edit both (add credentials), then:
+#   docker compose up --build
+#
+# Ollama runs on the HOST (reached via host.docker.internal:11434).
+# Qdrant + Redis run as containers here. Persistent data lives in the
+# agentforge-qdrant-data volume and ./data (SQLite).
+#
+# Compose profiles — pick what runs via COMPOSE_PROFILES (the deploy scripts
+# derive this from AGENTFORGE_PRESET in deploy.env):
+#   no profile : agentforge-web + agentforge-worker-saq  (the always-on light core)
+#   redis      : bundled Redis    (omit to reuse a host Redis via REDIS_URL)
+#   qdrant     : bundled Qdrant   (omit for a no-RAG box or host Qdrant)
+#   api        : agentforge-api   (RAG index/search surface)
+#   sidecar    : agentforge-sidecar (browser extraction; local Playwright fallback exists)
+#   dashboard  : agentforge-saq-web (SAQ dashboard + extra queue consumer)
+#   full       : api + sidecar + dashboard  (the optional services)
+#   split      : agentforge-worker-saq-tools — the deploy scripts add this
+#                automatically when dispatch is split (remote, multi-host). A
+#                single-host (local) box uses in_process, so it never runs.
+# Light (local)  = COMPOSE_PROFILES=redis,qdrant + in_process
+# Full (local)   = COMPOSE_PROFILES=full,redis,qdrant + in_process (no tools worker)
+# Full (remote)  = COMPOSE_PROFILES=full,qdrant,split + split dispatch
+
+x-app-env: &app-env
+  OLLAMA_HOST: "http://host.docker.internal:11434"
+  QDRANT_HOST: "qdrant"
+  QDRANT_PORT: "6333"
+  REDIS_URL: "redis://redis:6379"
+  AGENTFORGE_WEB_URL: "http://agentforge-web:8200"
+  # Optional private tool plugins (module:register_fn,...). Empty in public.
+  AGENTFORGE_TOOL_PLUGINS: "${AGENTFORGE_TOOL_PLUGINS:-}"
+  # API keys for the HTTP/WS surface. Shared so web + api (+ workers) read the
+  # same value from one place; empty = auth disabled (wins over config.yaml).
+  AGENTFORGE_API_KEYS: "${AGENTFORGE_API_KEYS:-}"
+  # Explicit opt-out: boot open even when the socket is mounted / REQUIRE_AUTH
+  # is set and no keys exist. For a trusted network during a transition only.
+  AGENTFORGE_ALLOW_INSECURE: "${AGENTFORGE_ALLOW_INSECURE:-}"
+  # Shared secret for the browser sidecar. Set it (deploy.env) and callers send
+  # it as X-Sidecar-Token; empty = sidecar auth disabled.
+  SIDECAR_AUTH_TOKEN: "${SIDECAR_AUTH_TOKEN:-}"
+  # Shared secret for worker->web /internal callbacks (X-Internal-Token).
+  # Empty = disabled (network isolation only).
+  AGENTFORGE_INTERNAL_TOKEN: "${AGENTFORGE_INTERNAL_TOKEN:-}"
+
+x-app-volumes: &app-volumes
+  - ./framework-config.yaml:/app/framework-config.yaml:ro
+  - ./config.yaml:/app/config.yaml:ro
+  - ./user_context.md:/app/user_context.md:ro
+  - ./profiles:/app/profiles:ro
+  - ./data:/app/data
+  - ./secrets:/app/secrets
+
+x-extra-hosts: &extra-hosts
+  - "host.docker.internal:host-gateway"
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    profiles: ["qdrant"]
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - agentforge-qdrant-data:/qdrant/storage
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["redis"]
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - agentforge-redis-data:/data
+    restart: unless-stopped
+
+  agentforge-api:
+    build: { context: ., dockerfile: Dockerfile.api }
+    image: agentforge-api:latest
+    profiles: ["api", "full"]
+    ports:
+      - "8100:8100"
+    environment: *app-env
+    volumes: *app-volumes
+    extra_hosts: *extra-hosts
+    restart: unless-stopped
+
+  agentforge-web:
+    build: { context: ., dockerfile: Dockerfile.web }
+    image: agentforge-web:latest
+    ports:
+      - "8200:8200"
+    environment:
+      <<: *app-env
+      AGENTFORGE_WORKER_ROLE: "${AGENTFORGE_WORKER_ROLE:-remote}"
+    volumes: *app-volumes
+    extra_hosts: *extra-hosts
+    restart: unless-stopped
+
+  agentforge-sidecar:
+    build: { context: ., dockerfile: Dockerfile.sidecar }
+    image: agentforge-sidecar:latest
+    profiles: ["sidecar", "full"]
+    # Other containers reach it as agentforge-sidecar:8300 over the internal
+    # network; the published port is bound to localhost only so it isn't an
+    # unauthenticated SSRF appliance reachable from the LAN. Drop this ports
+    # block entirely if no host-native worker needs it.
+    ports:
+      - "127.0.0.1:8300:8300"
+    environment:
+      # Require X-Sidecar-Token on extraction endpoints when set (callers read
+      # the same var). SIDECAR_ALLOW_PRIVATE_URLS=1 re-enables internal targets.
+      SIDECAR_AUTH_TOKEN: "${SIDECAR_AUTH_TOKEN:-}"
+      SIDECAR_ALLOW_PRIVATE_URLS: "${SIDECAR_ALLOW_PRIVATE_URLS:-}"
+    restart: unless-stopped
+
+  # SAQ workers — reuse the web image, different command. These are the
+  # deployed stack, so they run role "remote" (override AGENTFORGE_WORKER_ROLE
+  # to "local" for a single-host setup). Host-access tools route to a native
+  # "local" worker on your own machine — see tool_routing.yaml + worker/.
+  agentforge-worker-saq:
+    image: agentforge-web:latest
+    command: ["saq", "-v", "web.server.queue.settings_shared.settings"]
+    environment:
+      <<: *app-env
+      AGENTFORGE_WORKER_ROLE: "${AGENTFORGE_WORKER_ROLE:-remote}"
+    volumes: *app-volumes
+    extra_hosts: *extra-hosts
+    depends_on: [agentforge-web]
+    restart: unless-stopped
+
+  agentforge-worker-saq-tools:
+    image: agentforge-web:latest
+    profiles: ["split"]
+    command: ["saq", "-v", "web.server.queue.settings_tools.settings"]
+    environment:
+      <<: *app-env
+      AGENTFORGE_WORKER_ROLE: "${AGENTFORGE_WORKER_ROLE:-remote}"
+    volumes: *app-volumes
+    extra_hosts: *extra-hosts
+    depends_on: [agentforge-web]
+    restart: unless-stopped
+
+  # SAQ dashboard (web UI on :8080, mapped to host :8086) — also an extra
+  # competing consumer on the shared queue, so jobs keep draining if a worker
+  # dies. Run `saq --web` over both queue settings modules.
+  agentforge-saq-web:
+    image: agentforge-web:latest
+    profiles: ["dashboard", "full"]
+    command: ["saq", "--web", "-v",
+              "--extra-web-settings", "web.server.queue.settings_tools.settings",
+              "web.server.queue.settings_shared.settings"]
+    ports:
+      - "8086:8080"
+    environment:
+      <<: *app-env
+      AGENTFORGE_WORKER_ROLE: "${AGENTFORGE_WORKER_ROLE:-remote}"
+    volumes: *app-volumes
+    extra_hosts: *extra-hosts
+    depends_on: [agentforge-web]
+    restart: unless-stopped
+
+volumes:
+  agentforge-qdrant-data:
+  agentforge-redis-data:

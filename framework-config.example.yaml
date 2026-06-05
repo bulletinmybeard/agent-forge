@@ -1,0 +1,189 @@
+# AgentForge — example configuration.
+#
+# Copy to config.yaml and edit. config.yaml is gitignored (it holds credentials).
+# Environment variables override matching keys (e.g., OLLAMA_HOST, DEEPINFRA_API_KEY).
+#
+# Out of the box this targets a LOCAL Ollama. To use a cloud backend, fill in the
+# matching credential block below and set ai.provider_override (or the
+# AGENTFORGE_PROVIDER env var) to bedrock | deepinfra | openrouter. The
+# per-provider model maps live in profiles/providers/*.yaml.
+
+ai:
+  model: "llama3.2"            # default model when a profile doesn't set its own
+  host: "http://localhost:11434"
+  timeout: 600
+  default_profile: "default"
+  provider_override: ollama   # ollama | bedrock | deepinfra | openrouter
+
+  # Cloud credentials (optional). Blank = fall back to the provider's env var.
+  bedrock:
+    aws_region: "eu-central-1"
+    # aws_access_key_id / aws_secret_access_key — omit to use the boto3 default
+    # credential chain (env vars, shared config, IAM role).
+  deepinfra:
+    api_key: ""               # or env DEEPINFRA_API_KEY
+    base_url: "https://api.deepinfra.com/v1/openai"
+    timeout: 600
+  openrouter:
+    api_key: ""               # or env OPENROUTER_API_KEY
+    base_url: "https://openrouter.ai/api/v1"
+    timeout: 600
+
+  profiles:
+    # --- Capability tiers — provider-neutral, model-less labels --------------
+    # The concrete model + sampling for each tier live in
+    # profiles/providers/<provider>.yaml. Ollama is the default base layer
+    # (profiles/providers/ollama.yaml covers every tier); cloud providers
+    # override per tier and fall back to Ollama for tiers they don't map.
+    # Tier names avoid colliding with role names (general not default; visual
+    # not vision). To use your own local models, edit profiles/providers/ollama.yaml.
+    light:       { abstract: true }
+    general:     { abstract: true }
+    heavy:       { abstract: true }
+    coder:       { abstract: true }
+    visual:      { abstract: true }
+    reasoner:    { abstract: true }
+    worker:      { abstract: true }
+    agent-light: { abstract: true }
+    embed:       { abstract: true }
+
+    # --- Role profiles — the names the framework asks for by role; each
+    #     inherits a tier and overrides sampling per use-case.
+    default:        { profile: general, temperature: 0.7, max_tokens: 4000 }
+    fast:           { profile: general, temperature: 0.3, max_tokens: 2000 }
+    tool:           { profile: general, temperature: 0.2, max_tokens: 1000 }
+    agent:          { profile: general, temperature: 0.1, max_tokens: 4000 }
+    agent-heavy:    { profile: heavy,   temperature: 0.2, max_tokens: 4000 }
+    thinker:        { profile: general, temperature: 0.7, max_tokens: 8000, parse_thinking: true }
+    log-analyzer:   { profile: general, temperature: 0.2, max_tokens: 4000 }
+    web-search:     { profile: heavy,   temperature: 0.2, max_tokens: 4000 }
+    vision:         { profile: visual,  max_tokens: 4000 }
+    cloud-light:    { profile: light }
+    cloud-heavy:    { profile: heavy,   temperature: 0.1 }
+    cloud-coder:    { profile: coder }
+    local-embedding: { profile: embed }
+
+    # --- RAG refiner profiles (query_refiner / response_refiner via AIClient).
+    #     Sampling + JSON mode live here so the refiners stay provider-portable.
+    query-refiner:  { profile: light, temperature: 0.1, max_tokens: 256, top_p: 0.9, top_k: 40, repeat_penalty: 1.1, extra_body: { format: json } }
+    answer-refiner: { profile: heavy, temperature: 0.2, max_tokens: 2048, top_p: 0.9, top_k: 40, repeat_penalty: 1.1 }
+    # Prompt refiner — rewrites the user's opening prompt (grammar/clarity/facts)
+    #   before the model runs, when prompt_refinement.enabled is set in config.yaml.
+    input-refiner:  { profile: light, temperature: 0.1, max_tokens: 2048, top_p: 0.9, top_k: 40, repeat_penalty: 1.1 }
+
+# Agent loop — error recovery + escalation
+agent:
+  max_retries_on_error: 3
+  retry_profile: "agent-heavy"
+  search_escalation:
+    enabled: true
+    after_errors: 3
+
+# Tool defaults
+tools:
+  default_search_depth: 0
+  docker:
+    max_tail_lines: 200
+  shell:
+    timeout: 120
+    allowed_commands: []      # empty = allow all; e.g., ["git", "npm", "python"]
+    blocked_patterns: []      # regex patterns to block, e.g., ["rm\\s+-rf\\s+/"]
+    auto_sudo: false
+    guard:
+      enabled: true           # LLM-based destructive-command detection
+      fast_path: false
+      model: ""               # empty = use the 'fast' profile
+  web_search:
+    provider: ollama          # ollama | brave | tavily
+    provider_fallbacks: []
+    api_key: ""               # Ollama web-search key, or env OLLAMA_API_KEY
+    max_results: 5
+    fetch_max_chars: 8000
+    brave:
+      api_key: ""             # or env BRAVE_API_KEY
+      safesearch: moderate
+    tavily:
+      api_key: ""             # or env TAVILY_API_KEY
+      search_depth: basic
+      topic: general
+  web_fetch:
+    provider: ollama
+    provider_fallbacks: []
+  code_edit:
+    profile: "default"
+    max_file_size_kb: 256
+  media:
+    image:
+      optimize_quality: 82
+      strip_metadata: true
+  ssh:
+    allowed_hosts: []         # only these hosts may be reached by the ssh tool
+    connection_timeout: 10
+  ignored_dirs:
+    - .venv
+    - node_modules
+    - __pycache__
+    - .git
+    - dist
+    - build
+
+# Parallel multi-task execution
+parallel:
+  enabled: true
+  max_workers: 4
+  planner_profile: "fast"
+
+# Multi-phase investigative discovery
+discovery:
+  enabled: true
+  max_rounds: 3
+  max_workers: 4
+  planner_profile: "default"
+  worker_profile: "fast"
+
+# Typed multi-step pipeline runner
+pipeline:
+  verbose: false
+  profile: "thinker"
+  max_iterations: 20
+
+# Code-transform burst mode
+coding:
+  auto_planner: true
+  max_files_per_burst: 50
+  context_lines: 10
+  verify_after_apply: true
+  planner_profile: agent-heavy
+  extractor_profile: cloud-light
+  burst_profile: cloud-coder
+
+# @-prefixed execution modes
+modes:
+  search:
+    enabled: true
+    profile: "agent"
+    max_iterations: 8
+  logs:
+    enabled: true
+    profile: "log-analyzer"
+    max_iterations: 12
+
+# Per-external-app role/tier -> concrete-profile overrides, keyed by the session
+# `source` tag the client sends in overrides.source (e.g., "felix"). Layered ON
+# TOP of the active provider's override map for that app's sessions only — so an
+# external app can pick its own models per role without touching the global
+# provider maps or affecting other apps. Shape: app -> provider -> {role_or_tier:
+# concrete_profile}. Concrete profiles must exist under ai.profiles (loaded from
+# profiles/providers/*.yaml). Reaches the app's agent loop, the CommandGuard
+# (`fast`), and retry (`agent-heavy`). Uncomment + edit to enable.
+#
+# app_provider_role_mapping:
+#   felix:
+#     deepinfra:
+#       agent: deepinfra-claude-sonnet-4-6   # main run + probes + undo
+#       fast:  deepinfra-claude-haiku-4-5     # CommandGuard
+#     ollama:
+#       agent:       ollama-mistral-large
+#       agent-heavy: ollama-mistral-large
+#       fast:        ollama-devstral-small
+#       light:       ollama-devstral-small

@@ -1,0 +1,116 @@
+# Reverse-proxy + host-Redis overlay for a deployed stack. Use WITH the base:
+#
+#   set -a; . ./deploy.env; set +a
+#   docker compose -f docker-compose.yml -f docker-compose.remote.yml up -d --scale redis=0
+#
+# (The deploy script does this for you.) Interpolation vars come from deploy.env:
+#   PUBLIC_DOMAIN     — Host rule for the web service (:8200, agent WS + REST)
+#   API_DOMAIN        — Host rule for the RAG API / indexer service (:8100)
+#   PROXY_NETWORK     — external Docker network your reverse proxy (Traefik) watches
+#   REMOTE_REDIS_URL  — Redis the containers use (host-native Redis on the target)
+#
+# Requires the external ${PROXY_NETWORK} network + a running Traefik on the
+# target. `--scale redis=0` skips the bundled Redis container (host Redis is used).
+services:
+  agentforge-web:
+    environment:
+      REDIS_URL: "${REMOTE_REDIS_URL:-redis://host.docker.internal:6379}"
+      # Multi-host deploy: route tools per tool_routing.yaml (a native "local"
+      # worker handles host-access tools). Set in_process in deploy.env to run
+      # everything on the box and drop the native worker.
+      AGENTFORGE_DISPATCH_MODE: "${AGENTFORGE_DISPATCH_MODE:-split}"
+    volumes:
+      # The /services page probes the host Docker daemon (list / restart / logs
+      # containers). Merged on top of the base app-volumes. NOTE: socket access
+      # grants control of the host Docker daemon (`:ro` doesn't restrict the API)
+      # — only the web app gets it; the public base compose stays socket-free.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - default       # reach qdrant / api / sidecar / workers
+      - proxy         # reachable by Traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${PROXY_NETWORK:-proxy}"
+      - "traefik.http.routers.agentforge-web.entrypoints=websecure"
+      # Exclude /internal from the public router — worker->web callbacks ride the
+      # internal Docker network, so they must not be reachable from outside.
+      - "traefik.http.routers.agentforge-web.rule=Host(`${PUBLIC_DOMAIN}`) && !PathPrefix(`/internal`)"
+      - "traefik.http.routers.agentforge-web.tls=true"
+      - "traefik.http.services.agentforge-web.loadbalancer.server.port=8200"
+      # Disable response buffering + flush immediately — required for the
+      # /ws/chat WebSocket and streamed agent responses.
+      - "traefik.http.middlewares.agentforge-nobuffer.buffering.maxResponseBodyBytes=0"
+      - "traefik.http.routers.agentforge-web.middlewares=agentforge-nobuffer"
+      - "traefik.http.services.agentforge-web.loadbalancer.server.scheme=http"
+      - "traefik.http.services.agentforge-web.loadbalancer.responseForwarding.flushInterval=1ms"
+
+  # RAG index/search API (:8100), exposed at API_DOMAIN for remote indexing/test
+  # runs. LAN-only by default — exposing it makes the indexer + /search endpoints
+  # reachable from the internet, so set security.api_keys in config.yaml (or
+  # AGENTFORGE_API_KEYS) before deploying.
+  agentforge-api:
+    # Internet-exposed via Traefik but does NOT mount the Docker socket, so the
+    # enforce_auth_policy socket backstop never fires here (unlike agentforge-web).
+    # Require auth explicitly so a public deploy refuses to boot without keys —
+    # otherwise /indexer/upload + /search are open to anyone (fleet poisoning,
+    # bypassing Felix's skill firewall, and data read). Override to "false" only
+    # for a LAN-only deploy.
+    # AGENTFORGE_API_KEYS comes from the shared x-app-env anchor (base compose),
+    # so web + api read the same keys. Only REQUIRE_AUTH is api-specific here.
+    environment:
+      AGENTFORGE_REQUIRE_AUTH: "${AGENTFORGE_REQUIRE_AUTH:-true}"
+    networks:
+      - default       # reach qdrant / web / sidecar / workers
+      - proxy         # reachable by Traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${PROXY_NETWORK:-proxy}"
+      - "traefik.http.routers.agentforge-api.rule=Host(`${API_DOMAIN}`)"
+      - "traefik.http.routers.agentforge-api.entrypoints=websecure"
+      - "traefik.http.routers.agentforge-api.tls=true"
+      - "traefik.http.services.agentforge-api.loadbalancer.server.port=8100"
+
+  agentforge-worker-saq:
+    environment:
+      REDIS_URL: "${REMOTE_REDIS_URL:-redis://host.docker.internal:6379}"
+      # Runs the agent loop (shared queue) — needs the dispatch mode.
+      AGENTFORGE_DISPATCH_MODE: "${AGENTFORGE_DISPATCH_MODE:-split}"
+
+  agentforge-worker-saq-tools:
+    environment:
+      REDIS_URL: "${REMOTE_REDIS_URL:-redis://host.docker.internal:6379}"
+
+  # Qdrant dashboard at https://${QDRANT_DOMAIN}/dashboard
+  qdrant:
+    networks:
+      - default
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${PROXY_NETWORK:-proxy}"
+      - "traefik.http.routers.agentforge-qdrant.rule=Host(`${QDRANT_DOMAIN}`)"
+      - "traefik.http.routers.agentforge-qdrant.entrypoints=websecure"
+      - "traefik.http.routers.agentforge-qdrant.tls=true"
+      - "traefik.http.services.agentforge-qdrant.loadbalancer.server.port=6333"
+
+  # SAQ dashboard at https://${SAQ_DOMAIN}/
+  agentforge-saq-web:
+    environment:
+      REDIS_URL: "${REMOTE_REDIS_URL:-redis://host.docker.internal:6379}"
+      # Also a shared-queue consumer that can run the agent loop.
+      AGENTFORGE_DISPATCH_MODE: "${AGENTFORGE_DISPATCH_MODE:-split}"
+    networks:
+      - default
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${PROXY_NETWORK:-proxy}"
+      - "traefik.http.routers.agentforge-saq.rule=Host(`${SAQ_DOMAIN}`)"
+      - "traefik.http.routers.agentforge-saq.entrypoints=websecure"
+      - "traefik.http.routers.agentforge-saq.tls=true"
+      - "traefik.http.services.agentforge-saq.loadbalancer.server.port=8080"
+
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:-proxy}

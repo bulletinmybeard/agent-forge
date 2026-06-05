@@ -1,0 +1,341 @@
+# AgentForge — service (app) configuration.
+#
+# Copy to config.yaml and edit (config.yaml is gitignored — it holds secrets).
+# This is the RAG/service layer; the AI backend + profiles live in
+# framework-config.yaml. On deploy, the two are merged into one config.yaml
+# inside the container (see scripts/deploy-remote.sh). Env vars override matching
+# keys (e.g., QDRANT_HOST, SECRET_REDACTION_ENABLED).
+
+ollama:
+  host: "http://localhost:11434"
+  # Which profile handles which pipeline step (profiles are defined in
+  # framework-config.yaml). Switch models by changing the profile name here.
+  # query_refinement / answer_generation go through AIClient (they follow the
+  # active provider); their sampling lives on the query-refiner / answer-refiner
+  # profiles. The num_predict/temperature here are kept for non-AIClient readers.
+  model_roles:
+    query_refinement:
+      profile: "query-refiner"
+      num_predict: 256
+      temperature: 0.1
+    answer_generation:
+      profile: "answer-refiner"
+      num_predict: 2048
+      temperature: 0.2
+      refiner_max_results: 30
+      refiner_max_context_chars: 12000
+    embedding:
+      profile: "local-embedding"
+    vision:
+      profile: "vision"
+
+qdrant:
+  host: "localhost"          # env QDRANT_HOST (the "qdrant" service name in Docker; "host.docker.internal" to reuse a host Qdrant — see AGENTFORGE_QDRANT in deploy.example.env)
+  port: 6333
+  collection_name: "agentforge_kb"
+
+embedding:
+  dimension: 4096
+  distance_metric: "Cosine"
+  # Ollama keep_alive for the embed model: -1 keeps it resident (never evicted),
+  # so sparse index/search calls don't pay a cold model load each time. A
+  # duration string ("24h") works too. Drop or set 0 to let Ollama evict it.
+  keep_alive: -1
+
+indexer:
+  chunks_dir: "/app/chunks"
+  batch_size: 50
+
+# Optional API-key auth for the HTTP + WebSocket surface. Empty list = OFF
+# (open) — the default, fine for local/LAN use. Add one or more keys to require
+# them on every request when exposing AgentForge on a public host (the agent can
+# run shell/SSH/Docker, so an open endpoint is remote code execution).
+# Clients send `Authorization: Bearer <key>` or `X-API-Key: <key>`; browsers
+# pass the key as a WebSocket subprotocol or `?api_key=<key>`. /health and the
+# internal worker callbacks are exempt. Generate a key: openssl rand -hex 32
+# Env AGENTFORGE_API_KEYS (comma-separated) overrides this list.
+security:
+  api_keys: []
+
+# Scans text sent to the model (and persisted) for secrets/credentials.
+# detect-secrets primary + regex safety net. Env: SECRET_REDACTION_ENABLED.
+secret_redaction:
+  enabled: true
+  placeholder: "[REDACTED:{type}]"
+  log_findings: true
+  # High-entropy catch-all: redacts contiguous random-looking runs (tokens) that
+  # match no known signature and sit under any key name — covers arbitrary files
+  # read by the agent. Cost: may occasionally redact a legitimate long random
+  # string (content hash, UUID-without-dashes, base64 blob). Tune or disable:
+  detect_high_entropy: true
+  high_entropy_min_length: 20      # shorter = more coverage but more false positives
+  high_entropy_min_entropy: 3.5    # higher = stricter (fewer false positives)
+  # extra_patterns:
+  #   - name: "InternalServiceToken"
+  #     pattern: "svc_[a-zA-Z0-9]{32,}"
+
+# Near-duplicate chunk detection + doc/code drift checks before indexing.
+dedup:
+  enabled: true
+  similarity_threshold: 0.95   # cosine; 0.95 strict, 0.90 moderate
+  drift_threshold: 0.70        # below this a doc chunk is flagged as drifted
+
+# Live database schema extraction for the `agentforge-chunk-db` mapper:
+# introspect a running DB and write sql-schema chunks (the live-DB alternative
+# to a tbls JSON dump). Needs the `db` extra: pip install -e ".[db]"
+# Uncomment and add one entry per database: a SQLAlchemy URL, a source_name
+# slug, and an optional PG schema.
+# databases:
+#   my-db:
+#     url: "mysql+pymysql://user:pass@localhost:3306/mydb"
+#     source_name: "my-db"
+#   warehouse:
+#     url: "postgresql+psycopg2://user:pass@localhost:5432/warehouse"
+#     source_name: "warehouse"
+#     schema: "public"
+
+# Named DB connections for the execute_sql tool (optional, private — supply
+# your own). The tool resolves #hashtag -> database name -> URL.
+# sql_databases:
+#   mydb:
+#     name: "My Database"
+#     url: "mysql+pymysql://user:pass@localhost:3306/mydb"
+#     engine: mysql
+#     max_rows: 100
+#     readonly: true
+
+chunking:
+  # Generic project names too common to auto-detect in queries (use the
+  # explicit --document_name flag to reach them anyway).
+  document_lookup_stoplist:
+    - which
+    - debug
+    - parser
+    - uuid
+
+search:
+  score_floor: 0.50            # minimum Qdrant similarity score
+  overfetch_factor: 3          # fetch limit x N, then re-rank
+  relevance_threshold: 0.60    # below this best-score -> answer from general knowledge
+
+  # @source shorthands -> Qdrant source_name(s). A list searches multiple
+  # collections at once (e.g., an OpenAPI spec + its indexed source code).
+  # Add your own indexed sources here.
+  source_aliases:
+    # myapi: ["myapi-spec", "myapi-code"]   # one shorthand -> two collections
+    # docs:  "mydocs"
+    git: "gitcli"
+    kubectl: "kubectlcli"
+
+  # #type shorthands -> source_type filter.
+  source_type_aliases:
+    help: "docs"
+    docs: "docs"
+
+# RAG assistant identity, injected into answer-generation prompts so the
+# published prompts carry no org name. domain_context is an optional hint fed
+# to the query refiner (your domain vocabulary). Env: PERSONA_NAME / PERSONA_TEAM.
+persona:
+  name: "AgentForge"          # the assistant's name in answers
+  team: "your team"           # who it assists, e.g., "the Acme engineering team"
+  domain_context: ""          # optional: extra domain/vocabulary hint
+
+# Optional private hashtag shortcuts that route to a custom agent (empty in the
+# public build). Configure to route e.g., #myservice to a private agent — keep
+# the agent itself in custom_agents.local.yaml. blend_tools are read-only tools
+# also added to @agent. Env: HASHTAG_ROUTES_AGENT.
+hashtag_routes:
+  agent: ""                   # custom agent alias (without @) the tags activate
+  tags: {}                    # "#tag": "Display Name"
+  blend_tools: []             # read-only tools also blended into @agent
+
+refinement:
+  input_enabled: true          # false = skip LLM query refinement (search/RAG query, for embedding)
+  output_examples: false
+
+# Prompt refinement — rewrite the user's opening prompt (grammar/clarity/facts)
+# before the model runs, on the Prompt Lab (/api/prompt-lab/run) and the agent
+# endpoint (/ws/chat, first message only). Separate from `refinement` above,
+# which refines the search query. Off by default.
+prompt_refinement:
+  enabled: false               # true = refine the opening prompt before it runs
+  profile: "input-refiner"     # LLM profile used for the rewrite (framework-config.yaml)
+
+memory:
+  enabled: true
+  max_tokens: 2000
+  persistence_path: "data/agentforge_memory.json"
+  fact_stale_days: 30
+  # Semantic conversation memory: embeds query+response pairs into Qdrant for
+  # cross-session recall, injected into context before each LLM call.
+  semantic:
+    enabled: true              # set false when running without Qdrant (light preset / AGENTFORGE_QDRANT=off) to skip semantic recall and silence the connect warning
+    collection: "conversation_memory"
+    recall_top_k: 5
+    min_score: 0.55
+    exclude_current_session: false
+    max_age_days: 14
+    max_embed_chars: 2000
+  # Caches expensive tool results (web_search, DNS, ...) in Redis with TTL.
+  tool_cache:
+    enabled: true
+    default_ttl: 300
+    max_entry_size: 50000
+  # Append-only audit log of tool executions + agent runs (Redis Streams).
+  audit_log:
+    enabled: true
+    max_entries: 50000
+    streams:
+      tool_executions: "audit:tool_executions"
+      agent_runs: "audit:agent_runs"
+  classifier_audit:
+    enabled: true
+    max_entries: 50000
+  # Session-scoped cache of agent-gathered data for follow-up queries.
+  result_store:
+    enabled: true
+    session_ttl: 1800
+    max_entry_size: 100000
+    label_truncate: 50
+  # Real-time session lifecycle broadcast (Redis Pub/Sub).
+  session_events:
+    enabled: true
+    channels:
+      sessions: "agentforge:sessions"
+      system: "agentforge:system"
+    event_timeout: 1.0
+    reconnect_delay: 2.0
+    max_reconnect_attempts: 5
+  # Short-term per-session replay buffer (Redis) for late subscribers.
+  session_event_buffer:
+    max_events: 500
+    ttl_seconds: 3600
+  # Structured fact extraction after each run -> user_facts SQLite table.
+  fact_extraction:
+    enabled: true
+    min_confidence: 0.5
+
+# Tunes how often the LLM is consulted for mode classification.
+routing:
+  classifier:
+    escalation_threshold: high   # low | medium | high
+    pass_hint: true
+    profile: agent-heavy         # any profile from framework-config.yaml / profiles/*
+
+# linter_run tool — auto-detects language + package manager.
+linter:
+  languages: ["python", "node"]
+  use_npx: true
+  python:
+    lint: ["ruff check"]
+    format: ["ruff format --check"]
+    type: ["mypy"]
+    security: ["bandit -r -ll"]
+  node:
+    lint: ["eslint"]
+    format: ["prettier --check"]
+
+# Enriches code-type search results with source snippets + grep usage sites.
+code_context:
+  enabled: true
+  snippet_lines: 15
+  max_grep_results: 10
+  file_extensions: [".py", ".yaml", ".yml"]
+  source_roots: {}              # map source_name -> project root on disk, e.g., {myapi: "/app/sources/myapi"}
+
+# Slack Socket Mode bot (optional). Requires bot + app tokens.
+slack:
+  enabled: false
+  bot_token: ""                 # env SLACK_BOT_TOKEN
+  app_token: ""                 # env SLACK_APP_TOKEN
+  default_channel: general
+  reply_in_thread: true
+
+# Optional Markdown file injected into every agent's system prompt.
+user_context: "user_context.md"
+
+# Per-tool timeouts / options. Override without touching source.
+tools:
+  shell:
+    timeout: 600
+    # --- Privilege escalation (OFF by default; uncomment to opt in) ---
+    # auto_sudo: false
+    #   When true, a file-mutating command targeting a root-owned path gets
+    #   `sudo` auto-prepended. The user is then prompted (masked) for the sudo
+    #   password at run time — elevation is never silent. Leave off unless you
+    #   want that behavior.
+    #   The masked prompt applies to ANY sudo command, not just auto-prepended
+    #   ones — there is no on-disk `sudo_password` anymore (removed). Reuse within
+    #   a session (no re-prompt within ~5 min) only happens in in-process dispatch;
+    #   the split-dispatch worker re-prompts on every sudo command.
+  monitor:
+    sites: {}                   # per-site extraction selectors (see docs); empty = generic extraction
+
+agent:
+  condense_tool_prompt: true    # shorter system prompt after iteration 1 (saves tokens)
+  max_tool_output: 64000        # cap a single tool's output (chars)
+
+# @review mode — parallel multi-agent code review.
+review:
+  subagent_timeout_seconds: 300 # how long to wait for each review sub-agent
+
+# Service-level runtime guards.
+service:
+  startup_timeout_seconds: 120  # WS wait for background runtime init before "reconnect"
+
+# Chat persistence + uploads (SQLite + files on disk).
+web:
+  database_path: "data/agentforge_chat.db"
+  uploads_path: "data/uploads"
+  max_file_size_mb: 75
+  max_files_per_request: 25
+
+canvas:
+  enabled: true
+
+# Botty — silent session-awareness observer that nudges when it can help.
+botty:
+  enabled: true
+  analysis_interval: 10
+  intervention_threshold: 0.6
+  max_frequency_seconds: 300
+  dismissal_cooldown_seconds: 900
+  classifier_model: "cloud-light"
+  intervener_model: "cloud-light"
+  recall:
+    top_k: 5
+    min_score: 0.55
+    include_facts: true
+  insights:
+    collection: "botty_insights"
+    store_helpful: true
+
+monitor:
+  always_use_vision: false
+  page_timeout_ms: 30000                    # headless page-load timeout (ms)
+  sidecar:
+    enabled: true
+    url: "http://agentforge-sidecar:8300"   # Docker network; localhost:8300 outside Docker
+    timeout: 60
+
+# Credentials for private tool plugins (optional). Add whatever keys your
+# plugin reads under its own block; set them here or via env vars.
+# myplugin:
+#   api_key: ""                 # env MYPLUGIN_API_KEY
+
+# Connectors (Gmail/Drive/...). Tokens encrypted in SQLite with the Fernet key.
+# Generate one: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+connectors:
+  encryption_key: ""            # env CONNECTOR_ENCRYPTION_KEY
+  credentials_dir: /app/secrets
+  gmail:
+    client_id: ""               # env CONNECTOR_GMAIL_CLIENT_ID
+    client_secret: ""           # env CONNECTOR_GMAIL_CLIENT_SECRET
+  google_drive:
+    client_id: ""               # env CONNECTOR_GOOGLE_DRIVE_CLIENT_ID
+    client_secret: ""           # env CONNECTOR_GOOGLE_DRIVE_CLIENT_SECRET
+
+coding:
+  named_ops_enabled: true
+  transform_retry_max: 2
+  transform_retry_profile: ""

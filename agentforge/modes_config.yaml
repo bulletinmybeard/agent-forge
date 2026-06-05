@@ -1,0 +1,74 @@
+# modes_config.yaml — per-mode tool and profile configuration
+#
+# This file documents which tools and LLM profile each execution mode uses.
+# The loader (_load_modes_config in ws_endpoint.py) reads this at startup.
+#
+# tools: []   — mode uses no agent tools (RAG-only pipeline)
+# tools: all  — mode receives the full registered tool registry (no filtering)
+# tools: [..] — explicit allowlist; names must match registered tool names
+
+modes:
+
+  search:
+    # RAG-only pipeline: query refinement → embed → Qdrant search → LLM answer.
+    # No agent loop; no tools required.
+    profile: cloud-light
+    tools: []
+    prompt: prompts/search.md   # does not exist yet — placeholder for future extraction
+
+  web_search:
+    # AgentLoop restricted to web access and TMDB lookups.
+    # Defined as _WEB_SEARCH_TOOLS in ws_endpoint.py.
+    profile: cloud-heavy
+    tools:
+      - web_search
+      - web_fetch
+      - read_file       # in case search results reference local files
+      - write_file      # save research to a file if asked
+      # TMDB — structured movie/TV/person lookups
+      - movie_search
+      - movie_details
+      - tv_search
+      - tv_details
+      - person_search
+      - person_details
+      - trending_media
+      - multi_search
+    prompt: prompts/web_search.md
+
+  agent:
+    # AgentLoop for operational queries (Docker, SSH, file ops, system commands).
+    # Profile routing selects the model; tool subset depends on the routed profile:
+    #   fast / default → core_tools (5 tools)
+    #   agent          → core_tools (5 tools)
+    #   thinker/vision → all tools (no filtering)
+    # The list below reflects _core_tools used by fast/default/agent profiles.
+    profile: cloud-heavy
+    tools:
+      - read_file       # structured file reading + PDF
+      - write_file      # reliable multi-line file creation
+      - shell           # everything else (guard-protected)
+      - ssh             # remote commands (host-allowlisted)
+      - health_check    # composite remote health check
+    prompt: prompts/agent.md
+
+  logs:
+    # AgentLoop restricted to log-analysis tools.
+    # Defined as _LOG_ANALYSIS_TOOLS in ws_endpoint.py.
+    profile: cloud-heavy
+    tools:
+      - shell           # journalctl, docker logs, tail, grep, etc.
+      - ssh             # remote log access (myserver, staging, etc.)
+      - read_file       # read log files directly
+      - analyze_logs    # structured log parsing (errors, patterns, health)
+      - write_file      # save analysis reports if asked
+      - web_search      # look up unfamiliar errors
+      - web_fetch       # read full docs/solutions for errors
+    prompt: prompts/logs.md
+
+  discover:
+    # DiscoveryRunner: scope → investigate → synthesise → plan.
+    # Passes the full ToolRegistry to DiscoveryRunner — no tool filtering applied.
+    profile: cloud-heavy
+    tools: all
+    prompt: prompts/discover.md  # does not exist yet — placeholder for future extraction

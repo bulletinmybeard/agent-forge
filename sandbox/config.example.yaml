@@ -1,0 +1,38 @@
+# sandbox/config.yaml — highest-priority layer in the 3-way merge
+#
+# Connection overrides (ollama.host, qdrant.host, redis.url) are pushed into
+# env vars before Settings() is instantiated, so they reliably win over the
+# defaults baked into the repo-root config.yaml.
+#
+# os.environ.setdefault is used — manually exported env vars always take precedence.
+
+# ── Local defaults (point at your own host/box) ──────────────────────────────
+ollama:
+  host: "http://localhost:11434"
+
+qdrant:
+  host: "localhost"
+
+redis:
+  url: "redis://localhost:6379"
+
+# ── Other overrides (uncomment as needed) ────────────────────────────────────
+
+# Point at a scratch collection instead of your main one:
+# qdrant:
+#   collection_name: "sandbox_scratch"
+
+# Swap a role to a lighter model for faster iteration:
+# ollama:
+#   roles:
+#     answer_generation:
+#       profile: "local-default"
+#       num_predict: 512
+
+# Looser search floor for exploratory queries:
+# search:
+#   score_floor: 0.30
+
+# Disable dedup so re-indexing is faster:
+# dedup:
+#   enabled: false

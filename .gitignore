@@ -1,0 +1,96 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Local runtime config — NEVER commit (holds API keys / credentials)
+config.yaml
+*-config.yaml
+secrets/
+deploy.env
+deploy.local.env
+
+# Provider model profiles — per-deployment (like config.yaml). Only the
+# *.example.yaml templates are committed; copy the providers you use, e.g.
+#   cp profiles/providers/ollama.example.yaml profiles/providers/ollama.yaml
+# ollama.yaml is the minimum; the cloud providers are optional. The loader
+# skips *.example.yaml (agentforge/config.py :: _load_split_profiles).
+profiles/providers/*.yaml
+!profiles/providers/*.example.yaml
+
+# Personal context files — copy from the *.example versions (gitignored)
+user_context.md
+
+# Local data / screenshots / snapshots
+data/
+*.log
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Helper script (not part of the package)
+remove-nonpublic.sh
+
+# Private custom agents + their prompts (kept local, never published)
+custom_agents.local.yaml
+markdown/local/
+
+# Private tool plugins — modules are private; package scaffolding is committed
+plugins/*
+!plugins/__init__.py
+
+# Private SQL tools (the @sql mode + /api/schemas REST cache). Generic code, but
+# kept private alongside the DB connection config. Loaded via AGENTFORGE_TOOL_PLUGINS.
+agentforge/tools/sql_tools.py
+agentforge/tools/sql_schema_tool.py
+
+# Private tool-routing overlay (kept local)
+tool_routing.local.yaml
+
+# --- Secrets / credentials (defense-in-depth for the public repo) ---
+# Real secret files are already covered above: config.yaml, *-config.yaml (also
+# matches framework-config.yaml), secrets/, deploy.env. These stop a FUTURE stray
+# credential file from ever being committed.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+id_rsa*
+client_secret*.json
+*token*.json
+*credentials*.json
+
+# --- Stray runtime databases outside data/ ---
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Coverage / build tooling ---
+.coverage
+coverage.xml
+htmlcov/
+.hatch/
+.tox/
+
+# --- OS / editor extras ---
+*.swp
+*~
+*.orig
+*.rej
+.ipynb_checkpoints/
+
+!docs/
