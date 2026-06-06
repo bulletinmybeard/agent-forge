@@ -777,7 +777,7 @@ class SearchRuntime:
                 + ["file_info", "execute_sql", "save_result", "load_result", "search_knowledge_base"]
             )
             # Browser-extension profile: the full agent set minus shell, so a
-            # web-page-facing agent (ask-page) can't fall back to shell() for
+            # web-page-facing agent can't fall back to shell() for
             # downloads — it must invoke download_file / web_fetch as structured
             # tool calls. Same shell-exclusion rationale as _pipeline.
             _browser = [t for t in _full if t != "shell"]
@@ -4858,7 +4858,16 @@ async def websocket_chat(ws: WebSocket, session_id: str | None = None) -> None:
             # Inject conversation history so the worker's _NullDatabase
             # returns it from get_messages(), giving the agent multi-turn
             # context for follow-up messages like "fix those queries".
-            _WORKER_MSG_CHARS = 1500  # per-message cap before truncation
+            _WORKER_MSG_CHARS = 1500  # default per-message cap before truncation
+            # A client whose sends large first-turn context (e.g., a captured
+            # page/DOM snapshot) can raise this per request via the generic
+            # `history_char_limit` override.
+            _hist_override = (overrides or {}).get("history_char_limit")
+            if _hist_override is not None:
+                try:
+                    _WORKER_MSG_CHARS = max(_WORKER_MSG_CHARS, min(int(_hist_override), 64000))
+                except (TypeError, ValueError):
+                    pass
             _agent_no_history = (
                 agent_cfg.get("no_history", False) if mode.startswith("custom:") and agent_cfg else False
             )
@@ -5076,8 +5085,8 @@ async def websocket_chat(ws: WebSocket, session_id: str | None = None) -> None:
                     # mutated afterwards. NULL = use the global default. The
                     # frontend only sends `provider` on the very first query.
                     initial_provider = (overrides or {}).get("provider")
-                    # External clients (sysbar, ask-page, ...) self-identify via
-                    # overrides.source so their sessions can be kept out of the
+                    # External clients self-identify via overrides.source so
+                    # their sessions can be kept out of the
                     # human Agent Chat sidebar. The web UI omits it -> "web".
                     initial_source = (overrides or {}).get("source") or "web"
                     db.create_session(

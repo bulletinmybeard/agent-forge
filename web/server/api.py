@@ -233,8 +233,8 @@ async def list_sessions(limit: int = 50, offset: int = 0, source: str = "web"):
     disable new-chat navigation while a worker job is in flight.
 
     ``source`` filters by originating client (default ``"web"`` — the Agent Chat
-    UI). External-app sessions (sysbar, ask-page, ...) are hidden unless asked
-    for: ``?source=all`` lists every source, ``?source=sysbar`` a single one.
+    UI). External-app sessions are hidden unless asked for: ``?source=all`` lists
+    every source, ``?source=<name>`` a single one.
     """
     from .queue.store import job_store as _job_store
 

@@ -34,8 +34,8 @@ class ChatSession(Base):
     # global default (singleton ConfigManager._provider_override).
     provider_override = Column(String(32), nullable=True)
     # Where the session originated. "web" = the Agent Chat UI; external clients
-    # (e.g., "sysbar", "ask-page") send their own value so the human sidebar can
-    # filter them out. Stamped at creation, never mutated.
+    # send their own value so the human sidebar can filter them out. Stamped at
+    # creation, never mutated.
     source = Column(String(32), nullable=False, default="web")
     message_count = Column(Integer, nullable=False, default=0)
     # Cumulative token usage — updated after each model call

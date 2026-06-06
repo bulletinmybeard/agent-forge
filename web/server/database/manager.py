@@ -188,8 +188,8 @@ class ChatDatabase:
         change it. Use ``None`` to defer to the global default provider.
 
         ``source`` marks the originating client ("web" for the Agent Chat UI;
-        external apps like "sysbar"/"ask-page" send their own). Used to filter
-        external sessions out of the human sidebar. Also write-once.
+        external apps send their own). Used to filter external sessions out of
+        the human sidebar. Also write-once.
         """
         with self.SessionLocal() as session:
             chat = ChatSession(
@@ -221,8 +221,8 @@ class ChatDatabase:
         """List sessions ordered by most recently created (stable ordering).
 
         ``sources`` filters by originating client; defaults to ("web",) so
-        external-app sessions (sysbar, ask-page, ...) stay out of the human
-        sidebar. Pass ``None`` to list every source.
+        external-app sessions stay out of the human sidebar. Pass ``None`` to
+        list every source.
         """
         with self.SessionLocal() as session:
             query = session.query(ChatSession)
