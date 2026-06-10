@@ -22,6 +22,7 @@ from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from .database import ChatDatabase
+from .ws_endpoint import get_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -932,6 +933,36 @@ async def list_agents():
         pass
 
     return {"agents": built_in + custom}
+
+
+@router.get("/tools")
+async def list_runtime_tools():
+    """List all registered runtime tools (name, description, category) for the UI."""
+
+    try:
+        rt = get_runtime()
+    except RuntimeError:
+        return {"tools": [], "count": 0}
+
+    reg = getattr(rt, "registry", None)
+    if reg is None:
+        return {"tools": [], "count": 0}
+
+    tools = []
+    for spec in reg.tool_specs():
+        fn = spec.get("function", {})
+        name = fn.get("name")
+        if not name:
+            continue
+        tools.append(
+            {
+                "name": name,
+                "description": fn.get("description", ""),
+                "category": reg._tool_categories.get(name, "General"),
+            }
+        )
+    tools.sort(key=lambda t: (t["category"], t["name"]))
+    return {"tools": tools, "count": len(tools)}
 
 
 # -- Profile endpoints ---------------------------------------------------------
