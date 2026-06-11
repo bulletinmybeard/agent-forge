@@ -28,7 +28,10 @@ _REQUEST_TIMEOUT = 30
 
 
 def _get_api_key() -> str:
-    """``tools.web_search.brave.api_key`` (YAML) → ``BRAVE_API_KEY`` env."""
+    """``BRAVE_API_KEY`` env wins, else ``tools.web_search.brave.api_key`` (YAML)."""
+    env = os.environ.get("BRAVE_API_KEY", "").strip()
+    if env:
+        return env
     try:
         from agentforge.config import get_config
 
@@ -38,7 +41,7 @@ def _get_api_key() -> str:
             return str(key)
     except Exception:
         pass
-    return os.environ.get("BRAVE_API_KEY", "")
+    return ""
 
 
 def _get_brave_options() -> dict[str, Any]:

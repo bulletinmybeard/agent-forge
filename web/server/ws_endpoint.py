@@ -95,13 +95,6 @@ def _strip_wrapping_fence(text: str) -> str:
     return "\n".join(lines[1:-1]).strip()
 
 
-def _load_modes_config() -> dict:
-    """Load the per-mode tool and profile configuration from modes_config.yaml."""
-    path = Path(_af_pkg.__file__).resolve().parent / "modes_config.yaml"
-    with open(path) as f:
-        return yaml.safe_load(f)["modes"]
-
-
 # ---------------------------------------------------------------------------
 # Tool-call extraction & post-write hook wiring (shared by all runners)
 # ---------------------------------------------------------------------------
@@ -1440,7 +1433,10 @@ async def _handle_retry_query(
     *resubmit*, False when a query.retry.error was already sent.
     """
     last = db.get_last_user_query(session_id)
-    if last is None or (last.content or "") != (prompt_text or ""):
+    sent = prompt_text or ""
+    sent_no_prefix = re.sub(r"^\s*@[\w:-]+\s+", "", sent)
+    stored = (last.content or "") if last is not None else None
+    if last is None or stored not in (sent, sent_no_prefix):
         await ws.send_json(protocol.query_retry_error(prompt_text, "not_found"))
         return False
 
@@ -1451,7 +1447,7 @@ async def _handle_retry_query(
     db.delete_messages_from_sequence(session_id, last.sequence)
     conv_memory.delete_exchange(session_id, last.content or "")
 
-    new_text = edited_text.strip() if edited_text else (last.content or "")
+    new_text = edited_text.strip() if edited_text else (sent or last.content or "")
     await resubmit(new_text)
     return True
 
@@ -7898,9 +7894,9 @@ async def _run_pipeline(
     knows to use save_result for large intermediate data and search_knowledge_base
     for domain lookups, rather than re-passing everything through the context window.
     """
-    # Read the LLM profile and max_iterations for pipeline from framework-config.
-    # Defaults: "thinker" (mistral-large-3:675b-cloud, 8k tokens) and 20 iters.
-    # Configurable in framework-config.yaml under pipeline.profile / pipeline.max_iterations.
+    # Read the pipeline LLM profile from framework-config (pipeline.profile).
+    # Default: "thinker" (mistral-large-3:675b-cloud, 8k tokens). Note: the
+    # iteration cap is not read here — pipeline.max_iterations in YAML is not wired up.
     pipeline_llm_profile = "thinker"
     try:
         from agentforge.config import get_config as get_fw_config

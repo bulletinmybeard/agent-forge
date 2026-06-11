@@ -26,7 +26,6 @@ Usage::
 from __future__ import annotations
 
 import dataclasses
-import os
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -144,23 +143,6 @@ def _get_model() -> str:
     return cfg.get("model", "")
 
 
-def _get_host() -> str:
-    """Return the Ollama host for guard calls."""
-    cfg = _get_guard_config()
-    if cfg.get("host"):
-        return cfg["host"]
-    # Fall back to OLLAMA_HOST env var, then framework config, then default
-    env_host = os.environ.get("OLLAMA_HOST")
-    if env_host:
-        return env_host
-    try:
-        from agentforge.config import get_config
-
-        return get_config()._raw.get("ai", {}).get("host", "http://localhost:11434")
-    except Exception:
-        return "http://localhost:11434"
-
-
 # ---------------------------------------------------------------------------
 # Classification prompt
 # ---------------------------------------------------------------------------
@@ -184,9 +166,8 @@ class CommandGuard:
     Bedrock (whatever the ``fast`` profile resolves to).
     """
 
-    def __init__(self, model: str = "", host: str = "") -> None:
+    def __init__(self, model: str = "") -> None:
         self._model_override = model or _get_model()
-        self._host_override = host or ""  # only honoured for raw-Ollama path
         self._client = None  # lazy init — holds an AIClient
         self.last_source: str = ""  # "fast-path", "llm", or "fail-open"
 

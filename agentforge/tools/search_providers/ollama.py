@@ -33,10 +33,12 @@ _REQUEST_TIMEOUT = 30  # seconds — matches the legacy urllib timeout
 def _get_api_key() -> str:
     """Return the Ollama Cloud API key.
 
-    Priority preserved from the original code:
-    ``tools.web_search.api_key`` (YAML) → ``OLLAMA_API_KEY`` env →
-    empty string. Empty disables the provider gracefully.
+    ``OLLAMA_API_KEY`` env wins, else ``tools.web_search.api_key`` (YAML),
+    else empty string (disables the provider gracefully).
     """
+    env = os.environ.get("OLLAMA_API_KEY", "").strip()
+    if env:
+        return env
     try:
         from agentforge.config import get_config
 
@@ -46,7 +48,7 @@ def _get_api_key() -> str:
             return str(key)
     except Exception:
         pass
-    return os.environ.get("OLLAMA_API_KEY", "")
+    return ""
 
 
 def _post(url: str, body: dict[str, Any], api_key: str) -> dict[str, Any]:

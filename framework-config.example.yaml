@@ -135,7 +135,6 @@ parallel:
 
 # Multi-phase investigative discovery
 discovery:
-  enabled: true
   max_rounds: 3
   max_workers: 4
   planner_profile: "default"
@@ -143,30 +142,15 @@ discovery:
 
 # Typed multi-step pipeline runner
 pipeline:
-  verbose: false
   profile: "thinker"
-  max_iterations: 20
 
 # Code-transform burst mode
 coding:
   auto_planner: true
   max_files_per_burst: 50
-  context_lines: 10
-  verify_after_apply: true
   planner_profile: agent-heavy
   extractor_profile: cloud-light
   burst_profile: cloud-coder
-
-# @-prefixed execution modes
-modes:
-  search:
-    enabled: true
-    profile: "agent"
-    max_iterations: 8
-  logs:
-    enabled: true
-    profile: "log-analyzer"
-    max_iterations: 12
 
 # Per-external-app role/tier -> concrete-profile overrides, keyed by the session
 # `source` tag the client sends in overrides.source (e.g., "felix"). Layered ON

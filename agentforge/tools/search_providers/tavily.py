@@ -36,12 +36,15 @@ _REQUEST_TIMEOUT = 30
 
 
 def _get_api_key() -> str:
-    """``tools.web_search.tavily.api_key`` (YAML) → ``TAVILY_API_KEY`` env.
+    """``TAVILY_API_KEY`` env wins, else ``tools.web_search.tavily.api_key`` (YAML).
 
     Tavily's docs document keys with a ``tvly-`` prefix — we don't enforce
     it here (the server validates), but typo-style values like a key
     without the prefix will simply 401.
     """
+    env = os.environ.get("TAVILY_API_KEY", "").strip()
+    if env:
+        return env
     try:
         from agentforge.config import get_config
 
@@ -51,7 +54,7 @@ def _get_api_key() -> str:
             return str(key)
     except Exception:
         pass
-    return os.environ.get("TAVILY_API_KEY", "")
+    return ""
 
 
 def _get_tavily_options() -> dict[str, Any]:

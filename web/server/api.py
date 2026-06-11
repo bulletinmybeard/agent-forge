@@ -828,88 +828,176 @@ async def list_agents():
     # listed here that isn't in the matching set will silently not work.
     built_in = [
         {
+            "id": "chat",
+            "type": "built-in",
+            "aliases": ["@chat"],
+            "title": "Chat",
+            "description": (
+                "General LLM knowledge. No Qdrant search, no tools. Uses the answer-generation "
+                "profile with conversation history. For indexed docs, use @docs."
+            ),
+            "example": "what is a REST API?",
+            "profile": "cloud-light",
+            "is_default": True,
+        },
+        {
             "id": "search",
             "type": "built-in",
             "aliases": ["@docs"],
-            "description": "Local RAG search over your indexed knowledge base (Qdrant)",
+            "title": "Knowledge Search (RAG)",
+            "description": (
+                "Search indexed documentation, APIs, and code via Qdrant. Use #hashtags to filter "
+                "by source. DB schemas, OpenAPI specs, code, and content sources are each tagged. "
+                "Shorthands resolve to the full source name automatically; multiple hashtags create "
+                "an OR filter. @docs can appear anywhere in the prompt."
+            ),
+            "example": "@docs #sales list all user tables",
             "profile": "cloud-light",
         },
         {
             "id": "web_search",
             "type": "built-in",
             "aliases": ["@search"],
-            "description": "Internet search — web pages, documentation, media lookups",
+            "title": "Web Search",
+            "description": (
+                "Search the internet in real time. The agent uses web_search and web_fetch plus "
+                "TMDB tools for movie/TV queries."
+            ),
+            "example": "@search latest React 19 features",
             "profile": "cloud-heavy",
         },
         {
             "id": "agent",
             "type": "built-in",
             "aliases": ["@agent"],
-            "description": "General-purpose agent with filesystem, Docker, SSH and more",
-            "profile": "cloud-heavy",
-        },
-        {
-            "id": "logs",
-            "type": "built-in",
-            "aliases": ["@logs"],
-            "description": "Log analysis — diagnoses errors, explains messages, proposes fixes",
-            "profile": "log-analyzer",
-        },
-        {
-            "id": "discover",
-            "type": "built-in",
-            "aliases": ["@discover"],
-            "description": "System discovery — scope, investigate, and create a cleanup plan",
+            "title": "Agent / Tool Execution",
+            "description": (
+                "Execute system operations — shell commands, Docker, SSH, file ops, git. The agent "
+                "calls tools iteratively until the task is done. Destructive operations show a "
+                'confirmation dialog with a "Yes (all)" option to auto-confirm the rest.'
+            ),
+            "example": "@agent check disk usage on the production host",
             "profile": "cloud-heavy",
         },
         {
             "id": "sql",
             "type": "built-in",
             "aliases": ["@sql"],
-            "description": "Natural-language SQL generation against indexed schemas",
+            "title": "SQL Execution",
+            "description": (
+                "Generate and execute SQL from natural language. Uses RAG to fetch schema context "
+                "(valid joins, columns), then generates SQL and runs it via execute_sql. Use "
+                "#hashtags to target a database. Destructive queries require confirmation."
+            ),
+            "example": "@sql #sales how many new orders this week?",
+            "profile": "cloud-heavy",
+        },
+        {
+            "id": "logs",
+            "type": "built-in",
+            "aliases": ["@logs"],
+            "title": "Log Analysis",
+            "description": (
+                "Diagnose errors by reading log files, running shell/SSH commands, and "
+                "cross-referencing findings with web search."
+            ),
+            "example": "@logs why is the API returning 502",
+            "profile": "log-analyzer",
+        },
+        {
+            "id": "discover",
+            "type": "built-in",
+            "aliases": ["@discover"],
+            "title": "Discovery / Investigation",
+            "description": (
+                "Multi-phase investigative agent. Scopes the system, investigates areas "
+                "concurrently, synthesizes findings, and optionally executes fixes."
+            ),
+            "example": "@discover what services are running and their health",
             "profile": "cloud-heavy",
         },
         {
             "id": "pipeline",
             "type": "built-in",
             "aliases": ["@pipeline"],
-            "description": "Structured multi-step workflow with typed tools (read_file, execute_sql, save/load_result, git, etc.) — no shell",
+            "title": "Pipeline — Natural Language Workflow",
+            "description": (
+                "Structured multi-step workflow with typed tools (read_file, file_info, grep_text, "
+                "find_files, search_knowledge_base, execute_sql, save/load_result, write_file, "
+                "git/docker/ssh) — no shell. save/load_result keys are isolated per session."
+            ),
+            "example": (
+                "@pipeline find SQL queries in src/legacy/*.php, validate tables against "
+                "#analytics schema, run the valid ones, save them to /tmp/valid.sql"
+            ),
             "profile": "thinker",
         },
         {
             "id": "scheduler",
             "type": "built-in",
             "aliases": ["@scheduler"],
-            "description": "Schedule recurring tasks — health checks, backups, data pulls",
+            "title": "Scheduler — Recurring Jobs",
+            "description": (
+                "Create, manage, and monitor scheduled jobs. The LLM converts natural language to "
+                "cron-based job definitions with shell commands. Jobs run on the host via the SAQ "
+                "worker (SSH, Docker, notifications). Management actions use a confirm dialog."
+            ),
+            "example": "@scheduler run a health check against https://example.com every 2 hours on weekdays",
             "profile": "cloud-light",
         },
         {
             "id": "monitor",
             "type": "built-in",
             "aliases": ["@monitor"],
-            "description": "Website change monitoring — detect content changes and send notifications",
+            "title": "Monitor — Website Change Detection",
+            "description": (
+                "Monitor websites for content changes. Takes an initial snapshot, then checks on a "
+                "schedule. Extraction modes: text, markdown, or rendered (Playwright for SPAs). "
+                "Supports CSS selectors and notifications via desktop or webhook (Slack, Teams)."
+            ),
+            "example": "@monitor watch https://example.com/pricing for changes every hour",
             "profile": "cloud-light",
         },
         {
             "id": "review",
             "type": "built-in",
             "aliases": ["@review"],
-            "description": "Parallel code review — 4 specialist sub-agents (error handling, type design, test coverage, code quality)",
+            "title": "Parallel Code Review",
+            "description": (
+                "Runs 4 specialist sub-agents concurrently — error handling, type design, test "
+                "coverage, and code quality. Each reads the code independently, then results are "
+                "merged into one structured report. Defaults to the current directory."
+            ),
+            "example": "@review review all unpushed changes in /Users/me/project/",
             "profile": "cloud-heavy",
         },
         {
             "id": "research",
             "type": "built-in",
             "aliases": ["@research"],
-            "description": "Parallel multi-agent web research — planner decomposes query, sub-agents run in parallel, findings merged into a report",
+            "title": "Parallel Web Research",
+            "description": (
+                "Multi-agent web research. The planner decomposes the query into 3-8 independent "
+                "sub-investigations; each sub-agent runs in parallel with web_search and web_fetch; "
+                "findings are merged into a structured report with sources."
+            ),
+            "example": "@research compare vector databases for RAG workloads in 2026",
             "profile": "cloud-heavy",
         },
         {
-            "id": "chat",
+            "id": "coding",
             "type": "built-in",
-            "aliases": ["@chat"],
-            "description": "Direct LLM conversation — no tools, no Qdrant (default fallback)",
-            "profile": "cloud-light",
+            "aliases": ["@coding", "@code"],
+            "title": "Coding — Bulk Code Transforms",
+            "description": (
+                "Map-reduce code transformer. Deterministic tools (ripgrep discovery + regex "
+                "narrowing + post-write verification) do the heavy lifting; only the per-file edit "
+                "runs through an LLM, and those calls fan out in parallel. Output is unified-diff "
+                "preview cards, then a confirm dialog, then verified writes with snapshots. Undo a "
+                "whole run with `@coding undo <id>`. A path argument is required."
+            ),
+            "example": "@coding in /path/to/repo find all <Grid> with no props and add size={{ xs: 12 }}",
+            "profile": "coding",
         },
     ]
 

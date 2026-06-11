@@ -4,10 +4,13 @@ Provides tools for searching and retrieving details about movies, TV shows,
 actors, directors, and trending content from TMDB's API v3.
 
 Requirements:
-  - A TMDB API key (get one at https://www.themoviedb.org/settings/api)
-  - Set either:
-      - ``tools.tmdb.api_key`` in config.yaml, OR
-      - ``TMDB_API_KEY`` environment variable
+  - A TMDB credential (get one at https://www.themoviedb.org/settings/api).
+    Either form works:
+      - v3 API Key (32-char) - sent as the ``api_key`` query param, OR
+      - v4 API Read Access Token (JWT) - sent as ``Authorization: Bearer``
+  - Set it via either (env wins over config):
+      - ``TMDB_API_KEY`` environment variable, OR
+      - ``tools.tmdb.api_key`` in framework-config.yaml
 
 The tools gracefully disable themselves when no API key is available -
 they return an informative error instead of crashing.
@@ -33,6 +36,8 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from chalkbox.logging.bridge import get_logger
+
+from agentforge.config import get_config
 
 from .registry import tool
 
@@ -72,13 +77,16 @@ def _redact_key_in_url(url: str) -> str:
 
 
 def _get_api_key() -> str:
-    """Return the TMDB API key from the ``TMDB_API_KEY`` environment variable."""
-    return os.environ.get("TMDB_API_KEY", "")
+    """Return the TMDB credential — ``TMDB_API_KEY`` env var wins, else config."""
+    env = os.environ.get("TMDB_API_KEY", "").strip()
+    if env:
+        return env
+    return str(get_config().get("tools.tmdb.api_key", "") or "").strip()
 
 
 def _get_config_value(key: str, default):
-    """TMDB tunables (rate limit, language, ...) use built-in defaults."""
-    return default
+    """Read a ``tools.tmdb.<key>`` from config, falling back to *default*."""
+    return get_config().get(f"tools.tmdb.{key}", default)
 
 
 # ---------------------------------------------------------------------------
@@ -120,21 +128,30 @@ def _tmdb_request(endpoint: str, params: dict[str, str] | None = None) -> dict:
     if not api_key:
         raise RuntimeError(
             "TMDB API key not configured. Set tools.tmdb.api_key in "
-            "config.yaml or the TMDB_API_KEY environment variable."
+            "framework-config.yaml or the TMDB_API_KEY environment variable."
         )
 
     _enforce_rate_limit()
 
-    # Build URL with query params
-    query_parts = [f"api_key={api_key}"]
+    # A v4 "API Read Access Token" is a JWT (header.payload.signature) and must go in an Authorization: Bearer header.
+    # A v3 key (32-char) goes in the query string. The two-dotted structure is what distinguishes them.
+    use_bearer = api_key.count(".") == 2
+
+    query_parts: list[str] = [] if use_bearer else [f"api_key={api_key}"]
     if params:
         for k, v in params.items():
             query_parts.append(f"{quote(k)}={quote(str(v))}")
     query_string = "&".join(query_parts)
 
-    url = f"{_TMDB_BASE_URL}{endpoint}?{query_string}"
+    url = f"{_TMDB_BASE_URL}{endpoint}"
+    if query_string:
+        url = f"{url}?{query_string}"
 
-    req = Request(url, headers={"Accept": "application/json"}, method="GET")
+    headers = {"Accept": "application/json"}
+    if use_bearer:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    req = Request(url, headers=headers, method="GET")
 
     try:
         with urlopen(req, timeout=_REQUEST_TIMEOUT) as resp:  # noqa: S310
