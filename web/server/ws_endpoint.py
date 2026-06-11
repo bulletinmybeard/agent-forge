@@ -3899,6 +3899,8 @@ def _build_conversation_history(
         logger.debug("Could not load history for session %s", session_id)
         return None
 
+    db_messages = [m for m in db_messages if not getattr(m, "is_volatile", False)]
+
     if incognito:
         # Private mode: include ONLY incognito messages from this session.
         # This allows within-session follow-ups while preventing cross-session
@@ -6302,13 +6304,8 @@ async def _run_monitor(
     total_start = time.perf_counter()
     ws_closed = False
 
-    async def send_only(msg: dict, **_kwargs: Any) -> None:
-        """Send to WebSocket but do NOT persist to SQLite.
-
-        Monitor mode is stateful — persisting LLM responses about jobs
-        into ``chat_messages`` pollutes conversation history and fact
-        extraction with ephemeral state that becomes stale.
-        """
+    async def send_only(msg: dict, *, msg_type: str | None = None, content: str = "", **_extra: Any) -> None:
+        """Send to the client and persist the message as ``volatile``."""
         nonlocal ws_closed
         if not ws_closed:
             try:
@@ -6316,8 +6313,25 @@ async def _run_monitor(
             except (WebSocketDisconnect, RuntimeError):
                 ws_closed = True
                 logger.warning("WebSocket closed during monitor send")
+        db.add_message(
+            session_id=session_id,
+            role="assistant",
+            msg_type=msg_type or msg.get("type", "unknown"),
+            content=content,
+            metadata=msg,
+            is_volatile=True,
+        )
 
     try:
+        db.add_message(
+            session_id=session_id,
+            role="user",
+            msg_type="query",
+            content=query,
+            metadata={"type": "query", "text": query},
+            is_volatile=True,
+        )
+
         # --- NO conversation history for monitor mode ---------------------
         # Monitor mode relies exclusively on the DB-backed "Existing
         # Monitors" section in the system prompt.  Loading chat history
