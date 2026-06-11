@@ -2137,6 +2137,8 @@ def _trace_heuristic(
     from .ws_endpoint import (
         _AGENT_KEYWORDS,
         _AGENT_PATTERNS,
+        _STICKY_MODES,
+        _match_mode_patterns,
     )
     from .ws_endpoint import (
         _strip_custom_prefix as _scp,
@@ -2207,11 +2209,32 @@ def _trace_heuristic(
                 "id": "generic_at",
                 "label": "Generic @source",
                 "status": "active",
-                "detail": "Starts with @ — routed to search (deprecated)",
+                "detail": "Unrecognized @-prefix — classified as 'unknown_prefix'",
             }
         )
         return sub
     sub.append({"id": "generic_at", "label": "Generic @source", "status": "skipped", "detail": "No @ prefix"})
+
+    # 4b. Per-mode pattern matching
+    mode_match = _match_mode_patterns(query_lower)
+    if mode_match:
+        sub.append(
+            {
+                "id": "mode_patterns",
+                "label": "Mode Patterns",
+                "status": "active",
+                "detail": f"Matched mode pattern → '{mode_match}'",
+            }
+        )
+        return sub
+    sub.append(
+        {
+            "id": "mode_patterns",
+            "label": "Mode Patterns",
+            "status": "skipped",
+            "detail": "No mode-specific pattern matched",
+        }
+    )
 
     # 5. Keyword matching
     words = set(_re.sub(r"[^\w\s/~.]", "", query_lower).split())
@@ -2261,7 +2284,7 @@ def _trace_heuristic(
     )
 
     # 7. Sticky mode
-    sticky_modes = {"web_search", "logs", "sql", "scheduler", "monitor"}
+    sticky_modes = _STICKY_MODES
     if last_mode in sticky_modes:
         _FOLLOWUP_PRONOUNS = _re.compile(r"\bthem\b|\bthose\b|\bthese\b|\bthey\b|\bits?\b|\bthat\b")
         _FOLLOWUP_PHRASES = _re.compile(
@@ -2388,6 +2411,7 @@ async def dry_run(body: DryRunRequest):
     history assembly — with timing for each step.
     """
     from .ws_endpoint import (
+        _WORKER_MODES,
         _build_conversation_history,
         _classify_mode,
         _classify_mode_heuristic,
@@ -2630,7 +2654,7 @@ async def dry_run(body: DryRunRequest):
     # ── Step 5: Profile routing (async — LLM call for agent modes) ────────
     t0 = time.perf_counter()
     profile_result: dict = {"profile": None, "reason": None, "error": None}
-    worker_modes = {"agent", "web_search", "logs", "sql", "discover", "pipeline"}
+    worker_modes = _WORKER_MODES
     base_mode = final_mode.split(":", 1)[-1] if final_mode.startswith("custom:") else final_mode
     profile_sub_steps: list[dict] = []
 

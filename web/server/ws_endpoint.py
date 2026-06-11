@@ -1815,6 +1815,11 @@ def _match_mode_patterns(query_lower: str) -> str | None:
     return None
 
 
+_STICKY_MODES = frozenset(
+    ("web_search", "logs", "sql", "scheduler", "monitor", "research", "coding")
+)
+
+
 _CHAT_ALIASES = {"@chat"}
 _AGENT_ALIASES = {"@agent"}
 _SEARCH_ALIASES = {"@docs"}
@@ -2426,7 +2431,7 @@ def _classify_mode_heuristic(
     #   1. Short queries (≤ 15 words): sticky if pronouns/phrases or ≤ 10 words
     #   2. Any length: sticky if the query references prior context AND
     #      involves tool-like actions (save, search, file ops, TMDB verbs)
-    if last_mode in ("web_search", "logs", "sql", "scheduler", "monitor", "research", "coding"):
+    if last_mode in _STICKY_MODES:
         _FOLLOWUP_PRONOUNS = re.compile(r"\bthem\b|\bthose\b|\bthese\b|\bthey\b|\bits?\b|\bthat\b")
         _FOLLOWUP_PHRASES = re.compile(
             r"\bwhat\s+about\b|\bhow\s+about\b|\band\s+what\s+about\b"
