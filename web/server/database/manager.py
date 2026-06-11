@@ -232,6 +232,21 @@ class ChatDatabase:
             session.expunge_all()
             return chats
 
+    def search_message_content(self, query: str, limit: int = 50) -> list[str]:
+        """Return distinct session_ids whose message content matches ``query``."""
+        q = (query or "").strip()
+        if not q:
+            return []
+        with self.SessionLocal() as session:
+            rows = (
+                session.query(ChatMessage.session_id)
+                .filter(ChatMessage.content.ilike(f"%{q}%"))
+                .distinct()
+                .limit(limit)
+                .all()
+            )
+            return [r[0] for r in rows]
+
     def update_session(self, session_id: str, **fields) -> ChatSession | None:
         """Update session fields (title, profile, model, message_count).
 

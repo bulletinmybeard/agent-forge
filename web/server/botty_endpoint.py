@@ -258,48 +258,52 @@ class BottyEngine:
         self.momentum = min(100, self.momentum + 15)
         logger.debug("Marked nudge %s as helpful", nudge_id)
 
-    async def search_sessions(self, query: str) -> list[dict[str, Any]]:
-        """Search for sessions matching the query.
+    def _session_result(self, s: Any, score: float) -> dict[str, Any]:
+        """Transform a session row into a search-result dict for UI widgets."""
+        updated = getattr(s, "updated_at", None)
+        return {
+            "session_id": s.id,
+            "query": (getattr(s, "title", "") or "").strip(),
+            "preview": f"{getattr(s, 'message_count', 0) or 0} messages",
+            "score": score,
+            "timestamp": updated.isoformat() if updated else "",
+        }
 
-        Returns a list of sessions with similarity scores.
-        """
-        results: list[dict[str, Any]] = []
+    async def search_sessions(self, query: str) -> list[dict[str, Any]]:
+        """Search past sessions by title (substring) and message content (LIKE)."""
+        by_id: dict[str, dict[str, Any]] = {}
         q = (query or "").strip().lower()
         if not q:
-            return results
+            return []
 
         try:
+            # Title matches over recent web sessions (tiered score/Qdrant).
             sessions = self.db.list_sessions(limit=200)
+            sessions_by_id = {s.id: s for s in sessions}
             for s in sessions:
-                title = (getattr(s, "title", "") or "").strip()
-                tl = title.lower()
+                tl = (getattr(s, "title", "") or "").strip().lower()
                 if not tl or q not in tl:
                     continue
+                score = 1.0 if tl == q else 0.85 if tl.startswith(q) else 0.7
+                by_id[s.id] = self._session_result(s, score)
 
-                if tl == q:
-                    score = 1.0
-                elif tl.startswith(q):
-                    score = 0.85
-                else:
-                    score = 0.7
-                updated = getattr(s, "updated_at", None)
-                results.append(
-                    {
-                        "session_id": s.id,
-                        "query": title,
-                        "preview": f"{getattr(s, 'message_count', 0) or 0} messages",
-                        "score": score,
-                        "timestamp": updated.isoformat() if updated else "",
-                    }
-                )
+            # Content matches, pulling in sessions whose title doesn't
+            # contain the term (e.g., "Alfred" inside a "Hitchcock …" chat session).
+            for sid in self.db.search_message_content(query, limit=50):
+                if sid in by_id:
+                    continue  # already a stronger title hit
+                s = sessions_by_id.get(sid) or self.db.get_session(sid)
+                if s is None or getattr(s, "source", "web") != "web":
+                    continue
+                by_id[sid] = self._session_result(s, 0.5)
 
-            # Most relevant first, then most recent.
+            results = list(by_id.values())
             results.sort(key=lambda r: (r["score"], r["timestamp"]), reverse=True)
             return results[:15]
 
         except Exception as exc:
             logger.warning("Error searching sessions: %s", exc)
-            return results
+            return list(by_id.values())[:15]
 
     def get_status(self) -> dict[str, Any]:
         """Return current engine status."""

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -133,13 +132,10 @@ async def lifespan(app: FastAPI):
     # Serve uploaded files (images need to be accessible for thumbnails)
     upload_path.mkdir(parents=True, exist_ok=True)
     _uploads_base = upload_path.resolve()
-    _session_re = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
-    @app.get("/uploads/{session_id}/{filename}")
-    async def _serve_upload(session_id: str, filename: str):
-        if not _session_re.match(session_id):
-            raise HTTPException(status_code=404, detail="not found")
-        candidate = (_uploads_base / session_id / filename).resolve()
+    @app.get("/uploads/{filepath:path}")
+    async def _serve_upload(filepath: str):
+        candidate = (_uploads_base / filepath).resolve()
         if not candidate.is_file() or not candidate.is_relative_to(_uploads_base):
             raise HTTPException(status_code=404, detail="not found")
         return FileResponse(candidate, headers={"X-Content-Type-Options": "nosniff"})
