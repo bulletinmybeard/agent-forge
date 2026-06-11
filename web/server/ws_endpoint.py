@@ -7061,6 +7061,7 @@ async def _run_search(
 
         await hooks_run_completed(
             session_id,
+            query=query,
             mode="search",
             model=model_name,
             profile=profile_name,
@@ -7427,6 +7428,7 @@ async def _run_web_search(
         )
         await hooks_run_completed(
             session_id,
+            query=query,
             mode="web_search",
             model=agent_client.model,
             profile=profile,
@@ -7728,6 +7730,7 @@ async def _run_log_analysis(
         )
         await hooks_run_completed(
             session_id,
+            query=query,
             mode="logs",
             model=agent_client.model,
             profile=profile,
@@ -8604,6 +8607,7 @@ async def _run_agent(
         )
         await hooks_run_completed(
             session_id,
+            query=query,
             mode="agent",
             model=agent_client.model,
             profile=tool_profile,
@@ -9141,6 +9145,7 @@ async def _run_sql(
         )
         await hooks_run_completed(
             session_id,
+            query=query,
             mode="sql",
             model=agent_client.model,
             profile="sql",
@@ -9581,6 +9586,7 @@ async def _run_discovery(
 
             await hooks_run_completed(
                 session_id,
+                query=query,
                 mode="discover",
                 model=planner_client.model,
                 profile="discovery",
@@ -9937,6 +9943,7 @@ async def _run_custom_agent(
         )
         await hooks_run_completed(
             session_id,
+            query=query,
             mode=_mode_label,
             model=agent_client.model,
             profile=profile,
@@ -11248,6 +11255,7 @@ Focus your review on the changed files listed above. Use `read_file`, `grep_text
 
         await hooks_run_completed(
             session_id,
+            query=query,
             mode="review",
             model=_resolved_profile.model,
             profile="review",
@@ -11902,6 +11910,7 @@ async def _run_research(
 
         await hooks_run_completed(
             session_id,
+            query=query,
             mode="research",
             model="cloud-heavy",
             profile="research",

@@ -264,32 +264,42 @@ class BottyEngine:
         Returns a list of sessions with similarity scores.
         """
         results: list[dict[str, Any]] = []
+        q = (query or "").strip().lower()
+        if not q:
+            return results
 
         try:
-            # In a real system, this would use semantic search or full-text search
-            # For now, simple keyword matching against recent sessions
-            if not query:
-                return results
+            sessions = self.db.list_sessions(limit=200)
+            for s in sessions:
+                title = (getattr(s, "title", "") or "").strip()
+                tl = title.lower()
+                if not tl or q not in tl:
+                    continue
 
-            # Get all sessions (in production, limit to recent N)
-            # This is a placeholder — in real implementation, query the DB properly
-            logger.debug("Searching for sessions matching: %s", query)
+                if tl == q:
+                    score = 1.0
+                elif tl.startswith(q):
+                    score = 0.85
+                else:
+                    score = 0.7
+                updated = getattr(s, "updated_at", None)
+                results.append(
+                    {
+                        "session_id": s.id,
+                        "query": title,
+                        "preview": f"{getattr(s, 'message_count', 0) or 0} messages",
+                        "score": score,
+                        "timestamp": updated.isoformat() if updated else "",
+                    }
+                )
 
-            # Dummy result for now
-            results.append(
-                {
-                    "session_id": uuid.uuid4().hex,
-                    "query": query,
-                    "preview": f"Session discussing {query[:30]}...",
-                    "score": 0.75,
-                    "timestamp": "2026-04-02T10:30:00Z",
-                }
-            )
+            # Most relevant first, then most recent.
+            results.sort(key=lambda r: (r["score"], r["timestamp"]), reverse=True)
+            return results[:15]
 
         except Exception as exc:
             logger.warning("Error searching sessions: %s", exc)
-
-        return results
+            return results
 
     def get_status(self) -> dict[str, Any]:
         """Return current engine status."""

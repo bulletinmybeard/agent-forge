@@ -95,6 +95,7 @@ async def hooks_run_completed(
     iterations: int = 0,
     tool_count: int = 0,
     tools_used: str = "",
+    query: str = "",
     result_text: str = "",
     incognito: bool = False,
 ) -> None:
@@ -138,6 +139,7 @@ async def hooks_run_completed(
                 duration_ms=duration_ms,
                 tool_count=tool_count,
                 tools_used=tools_used,
+                query_preview=query[:200] if query else "",
                 status="success",
             )
     except Exception:
