@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import List
 
 import ollama
-from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Body, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from .database import ChatDatabase
@@ -1689,48 +1689,6 @@ async def invalidate_cached_schema(database: str):
 
 
 # -- Location endpoint ---------------------------------------------------------
-
-
-@router.get("/location")
-async def get_location(request: Request, lat: float | None = None, lon: float | None = None):
-    """Resolve the user's location for context injection.
-
-    Two modes:
-    - GPS:  ``?lat=X&lon=Y`` — Nominatim reverse geocoding + offline timezone
-    - IP:   no params       — DbIP-City-lite .mmdb lookup from client IP
-
-    Returns: {city, country, timezone, lat, lon, local_time, source}
-    """
-    from .location_service import resolve_from_coords, resolve_from_ip
-
-    if lat is not None and lon is not None:
-        # GPS mode — caller provides coordinates from browser geolocation API
-        result = await resolve_from_coords(lat, lon)
-        if result:
-            return result
-        raise HTTPException(status_code=503, detail="Reverse geocoding unavailable")
-
-    # IP fallback — extract client IP from request.
-    # X-Forwarded-For is client-spoofable; this is used only for best-effort
-    # geolocation context (not auth/authz), so trusting the proxy header here is
-    # acceptable. Do NOT reuse this value for any security decision.
-    client_ip = (
-        request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-        or (request.client.host if request.client else None)
-        or "127.0.0.1"
-    )
-    # Strip IPv6-mapped IPv4 prefix (::ffff:1.2.3.4 → 1.2.3.4)
-    if client_ip.startswith("::ffff:"):
-        client_ip = client_ip[7:]
-
-    result = resolve_from_ip(client_ip)
-    if result:
-        return result
-
-    raise HTTPException(
-        status_code=503,
-        detail="IP location unavailable — DbIP database not installed. Run scripts/download_dbip.sh",
-    )
 
 
 # ---------------------------------------------------------------------------
