@@ -22,7 +22,7 @@ from fastapi import APIRouter, Body, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from .database import ChatDatabase
-from .ws_endpoint import get_runtime
+from .ws_endpoint import get_runtime, is_canvas_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -257,7 +257,7 @@ async def get_session(session_id: str):
     session = db.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    return session.to_dict()
+    return {**session.to_dict(), "canvas_enabled": is_canvas_enabled()}
 
 
 @router.get("/sessions/{session_id}/token-usage")

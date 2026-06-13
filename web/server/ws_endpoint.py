@@ -511,6 +511,11 @@ def set_canvas_database(canvas_db) -> None:
     _canvas_db = canvas_db
 
 
+def is_canvas_enabled() -> bool:
+    """Whether the Canvas feature is available (canvas DB initialised)."""
+    return _canvas_db is not None
+
+
 def get_db() -> ChatDatabase:
     if _db is None:
         raise RuntimeError("Database not initialised")
