@@ -5284,7 +5284,8 @@ async def websocket_chat(ws: WebSocket, session_id: str | None = None) -> None:
         if session_id:
             from . import state
 
-            state.active_ws.pop(session_id, None)
+            if state.active_ws.get(session_id) is ws:
+                state.active_ws.pop(session_id, None)
 
 
 # ---------------------------------------------------------------------------
