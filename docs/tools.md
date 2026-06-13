@@ -190,7 +190,7 @@ Inspect the stack's own datastores. They reach Qdrant via `QDRANT_HOST`/`QDRANT_
 
 ## TMDB (movies and TV)
 
-Structured movie, TV, and person lookups from [The Movie Database](https://www.themoviedb.org/). Always registered, but every tool returns a "set `TMDB_API_KEY`" error until that environment variable holds a (free) TMDB key. `@search` prefers these over web search for entertainment queries.
+Structured movie, TV, and person lookups from [The Movie Database](https://www.themoviedb.org/). Always registered, but every tool errors until a TMDB credential is set: either a (free) v3 API key or a v4 API Read Access Token, supplied via the `TMDB_API_KEY` environment variable or `tools.tmdb.api_key` in `framework-config.yaml`. `@search` prefers these over web search for entertainment queries.
 
 | Tool             | Description                                      |
 | ---------------- | ------------------------------------------------ |

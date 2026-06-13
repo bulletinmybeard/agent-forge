@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Git tag to release (e.g. v0.5.0)'
+        required: true
+        type: string
+
+jobs:
+  release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Resolve tag name
+        id: tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag_name }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "name=$TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+
+      - name: Extract version
+        id: version
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Flag-based extraction: print the lines between "## [VERSION]" and the
+          # next "## [" header, excluding both. A range expression (/a/,/b/)
+          # breaks here because the header line matches both patterns and
+          # collapses the range to one line.
+          # VERSION is passed to awk as a -v data variable (not spliced into the
+          # program), so a crafted tag can't inject awk code. index(...)==1 is a
+          # literal prefix match on the "## [VERSION]" header line.
+          CHANGELOG_SECTION=$(awk -v hdr="## [${VERSION}]" 'index($0, hdr) == 1 {found=1; next} /^## \[/{found=0} found' CHANGELOG.md || echo "")
+          echo "DEBUG: extracted changelog length: ${#CHANGELOG_SECTION}"
+
+          if [ -n "$CHANGELOG_SECTION" ] && [ "${#CHANGELOG_SECTION}" -gt 10 ]; then
+            {
+              echo "## What's Changed"
+              echo ""
+              printf '%s\n' "$CHANGELOG_SECTION"
+              echo ""
+              echo "**Full changelog**: https://github.com/${REPO}/blob/master/CHANGELOG.md"
+            } > release_notes.md
+          else
+            {
+              echo "## Release ${VERSION}"
+              echo ""
+              echo "See the full changelog: https://github.com/${REPO}/blob/master/CHANGELOG.md"
+            } > release_notes.md
+          fi
+
+          echo "DEBUG: final release notes:"
+          cat release_notes.md
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: Release v${{ steps.version.outputs.version }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ contains(steps.tag.outputs.name, 'alpha') || contains(steps.tag.outputs.name, 'beta') || contains(steps.tag.outputs.name, 'rc') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

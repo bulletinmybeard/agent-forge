@@ -172,12 +172,12 @@ Grouped by subsystem. See the live `/docs` for full request/response schemas.
 | Schemas    | `/api/schemas*`                                                                                  | Global DB schema cache (Redis) for `@sql`.                                                       |
 | Scheduler  | `/api/scheduler/*`                                                                               | Cron-style recurring agent jobs (APScheduler).                                                   |
 | Monitor    | `/api/monitor/*`                                                                                 | Website-change monitors + checks.                                                                |
-| Connectors | `/api/connectors/*`                                                                              | Gmail/Drive/GitLab OAuth + token connections (see [gcp-oauth-gmail.md](gcp-oauth-gmail.md)).     |
+| Connectors | `/api/connectors/*`                                                                              | Google (Gmail/Drive/BigQuery/YouTube) OAuth + GitLab token connections (see [connectors.md](connectors.md)). |
 | Canvas     | `/api/canvas/*`                                                                                  | Per-session pinned-items workspace.                                                              |
 | Configs    | `/api/configs*`                                                                                  | Read-only view of whitelisted YAML config files.                                                 |
 | Services   | `/api/services*`                                                                                 | Container/service health dashboard + log tail/stream.                                            |
 | Catalog    | `/api/catalog/*`, `/api/model-catalog/*`                                                         | Provider/model metadata + cross-provider equivalence (see [model-catalog.md](model-catalog.md)). |
-| Misc       | `/api/{welcome,profiles,providers,agents,skills,presets,location,commands,instructions,dry-run}` | UI-support + config-exposure endpoints.                                                          |
+| Misc       | `/api/{welcome,profiles,providers,agents,tools,skills,presets,location,commands,instructions,dry-run}` | UI-support + config-exposure endpoints. `GET /api/tools` is the runtime tool catalog (name, description, category). |
 
 Many of these exist to back the (separate) chat UI.
 The core developer surfaces are search/index (`:8100`), the `/ws/chat` WebSocket, and `/api/memory/*`.

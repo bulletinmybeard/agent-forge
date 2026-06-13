@@ -43,7 +43,7 @@ There is no on-disk `sudo_password`. When the `shell` tool needs sudo, the passw
 - **Archives**: `archive_extract` validates each member before writing (zip-slip / tar-slip blocked).
 - **`notify`**: the `-execute` action is gated behind `tools.notify.allow_execute` (default off).
 - **Config viewer**: `/api/configs*` redacts secret values (inline scalars, connection URLs, secret blocks) before returning them.
-- **OAuth**: redirect URIs are built from a canonical origin (`AGENTFORGE_PUBLIC_URL` / `PUBLIC_DOMAIN`) rather than spoofable request headers — see [gcp-oauth-gmail.md](gcp-oauth-gmail.md).
+- **OAuth**: redirect URIs are built from a canonical origin (`AGENTFORGE_PUBLIC_URL` / `PUBLIC_DOMAIN`) rather than spoofable request headers — see [connectors.md](connectors.md).
 
 Deployment instructions live in `deploy.example.env`.
 Deployment topology is in [local-domains.md](local-domains.md).
