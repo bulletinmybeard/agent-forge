@@ -727,6 +727,8 @@ def gitlab_merge_requests(
     author: str = "",
     search: str = "",
     labels: str = "",
+    source_branch: str = "",
+    target_branch: str = "",
     limit: int = 20,
 ) -> str:
     """List or search merge requests across projects or within a specific project."""
@@ -745,6 +747,10 @@ def gitlab_merge_requests(
             params["search"] = search
         if labels:
             params["labels"] = labels
+        if source_branch:
+            params["source_branch"] = source_branch
+        if target_branch:
+            params["target_branch"] = target_branch
 
         if project:
             pid = _encode_project(project)
