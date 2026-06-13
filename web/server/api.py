@@ -1021,6 +1021,7 @@ async def list_agents():
                     "profile": agent.get("profile", "cloud-heavy"),
                     "tools": agent.get("tools", []),
                     "max_iterations": agent.get("max_iterations", 10),
+                    "source": agent.get("source"),
                 }
             )
     except RuntimeError:
