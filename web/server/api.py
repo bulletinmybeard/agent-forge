@@ -142,7 +142,7 @@ def _parse_user_name() -> str:
         ]:
             if candidate.is_file():
                 text = candidate.read_text(encoding="utf-8")
-                m = _re.search(r"^-\s*Name:\s*(.+)", text, _re.MULTILINE)
+                m = _re.search(r"^\s*[-*+]?\s*name\s*:\s*(.+)", text, _re.MULTILINE | _re.IGNORECASE)
                 if m:
                     full_name = m.group(1).strip()
                     name = full_name.split()[0] if full_name else ""
