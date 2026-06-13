@@ -84,6 +84,7 @@ class ChatMessage(Base):
     tool_calls_json = Column(Text, nullable=True)  # JSON array of tool calls [{name, args}, ...]
     sequence = Column(Integer, nullable=False, default=0)
     is_incognito = Column(Boolean, nullable=False, default=False)
+    is_volatile = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=_now, nullable=False)
 
     session = relationship("ChatSession", back_populates="messages")
@@ -102,6 +103,7 @@ class ChatMessage(Base):
             "tool_calls": json.loads(self.tool_calls_json) if self.tool_calls_json else None,
             "sequence": self.sequence,
             "is_incognito": self.is_incognito,
+            "is_volatile": self.is_volatile,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

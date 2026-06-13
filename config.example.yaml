@@ -328,12 +328,10 @@ monitor:
 connectors:
   encryption_key: ""            # env CONNECTOR_ENCRYPTION_KEY
   credentials_dir: /app/secrets
-  gmail:
-    client_id: ""               # env CONNECTOR_GMAIL_CLIENT_ID
-    client_secret: ""           # env CONNECTOR_GMAIL_CLIENT_SECRET
-  google_drive:
-    client_id: ""               # env CONNECTOR_GOOGLE_DRIVE_CLIENT_ID
-    client_secret: ""           # env CONNECTOR_GOOGLE_DRIVE_CLIENT_SECRET
+  # One OAuth client for ALL Google connectors (Gmail, Drive, BigQuery, YouTube, ...).
+  google:
+    client_id: ""               # env CONNECTOR_GOOGLE_CLIENT_ID
+    client_secret: ""           # env CONNECTOR_GOOGLE_CLIENT_SECRET
 
 coding:
   named_ops_enabled: true

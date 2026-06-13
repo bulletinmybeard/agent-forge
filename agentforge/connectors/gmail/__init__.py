@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -12,50 +11,16 @@ from urllib.request import Request, urlopen
 
 from chalkbox.logging.bridge import get_logger
 
-from .._config import get_connector_config, get_credentials_dir
+from .._google import (
+    GOOGLE_AUTH_URI,
+    GOOGLE_BASE_SCOPES,
+    GOOGLE_TOKEN_URI,
+    require_google_client_config,
+)
 
 logger = get_logger(__name__)
 
 _PROMPT_PATH = Path(__file__).parent / "prompt.md"
-
-
-def _load_client_secret_json() -> dict[str, str] | None:
-    """Read client_id/secret from the existing client_secret.json file.
-
-    Uses the same path resolution as the old @email mode:
-    GMAIL_CREDENTIALS_DIR env → config.yaml credentials_dir → ~/.agentforge/
-    """
-    creds_dir = get_credentials_dir()
-    cfg = get_connector_config("gmail")
-    filename = cfg.get("client_secret_file", "client_secret.json")
-    path = creds_dir / filename
-
-    if not path.exists():
-        return None
-
-    try:
-        with open(path) as fh:
-            data = json.load(fh)
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("gmail connector: failed to read %s: %s", path, exc)
-        return None
-
-    # client_secret.json has a top-level key like "installed" or "web"
-    for key in ("installed", "web"):
-        if key in data:
-            inner = data[key]
-            client_id = inner.get("client_id", "")
-            client_secret = inner.get("client_secret", "")
-            if client_id and client_secret:
-                logger.debug("gmail connector: loaded credentials from %s (type=%s)", path, key)
-                result = {"client_id": client_id, "client_secret": client_secret}
-                redirect_uris = inner.get("redirect_uris") or []
-                if redirect_uris:
-                    result["redirect_uri"] = redirect_uris[0]
-                return result
-
-    logger.warning("gmail connector: %s exists but has no client_id/secret", path)
-    return None
 
 
 class GmailConnectorPlugin:
@@ -63,28 +28,14 @@ class GmailConnectorPlugin:
     display_name = "Gmail"
     description = "Search, read, and unsubscribe from emails (read-only + unsubscribe)"
     default_aliases = ["@gmail", "@email"]
+    listable = False
 
-    oauth_scopes = ["https://www.googleapis.com/auth/gmail.readonly"]
-    oauth_auth_uri = "https://accounts.google.com/o/oauth2/v2/auth"
-    oauth_token_uri = "https://oauth2.googleapis.com/token"
+    oauth_scopes = [*GOOGLE_BASE_SCOPES, "https://www.googleapis.com/auth/gmail.readonly"]
+    oauth_auth_uri = GOOGLE_AUTH_URI
+    oauth_token_uri = GOOGLE_TOKEN_URI
 
     def get_oauth_client_config(self) -> dict[str, str]:
-        # 1. Try client_secret.json (same file the old @email mode used)
-        creds = _load_client_secret_json()
-        if creds:
-            return creds
-
-        # 2. Fall back to config.yaml / env vars
-        cfg = get_connector_config("gmail")
-        client_id = os.environ.get("CONNECTOR_GMAIL_CLIENT_ID") or cfg.get("client_id", "")
-        client_secret = os.environ.get("CONNECTOR_GMAIL_CLIENT_SECRET") or cfg.get("client_secret", "")
-        if not client_id or not client_secret:
-            raise RuntimeError(
-                "Gmail OAuth not configured. Place client_secret.json in "
-                "~/.agentforge/ (or the configured credentials_dir), or set "
-                "client_id/client_secret under connectors.gmail in config.yaml"
-            )
-        return {"client_id": client_id, "client_secret": client_secret}
+        return require_google_client_config(self.connector_type)
 
     def create_tools(self, connection_id: str, token_accessor: Callable[[], str]) -> list[Callable[..., Any]]:
         from .tools import create_gmail_tools

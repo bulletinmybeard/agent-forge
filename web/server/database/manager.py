@@ -87,6 +87,13 @@ class ChatDatabase:
                 logger.info("Migration: added is_incognito column to chat_messages")
             except Exception:
                 pass  # Column already exists — no-op
+        with self.engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE chat_messages ADD COLUMN is_volatile INTEGER NOT NULL DEFAULT 0"))
+                conn.commit()
+                logger.info("Migration: added is_volatile column to chat_messages")
+            except Exception:
+                pass  # Column already exists — no-op
         # Migrate: add chat_sessions.source (external clients tag themselves so
         # the human sidebar can filter them out). Legacy rows default to "web".
         with self.engine.connect() as conn:
@@ -232,6 +239,21 @@ class ChatDatabase:
             session.expunge_all()
             return chats
 
+    def search_message_content(self, query: str, limit: int = 50) -> list[str]:
+        """Return distinct session_ids whose message content matches ``query``."""
+        q = (query or "").strip()
+        if not q:
+            return []
+        with self.SessionLocal() as session:
+            rows = (
+                session.query(ChatMessage.session_id)
+                .filter(ChatMessage.content.ilike(f"%{q}%"))
+                .distinct()
+                .limit(limit)
+                .all()
+            )
+            return [r[0] for r in rows]
+
     def update_session(self, session_id: str, **fields) -> ChatSession | None:
         """Update session fields (title, profile, model, message_count).
 
@@ -299,6 +321,7 @@ class ChatDatabase:
         metadata: dict | None = None,
         tool_calls: list[dict] | None = None,
         is_incognito: bool = False,
+        is_volatile: bool = False,
     ) -> ChatMessage:
         """Add a message to a session. Auto-increments sequence and message_count.
 
@@ -329,6 +352,7 @@ class ChatDatabase:
                 tool_calls_json=json.dumps(tool_calls) if tool_calls else None,
                 sequence=next_seq,
                 is_incognito=is_incognito,
+                is_volatile=is_volatile,
             )
             session.add(msg)
 

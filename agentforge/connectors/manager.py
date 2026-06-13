@@ -15,12 +15,28 @@ from urllib.request import Request, urlopen
 from chalkbox.logging.bridge import get_logger
 
 from . import ConnectorRegistry
+from ._account import (
+    account_slug,
+    build_account_aliases,
+    build_account_prompt,
+    build_account_tools,
+    group_by_account,
+    label_slug,
+)
 from .encryption import decrypt_tokens, encrypt_tokens
 
 if TYPE_CHECKING:
     from agentforge.tools.registry import ToolRegistry
 
 logger = get_logger(__name__)
+
+_CONNECTOR_EXTRA_TOOLS = [
+    "write_file",
+    "read_file",
+    "find_files",
+    "download_file",
+    "web_fetch",
+]
 
 
 class ConnectionManager:
@@ -34,6 +50,7 @@ class ConnectionManager:
         self._tool_registry = tool_registry
         self._tool_names: dict[str, list[str]] = {}
         self._agents: dict[str, dict] = {}
+        self._account_agents: dict[str, dict] = {}
 
     def load_connections(self, custom_agents: dict) -> None:
         """Load all active connections from DB and register dynamic agents."""
@@ -53,6 +70,8 @@ class ConnectionManager:
             except Exception as exc:
                 logger.warning("Failed to load connector %s: %s", conn["id"], exc)
 
+        self._rebuild_account_agents(custom_agents)
+
     def create_connection(self, connector_type: str, label: str, tokens: dict, custom_agents: dict) -> dict:
         """Create a new connection, store encrypted tokens, register agent."""
         from web.server.database.models import Connection
@@ -67,12 +86,13 @@ class ConnectionManager:
         except Exception as exc:
             logger.debug("Could not derive account identifier: %s", exc)
 
-        if not label:
-            label = account_id or plugin.display_name
-
         # Enforce unique labels (used for #hashtag routing)
         existing = self.list_connections()
         existing_slugs = {re.sub(r"[^a-z0-9]+", "-", c["label"].lower()).strip("-") for c in existing}
+
+        if not label:
+            label = self._auto_label(account_id, plugin.display_name, existing_slugs)
+
         new_slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
         if new_slug in existing_slugs:
             raise ValueError(f"Label '{label}' conflicts with an existing connection. Choose a unique label.")
@@ -97,7 +117,20 @@ class ConnectionManager:
             session.close()
 
         self._register_agent(result, custom_agents)
+        self._rebuild_account_agents(custom_agents)
         return result
+
+    def _auto_label(self, account_id: str, fallback: str, existing_slugs: set[str]) -> str:
+        if account_id and "@" in account_id:
+            local, _, domain = account_id.partition("@")
+            candidates = [local, f"{local}-{domain.split('.')[0]}", *(f"{local}-{i}" for i in range(2, 100))]
+        else:
+            base = account_id or fallback
+            candidates = [base, *(f"{base}-{i}" for i in range(2, 100))]
+        for cand in candidates:
+            if label_slug(cand) not in existing_slugs:
+                return cand
+        return account_id or fallback
 
     def delete_connection(self, connection_id: str, custom_agents: dict) -> bool:
         """Delete a connection and unregister its agent."""
@@ -112,6 +145,7 @@ class ConnectionManager:
                 return False
             session.delete(row)
             session.commit()
+            self._rebuild_account_agents(custom_agents)
             return True
         finally:
             session.close()
@@ -133,6 +167,7 @@ class ConnectionManager:
 
         self._unregister_agent(connection_id, custom_agents)
         self._register_agent(result, custom_agents)
+        self._rebuild_account_agents(custom_agents)
         return result
 
     def get_connection(self, connection_id: str) -> dict | None:
@@ -151,9 +186,18 @@ class ConnectionManager:
         session = self._db_session_factory()
         try:
             rows = session.query(Connection).order_by(Connection.created_at).all()
-            return [self._to_dict(row) for row in rows]
+            conns = [self._to_dict(row) for row in rows]
         finally:
             session.close()
+        for c in conns:
+            granted = set(self._agents.get(c["id"], {}).get("product_names") or [])
+            plugin = self._registry.get(c["connector_type"])
+            available = plugin.available_products() if plugin and hasattr(plugin, "available_products") else []
+            if available:
+                c["products"] = [{"label": p["label"], "enabled": p["label"] in granted} for p in available]
+            else:
+                c["products"] = [{"label": name, "enabled": True} for name in granted]
+        return conns
 
     def get_access_token(self, connection_id: str) -> str:
         """Return a valid access token, refreshing if needed.
@@ -312,17 +356,53 @@ class ConnectionManager:
             "id": f"connector:{connection_id}",
             "description": f"{plugin.display_name} -- {conn['label']}",
             "profile": "cloud-heavy",
-            "tools": tool_names,
+            "tools": tool_names + _CONNECTOR_EXTRA_TOOLS,
             "max_iterations": 15,
             "aliases": aliases,
             "prompt_text": self._build_prompt(plugin, conn, account_email),
             "no_history": True,
             "source": "connector",
         }
+        if hasattr(plugin, "product_display_names"):
+            agent_cfg["product_names"] = plugin.product_display_names(stored_tokens)
+        else:
+            agent_cfg["product_names"] = [plugin.display_name]
         self._agents[connection_id] = agent_cfg
 
         for alias in aliases:
             custom_agents[alias.lower()] = agent_cfg
+
+    def _rebuild_account_agents(self, custom_agents: dict) -> None:
+        """(Re)build one aggregated agent per Google account."""
+        for cfg in self._account_agents.values():
+            for alias in cfg.get("aliases", []):
+                custom_agents.pop(alias.lower(), None)
+        self._account_agents.clear()
+
+        for account_identifier, group in group_by_account(self.list_connections()).items():
+            members = [c for c in group if c["status"] == "active" and c["id"] in self._agents]
+            if len(members) < 2:
+                continue
+            product_names: list[str] = []
+            for c in members:
+                for name in self._agents.get(c["id"], {}).get("product_names") or []:
+                    if name not in product_names:
+                        product_names.append(name)
+            slug = account_slug(account_identifier)
+            cfg = {
+                "id": f"connector-account:{slug}",
+                "description": f"Connected account -- {account_identifier} ({', '.join(product_names)})",
+                "profile": "cloud-heavy",
+                "tools": build_account_tools(members, self._tool_names, _CONNECTOR_EXTRA_TOOLS),
+                "max_iterations": 15,
+                "aliases": build_account_aliases(account_identifier, members),
+                "prompt_text": build_account_prompt(account_identifier, product_names),
+                "no_history": True,
+                "source": "connector",
+            }
+            self._account_agents[slug] = cfg
+            for alias in cfg["aliases"]:
+                custom_agents[alias.lower()] = cfg
 
     def _build_prompt(self, plugin: Any, conn: dict, account_email: str) -> str:
         """Build the system prompt, passing extra args for token-based connectors."""
@@ -370,10 +450,18 @@ class ConnectionManager:
         if len(same_type) <= 1:
             aliases.extend(plugin.default_aliases)
 
-        slug = re.sub(r"[^a-z0-9]+", "-", conn["label"].lower()).strip("-")
-        label_alias = f"@{slug}"
-        if label_alias not in aliases:
-            aliases.append(label_alias)
+        acct = (conn.get("account_identifier") or "").strip()
+        account_members = 0
+        if acct:
+            account_members = sum(
+                1
+                for c in self.list_connections()
+                if c["status"] == "active" and (c.get("account_identifier") or "").strip() == acct
+            )
+        if account_members < 2:
+            label_alias = f"@{label_slug(conn['label'])}"
+            if label_alias not in aliases:
+                aliases.append(label_alias)
 
         return aliases
 

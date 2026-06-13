@@ -41,6 +41,7 @@ import yaml
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from agentforge.config import set_request_provider_override, set_request_role_override_map, set_request_session_id
+from agentforge.connectors._account import account_slug, label_slug
 
 from . import protocol
 from .agent_bridge import AgentBridge
@@ -93,13 +94,6 @@ def _strip_wrapping_fence(text: str) -> str:
     if fence_lines != 2:
         return text
     return "\n".join(lines[1:-1]).strip()
-
-
-def _load_modes_config() -> dict:
-    """Load the per-mode tool and profile configuration from modes_config.yaml."""
-    path = Path(_af_pkg.__file__).resolve().parent / "modes_config.yaml"
-    with open(path) as f:
-        return yaml.safe_load(f)["modes"]
 
 
 # ---------------------------------------------------------------------------
@@ -1440,7 +1434,10 @@ async def _handle_retry_query(
     *resubmit*, False when a query.retry.error was already sent.
     """
     last = db.get_last_user_query(session_id)
-    if last is None or (last.content or "") != (prompt_text or ""):
+    sent = prompt_text or ""
+    sent_no_prefix = re.sub(r"^\s*@[\w:-]+\s+", "", sent)
+    stored = (last.content or "") if last is not None else None
+    if last is None or stored not in (sent, sent_no_prefix):
         await ws.send_json(protocol.query_retry_error(prompt_text, "not_found"))
         return False
 
@@ -1451,7 +1448,7 @@ async def _handle_retry_query(
     db.delete_messages_from_sequence(session_id, last.sequence)
     conv_memory.delete_exchange(session_id, last.content or "")
 
-    new_text = edited_text.strip() if edited_text else (last.content or "")
+    new_text = edited_text.strip() if edited_text else (sent or last.content or "")
     await resubmit(new_text)
     return True
 
@@ -1819,6 +1816,11 @@ def _match_mode_patterns(query_lower: str) -> str | None:
     return None
 
 
+_STICKY_MODES = frozenset(
+    ("web_search", "logs", "sql", "scheduler", "monitor", "research", "coding")
+)
+
+
 _CHAT_ALIASES = {"@chat"}
 _AGENT_ALIASES = {"@agent"}
 _SEARCH_ALIASES = {"@docs"}
@@ -2138,6 +2140,18 @@ def _resolve_skills(
     return cleaned, result, promoted_mode
 
 
+def _agent_ref_for_connection(conn: dict, rt: SearchRuntime) -> str | None:
+    """Agent ref for a connection: its account agent if grouped, else its own."""
+    mgr = rt.connection_manager
+    acct = (conn.get("account_identifier") or "").strip()
+    if acct:
+        cfg = mgr._account_agents.get(account_slug(acct))
+        if cfg:
+            return f"custom:{cfg['id']}"
+    cfg = mgr._agents.get(conn["id"])
+    return f"custom:{cfg['id']}" if cfg else None
+
+
 def _resolve_connector_agent(query: str, rt: SearchRuntime) -> tuple[str, str | None]:
     """Route a @conn query to the right connector agent.
 
@@ -2147,7 +2161,8 @@ def _resolve_connector_agent(query: str, rt: SearchRuntime) -> tuple[str, str | 
        stripped from the query before execution.
     2. **Keyword matching** — email/inbox → gmail, file/folder → drive,
        merge/pipeline → gitlab. Picks the first matching connection of that type.
-    3. **Fallback** — first active connection.
+    3. **Fallback** — the most recently used connection (keeps hashtag-less
+       follow-ups like ``@conn yes`` on the connector you just used).
     """
     if not hasattr(rt, "connection_manager") or rt.connection_manager is None:
         return query, None
@@ -2156,33 +2171,28 @@ def _resolve_connector_agent(query: str, rt: SearchRuntime) -> tuple[str, str | 
     active = [c for c in connections if c["status"] == "active"]
     if not active:
         return query, None
+    active.sort(key=lambda c: c.get("last_used_at") or "", reverse=True)
 
-    # -- 1. Hashtag-based targeting: #label matches connection label slug ----
-    _label_slugs: dict[str, dict] = {}
+    # -- 1. Hashtag targeting: #label or #account-slug -> that connection's agent
+    conn_by_tag: dict[str, dict] = {}
     for c in active:
-        slug = re.sub(r"[^a-z0-9]+", "-", c["label"].lower()).strip("-")
-        _label_slugs[slug] = c
-        # Also index by account identifier slug (e.g., "user-example-com")
-        if c.get("account_identifier"):
-            acc_slug = re.sub(r"[^a-z0-9]+", "-", c["account_identifier"].lower()).strip("-")
-            if acc_slug not in _label_slugs:
-                _label_slugs[acc_slug] = c
+        conn_by_tag[label_slug(c["label"])] = c
+        acct = (c.get("account_identifier") or "").strip()
+        if acct:
+            conn_by_tag.setdefault(account_slug(acct), c)
 
     for m in re.finditer(r"#([a-zA-Z][\w-]*)", query):
-        tag = m.group(1).lower()
-        if tag in _label_slugs:
-            conn = _label_slugs[tag]
-            agent_cfg = rt.connection_manager._agents.get(conn["id"])
-            if agent_cfg:
-                cleaned = query[: m.start()].rstrip() + " " + query[m.end() :].lstrip()
-                return cleaned.strip(), f"custom:{agent_cfg['id']}"
+        conn = conn_by_tag.get(m.group(1).lower())
+        if not conn:
+            continue
+        ref = _agent_ref_for_connection(conn, rt)
+        if ref:
+            cleaned = (query[: m.start()].rstrip() + " " + query[m.end() :].lstrip()).strip()
+            return cleaned, ref
 
     # -- 2. Single connection shortcut --------------------------------------
     if len(active) == 1:
-        agent_cfg = rt.connection_manager._agents.get(active[0]["id"])
-        if agent_cfg:
-            return query, f"custom:{agent_cfg['id']}"
-        return query, None
+        return query, _agent_ref_for_connection(active[0], rt)
 
     # -- 3. Keyword-based type matching -------------------------------------
     lower = query.lower()
@@ -2224,15 +2234,12 @@ def _resolve_connector_agent(query: str, rt: SearchRuntime) -> tuple[str, str | 
     if target_type:
         for c in active:
             if c["connector_type"] == target_type:
-                agent_cfg = rt.connection_manager._agents.get(c["id"])
-                if agent_cfg:
-                    return query, f"custom:{agent_cfg['id']}"
+                ref = _agent_ref_for_connection(c, rt)
+                if ref:
+                    return query, ref
 
     # -- 4. Fallback — first active connection ------------------------------
-    agent_cfg = rt.connection_manager._agents.get(active[0]["id"])
-    if agent_cfg:
-        return query, f"custom:{agent_cfg['id']}"
-    return query, None
+    return query, _agent_ref_for_connection(active[0], rt)
 
 
 def _strip_custom_prefix(query: str, rt: SearchRuntime) -> tuple[str, str | None]:
@@ -2430,7 +2437,7 @@ def _classify_mode_heuristic(
     #   1. Short queries (≤ 15 words): sticky if pronouns/phrases or ≤ 10 words
     #   2. Any length: sticky if the query references prior context AND
     #      involves tool-like actions (save, search, file ops, TMDB verbs)
-    if last_mode in ("web_search", "logs", "sql", "scheduler", "monitor", "research", "coding"):
+    if last_mode in _STICKY_MODES:
         _FOLLOWUP_PRONOUNS = re.compile(r"\bthem\b|\bthose\b|\bthese\b|\bthey\b|\bits?\b|\bthat\b")
         _FOLLOWUP_PHRASES = re.compile(
             r"\bwhat\s+about\b|\bhow\s+about\b|\band\s+what\s+about\b"
@@ -2810,16 +2817,20 @@ def _init_connectors(rt: SearchRuntime) -> None:
         from agentforge.connectors.bigquery import BigQueryConnectorPlugin
         from agentforge.connectors.gitlab import GitLabConnectorPlugin
         from agentforge.connectors.gmail import GmailConnectorPlugin
+        from agentforge.connectors.google import GoogleConnectorPlugin
         from agentforge.connectors.google_drive import GoogleDriveConnectorPlugin
         from agentforge.connectors.manager import ConnectionManager
+        from agentforge.connectors.youtube import YouTubeConnectorPlugin
 
         db = get_db()
 
         connector_registry = ConnectorRegistry()
+        connector_registry.register(GoogleConnectorPlugin())
+        connector_registry.register(GitLabConnectorPlugin())
         connector_registry.register(GmailConnectorPlugin())
         connector_registry.register(GoogleDriveConnectorPlugin())
-        connector_registry.register(GitLabConnectorPlugin())
         connector_registry.register(BigQueryConnectorPlugin())
+        connector_registry.register(YouTubeConnectorPlugin())
 
         connection_manager = ConnectionManager(
             db_session_factory=db.SessionLocal,
@@ -3898,6 +3909,8 @@ def _build_conversation_history(
         logger.debug("Could not load history for session %s", session_id)
         return None
 
+    db_messages = [m for m in db_messages if not getattr(m, "is_volatile", False)]
+
     if incognito:
         # Private mode: include ONLY incognito messages from this session.
         # This allows within-session follow-ups while preventing cross-session
@@ -4333,10 +4346,11 @@ _POLL_INTERVAL = 0.5  # seconds between job-status polls while waiting for worke
 def _is_worker_mode(mode: str) -> bool:
     """Return True if this mode should be dispatched to the SAQ worker.
 
-    Connector agents (custom:connector:*) run inline because their tools
-    are closures bound to ConnectionManager in the agentforge-web process.
+    Connector agents (custom:connector:* and the aggregated custom:connector-account:*)
+    run inline because their tools are closures bound to ConnectionManager in the
+    agentforge-web process — a worker has no access to them.
     """
-    if mode.startswith("custom:connector:"):
+    if mode.startswith(("custom:connector:", "custom:connector-account:")):
         return False
     return mode in _WORKER_MODES or mode.startswith("custom:")
 
@@ -5018,7 +5032,7 @@ async def websocket_chat(ws: WebSocket, session_id: str | None = None) -> None:
             active_task = asyncio.create_task(
                 _run_search(ws, exec_text, session_id, rt, db, overrides, cancel_event=cancel_event)
             )
-        elif mode.startswith("custom:connector:"):
+        elif mode.startswith(("custom:connector:", "custom:connector-account:")):
             # Connector agents run inline (tools are closures bound to ConnectionManager)
             agent_id = mode[len("custom:") :]
             # Look up in both custom_agents and connection_manager._agents
@@ -6301,13 +6315,8 @@ async def _run_monitor(
     total_start = time.perf_counter()
     ws_closed = False
 
-    async def send_only(msg: dict, **_kwargs: Any) -> None:
-        """Send to WebSocket but do NOT persist to SQLite.
-
-        Monitor mode is stateful — persisting LLM responses about jobs
-        into ``chat_messages`` pollutes conversation history and fact
-        extraction with ephemeral state that becomes stale.
-        """
+    async def send_only(msg: dict, *, msg_type: str | None = None, content: str = "", **_extra: Any) -> None:
+        """Send to the client and persist the message as ``volatile``."""
         nonlocal ws_closed
         if not ws_closed:
             try:
@@ -6315,8 +6324,25 @@ async def _run_monitor(
             except (WebSocketDisconnect, RuntimeError):
                 ws_closed = True
                 logger.warning("WebSocket closed during monitor send")
+        db.add_message(
+            session_id=session_id,
+            role="assistant",
+            msg_type=msg_type or msg.get("type", "unknown"),
+            content=content,
+            metadata=msg,
+            is_volatile=True,
+        )
 
     try:
+        db.add_message(
+            session_id=session_id,
+            role="user",
+            msg_type="query",
+            content=query,
+            metadata={"type": "query", "text": query},
+            is_volatile=True,
+        )
+
         # --- NO conversation history for monitor mode ---------------------
         # Monitor mode relies exclusively on the DB-backed "Existing
         # Monitors" section in the system prompt.  Loading chat history
@@ -7060,6 +7086,7 @@ async def _run_search(
 
         await hooks_run_completed(
             session_id,
+            query=query,
             mode="search",
             model=model_name,
             profile=profile_name,
@@ -7426,6 +7453,7 @@ async def _run_web_search(
         )
         await hooks_run_completed(
             session_id,
+            query=query,
             mode="web_search",
             model=agent_client.model,
             profile=profile,
@@ -7727,6 +7755,7 @@ async def _run_log_analysis(
         )
         await hooks_run_completed(
             session_id,
+            query=query,
             mode="logs",
             model=agent_client.model,
             profile=profile,
@@ -7898,9 +7927,9 @@ async def _run_pipeline(
     knows to use save_result for large intermediate data and search_knowledge_base
     for domain lookups, rather than re-passing everything through the context window.
     """
-    # Read the LLM profile and max_iterations for pipeline from framework-config.
-    # Defaults: "thinker" (mistral-large-3:675b-cloud, 8k tokens) and 20 iters.
-    # Configurable in framework-config.yaml under pipeline.profile / pipeline.max_iterations.
+    # Read the pipeline LLM profile from framework-config (pipeline.profile).
+    # Default: "thinker" (mistral-large-3:675b-cloud, 8k tokens). Note: the
+    # iteration cap is not read here — pipeline.max_iterations in YAML is not wired up.
     pipeline_llm_profile = "thinker"
     try:
         from agentforge.config import get_config as get_fw_config
@@ -8603,6 +8632,7 @@ async def _run_agent(
         )
         await hooks_run_completed(
             session_id,
+            query=query,
             mode="agent",
             model=agent_client.model,
             profile=tool_profile,
@@ -9140,6 +9170,7 @@ async def _run_sql(
         )
         await hooks_run_completed(
             session_id,
+            query=query,
             mode="sql",
             model=agent_client.model,
             profile="sql",
@@ -9580,6 +9611,7 @@ async def _run_discovery(
 
             await hooks_run_completed(
                 session_id,
+                query=query,
                 mode="discover",
                 model=planner_client.model,
                 profile="discovery",
@@ -9936,6 +9968,7 @@ async def _run_custom_agent(
         )
         await hooks_run_completed(
             session_id,
+            query=query,
             mode=_mode_label,
             model=agent_client.model,
             profile=profile,
@@ -11247,6 +11280,7 @@ Focus your review on the changed files listed above. Use `read_file`, `grep_text
 
         await hooks_run_completed(
             session_id,
+            query=query,
             mode="review",
             model=_resolved_profile.model,
             profile="review",
@@ -11901,6 +11935,7 @@ async def _run_research(
 
         await hooks_run_completed(
             session_id,
+            query=query,
             mode="research",
             model="cloud-heavy",
             profile="research",

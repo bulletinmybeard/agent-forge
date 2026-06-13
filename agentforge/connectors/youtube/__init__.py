@@ -1,4 +1,4 @@
-"""Google BigQuery connector plugin — OAuth-based, read-only query access."""
+"""YouTube connector plugin. OAuth-based, read-only YouTube Data API access."""
 
 from __future__ import annotations
 
@@ -24,38 +24,31 @@ logger = get_logger(__name__)
 _PROMPT_PATH = Path(__file__).parent / "prompt.md"
 
 
-class BigQueryConnectorPlugin:
-    connector_type = "bigquery"
-    display_name = "BigQuery"
-    description = "Run SQL queries against Google BigQuery datasets"
-    default_aliases = ["@bigquery", "@bq"]
+class YouTubeConnectorPlugin:
+    connector_type = "youtube"
+    display_name = "YouTube"
+    description = "Search videos and read channel, playlist, and video metadata (read-only)"
+    default_aliases = ["@youtube", "@yt"]
+    auth_type = "oauth"
     listable = False
 
-    oauth_scopes = [*GOOGLE_BASE_SCOPES, "https://www.googleapis.com/auth/bigquery"]
+    oauth_scopes = [*GOOGLE_BASE_SCOPES, "https://www.googleapis.com/auth/youtube.readonly"]
     oauth_auth_uri = GOOGLE_AUTH_URI
     oauth_token_uri = GOOGLE_TOKEN_URI
 
     def get_oauth_client_config(self) -> dict[str, str]:
         return require_google_client_config(self.connector_type)
 
-    auth_type = "oauth"
+    def create_tools(self, connection_id: str, token_accessor: Callable[[], str]) -> list[Callable[..., Any]]:
+        from .tools import create_youtube_tools
 
-    def create_tools(
-        self,
-        connection_id: str,
-        token_accessor: Callable[[], str],
-        stored_tokens: dict[str, Any] | None = None,
-    ) -> list[Callable[..., Any]]:
-        from .tools import create_bigquery_tools
-
-        project_id = (stored_tokens or {}).get("project_id", "")
-        return create_bigquery_tools(connection_id, token_accessor, default_project_id=project_id)
+        return create_youtube_tools(connection_id, token_accessor)
 
     def system_prompt(self, account_email: str) -> str:
         try:
             template = _PROMPT_PATH.read_text()
         except FileNotFoundError:
-            template = "You are a BigQuery assistant connected to {account_email}."
+            template = "You are a YouTube assistant connected to {account_email}."
         return template.replace("{account_email}", account_email)
 
     def default_label(self, token_info: dict[str, Any]) -> str:
@@ -64,21 +57,19 @@ class BigQueryConnectorPlugin:
     def test_connection(self, access_token: str) -> dict[str, Any]:
         try:
             req = Request(
-                "https://bigquery.googleapis.com/bigquery/v2/projects",
+                "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
                 headers={"Authorization": f"Bearer {access_token}"},
             )
             with urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode())
-            projects = data.get("projects") or []
-            project_ids = [p.get("id", "") for p in projects[:5]]
-            return {
-                "ok": True,
-                "account": ", ".join(project_ids) if project_ids else "no projects",
-                "project_count": len(projects),
-            }
+            items = data.get("items") or []
+            if items:
+                snippet = items[0].get("snippet", {})
+                return {"ok": True, "account": snippet.get("title", ""), "channel_id": items[0].get("id", "")}
+            return {"ok": True, "account": "no channel", "channel_id": ""}
         except HTTPError as exc:
             if exc.code == 403:
-                return {"ok": False, "error": "BigQuery API not enabled or insufficient permissions"}
+                return {"ok": False, "error": "YouTube Data API not enabled or insufficient permissions"}
             return {"ok": False, "error": f"HTTP {exc.code}: {exc.reason}"}
         except (URLError, Exception) as exc:
             return {"ok": False, "error": str(exc)}
