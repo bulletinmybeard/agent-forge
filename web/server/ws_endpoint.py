@@ -41,6 +41,7 @@ import yaml
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from agentforge.config import set_request_provider_override, set_request_role_override_map, set_request_session_id
+from agentforge.connectors._account import account_slug, label_slug
 
 from . import protocol
 from .agent_bridge import AgentBridge
@@ -2139,6 +2140,18 @@ def _resolve_skills(
     return cleaned, result, promoted_mode
 
 
+def _agent_ref_for_connection(conn: dict, rt: SearchRuntime) -> str | None:
+    """Agent ref for a connection: its account agent if grouped, else its own."""
+    mgr = rt.connection_manager
+    acct = (conn.get("account_identifier") or "").strip()
+    if acct:
+        cfg = mgr._account_agents.get(account_slug(acct))
+        if cfg:
+            return f"custom:{cfg['id']}"
+    cfg = mgr._agents.get(conn["id"])
+    return f"custom:{cfg['id']}" if cfg else None
+
+
 def _resolve_connector_agent(query: str, rt: SearchRuntime) -> tuple[str, str | None]:
     """Route a @conn query to the right connector agent.
 
@@ -2148,7 +2161,8 @@ def _resolve_connector_agent(query: str, rt: SearchRuntime) -> tuple[str, str | 
        stripped from the query before execution.
     2. **Keyword matching** — email/inbox → gmail, file/folder → drive,
        merge/pipeline → gitlab. Picks the first matching connection of that type.
-    3. **Fallback** — first active connection.
+    3. **Fallback** — the most recently used connection (keeps hashtag-less
+       follow-ups like ``@conn yes`` on the connector you just used).
     """
     if not hasattr(rt, "connection_manager") or rt.connection_manager is None:
         return query, None
@@ -2157,33 +2171,28 @@ def _resolve_connector_agent(query: str, rt: SearchRuntime) -> tuple[str, str | 
     active = [c for c in connections if c["status"] == "active"]
     if not active:
         return query, None
+    active.sort(key=lambda c: c.get("last_used_at") or "", reverse=True)
 
-    # -- 1. Hashtag-based targeting: #label matches connection label slug ----
-    _label_slugs: dict[str, dict] = {}
+    # -- 1. Hashtag targeting: #label or #account-slug -> that connection's agent
+    conn_by_tag: dict[str, dict] = {}
     for c in active:
-        slug = re.sub(r"[^a-z0-9]+", "-", c["label"].lower()).strip("-")
-        _label_slugs[slug] = c
-        # Also index by account identifier slug (e.g., "user-example-com")
-        if c.get("account_identifier"):
-            acc_slug = re.sub(r"[^a-z0-9]+", "-", c["account_identifier"].lower()).strip("-")
-            if acc_slug not in _label_slugs:
-                _label_slugs[acc_slug] = c
+        conn_by_tag[label_slug(c["label"])] = c
+        acct = (c.get("account_identifier") or "").strip()
+        if acct:
+            conn_by_tag.setdefault(account_slug(acct), c)
 
     for m in re.finditer(r"#([a-zA-Z][\w-]*)", query):
-        tag = m.group(1).lower()
-        if tag in _label_slugs:
-            conn = _label_slugs[tag]
-            agent_cfg = rt.connection_manager._agents.get(conn["id"])
-            if agent_cfg:
-                cleaned = query[: m.start()].rstrip() + " " + query[m.end() :].lstrip()
-                return cleaned.strip(), f"custom:{agent_cfg['id']}"
+        conn = conn_by_tag.get(m.group(1).lower())
+        if not conn:
+            continue
+        ref = _agent_ref_for_connection(conn, rt)
+        if ref:
+            cleaned = (query[: m.start()].rstrip() + " " + query[m.end() :].lstrip()).strip()
+            return cleaned, ref
 
     # -- 2. Single connection shortcut --------------------------------------
     if len(active) == 1:
-        agent_cfg = rt.connection_manager._agents.get(active[0]["id"])
-        if agent_cfg:
-            return query, f"custom:{agent_cfg['id']}"
-        return query, None
+        return query, _agent_ref_for_connection(active[0], rt)
 
     # -- 3. Keyword-based type matching -------------------------------------
     lower = query.lower()
@@ -2225,15 +2234,12 @@ def _resolve_connector_agent(query: str, rt: SearchRuntime) -> tuple[str, str | 
     if target_type:
         for c in active:
             if c["connector_type"] == target_type:
-                agent_cfg = rt.connection_manager._agents.get(c["id"])
-                if agent_cfg:
-                    return query, f"custom:{agent_cfg['id']}"
+                ref = _agent_ref_for_connection(c, rt)
+                if ref:
+                    return query, ref
 
     # -- 4. Fallback — first active connection ------------------------------
-    agent_cfg = rt.connection_manager._agents.get(active[0]["id"])
-    if agent_cfg:
-        return query, f"custom:{agent_cfg['id']}"
-    return query, None
+    return query, _agent_ref_for_connection(active[0], rt)
 
 
 def _strip_custom_prefix(query: str, rt: SearchRuntime) -> tuple[str, str | None]:
@@ -2811,16 +2817,20 @@ def _init_connectors(rt: SearchRuntime) -> None:
         from agentforge.connectors.bigquery import BigQueryConnectorPlugin
         from agentforge.connectors.gitlab import GitLabConnectorPlugin
         from agentforge.connectors.gmail import GmailConnectorPlugin
+        from agentforge.connectors.google import GoogleConnectorPlugin
         from agentforge.connectors.google_drive import GoogleDriveConnectorPlugin
         from agentforge.connectors.manager import ConnectionManager
+        from agentforge.connectors.youtube import YouTubeConnectorPlugin
 
         db = get_db()
 
         connector_registry = ConnectorRegistry()
+        connector_registry.register(GoogleConnectorPlugin())
+        connector_registry.register(GitLabConnectorPlugin())
         connector_registry.register(GmailConnectorPlugin())
         connector_registry.register(GoogleDriveConnectorPlugin())
-        connector_registry.register(GitLabConnectorPlugin())
         connector_registry.register(BigQueryConnectorPlugin())
+        connector_registry.register(YouTubeConnectorPlugin())
 
         connection_manager = ConnectionManager(
             db_session_factory=db.SessionLocal,
@@ -4336,10 +4346,11 @@ _POLL_INTERVAL = 0.5  # seconds between job-status polls while waiting for worke
 def _is_worker_mode(mode: str) -> bool:
     """Return True if this mode should be dispatched to the SAQ worker.
 
-    Connector agents (custom:connector:*) run inline because their tools
-    are closures bound to ConnectionManager in the agentforge-web process.
+    Connector agents (custom:connector:* and the aggregated custom:connector-account:*)
+    run inline because their tools are closures bound to ConnectionManager in the
+    agentforge-web process — a worker has no access to them.
     """
-    if mode.startswith("custom:connector:"):
+    if mode.startswith(("custom:connector:", "custom:connector-account:")):
         return False
     return mode in _WORKER_MODES or mode.startswith("custom:")
 
@@ -5021,7 +5032,7 @@ async def websocket_chat(ws: WebSocket, session_id: str | None = None) -> None:
             active_task = asyncio.create_task(
                 _run_search(ws, exec_text, session_id, rt, db, overrides, cancel_event=cancel_event)
             )
-        elif mode.startswith("custom:connector:"):
+        elif mode.startswith(("custom:connector:", "custom:connector-account:")):
             # Connector agents run inline (tools are closures bound to ConnectionManager)
             agent_id = mode[len("custom:") :]
             # Look up in both custom_agents and connection_manager._agents

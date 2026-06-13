@@ -32,6 +32,7 @@ _redis_client = None
 class OAuthStartRequest(BaseModel):
     connector_type: str
     label: str = ""
+    products: list[str] = []
 
 
 class TokenConnectRequest(BaseModel):
@@ -186,6 +187,12 @@ async def reconnect_connection(connection_id: str):
 # -- OAuth flow -------------------------------------------------------------
 
 
+def _scopes_for_plugin(plugin, products: list[str]) -> list[str]:
+    """Per-connection OAuth scopes."""
+    scopes_for = getattr(plugin, "scopes_for", None)
+    return scopes_for(products) if callable(scopes_for) else plugin.oauth_scopes
+
+
 @router.post("/auth/start")
 async def start_oauth(body: OAuthStartRequest, request: Request):
     _require_init()
@@ -213,6 +220,7 @@ async def start_oauth(body: OAuthStartRequest, request: Request):
         "connector_type": body.connector_type,
         "label": body.label,
         "redirect_uri": redirect_uri,
+        "products": body.products,
     }
 
     if _redis_client:
@@ -227,7 +235,7 @@ async def start_oauth(body: OAuthStartRequest, request: Request):
         "client_id": client_config["client_id"],
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope": " ".join(plugin.oauth_scopes),
+        "scope": " ".join(_scopes_for_plugin(plugin, body.products)),
         "access_type": "offline",
         "prompt": "consent",
         "state": state,
@@ -265,6 +273,7 @@ async def oauth_callback(
 
     connector_type = state_data["connector_type"]
     label = state_data.get("label", "")
+    products = state_data.get("products", [])
 
     plugin = _connector_registry.get(connector_type)
     if not plugin:
@@ -298,11 +307,12 @@ async def oauth_callback(
         "client_id": client_config["client_id"],
         "client_secret": client_config["client_secret"],
         "expiry": expiry.isoformat(),
+        "products": products,
     }
 
     # For BigQuery: fetch the GCP project_id at connection time (needed for billing).
     # The BigQuery projects API is intermittently empty — retry up to 3 times.
-    if connector_type == "bigquery":
+    if connector_type == "bigquery" or "bigquery" in products:
         for _attempt in range(3):
             try:
                 bq_req = HttpRequest(
@@ -367,7 +377,7 @@ def _exchange_code(
 
 def _callback_html(success: bool, connection_id: str = "", error: str = "") -> str:
     if success:
-        return f"""<!DOCTYPE html>
+        return """<!DOCTYPE html>
 <html><head><title>Connected</title></head>
 <body style="background:#111;color:#e5e7eb;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
 <div style="text-align:center">
@@ -375,11 +385,9 @@ def _callback_html(success: bool, connection_id: str = "", error: str = "") -> s
 <p>You can close this window.</p>
 </div>
 <script>
-if (window.opener) {{
-  // Target the app's own origin (not '*') so the connection_id isn't leaked
-  // to a cross-origin opener.
-  window.opener.postMessage({{type:'connector-auth-complete',connectionId:'{connection_id}'}}, window.location.origin);
-}}
+if (window.opener) {
+  window.opener.postMessage({type:'connector-auth-complete'}, '*');
+}
 setTimeout(() => window.close(), 1500);
 </script>
 </body></html>"""

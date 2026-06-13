@@ -33,8 +33,10 @@ class ConnectorRegistry:
                 "description": p.description,
                 "default_aliases": p.default_aliases,
                 "auth_type": getattr(p, "auth_type", "oauth"),
+                "products": p.available_products() if hasattr(p, "available_products") else [],
             }
             for p in self._plugins.values()
+            if getattr(p, "listable", True)
         ]
 
     def __contains__(self, connector_type: str) -> bool:

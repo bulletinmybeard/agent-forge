@@ -151,6 +151,23 @@ def create_bigquery_tools(
             n /= 1024
         return f"{n:.1f} PB"
 
+    _project_cache: dict[str, str] = {"id": default_project_id}
+
+    def _resolve_project() -> str:
+        if _project_cache["id"]:
+            return _project_cache["id"]
+        try:
+            data = _bq_request("GET", "/projects", params={"maxResults": 50})
+            for p in data.get("projects") or []:
+                pid = p.get("id") or p.get("projectReference", {}).get("projectId", "")
+                if pid:
+                    _project_cache["id"] = pid
+                    logger.info("bigquery: auto-detected billing project %s (conn %s)", pid, connection_id[:8])
+                    return pid
+        except Exception as exc:
+            logger.warning("bigquery: project auto-detect failed: %s", exc)
+        return ""
+
     # -- Tool functions -----------------------------------------------------
 
     @tool
@@ -160,25 +177,30 @@ def create_bigquery_tools(
         The query runs with standard SQL (not legacy SQL). Results are capped
         at max_results rows. A 10 GB bytes-billed safety cap is enforced.
 
-        Queries against public datasets (like bigquery-public-data.pypi.*) still
-        need YOUR GCP project_id for billing. Leave project_id empty to auto-detect.
+        Querying a public dataset (e.g. bigquery-public-data.pypi.*) still bills YOUR
+        GCP project. That billing project is auto-detected from the connected Google
+        account — leave project_id EMPTY. Do NOT invent or guess a project id.
 
         Common PyPI tables:
           - bigquery-public-data.pypi.file_downloads (download events)
           - bigquery-public-data.pypi.distribution_metadata (package metadata)
         """
-        if not project_id:
-            project_id = default_project_id
-        if not project_id:
+        # Prefer the connection's own billing project (stored/auto-detected) over any
+        # caller-supplied id — the model can't know the real project and tends to guess.
+        billing_project = _resolve_project() or (project_id or "").strip()
+        if not billing_project:
             return json.dumps(
                 {
                     "status": "error",
-                    "error": "No project_id provided and none stored. Delete and reconnect the BigQuery connection.",
+                    "error": (
+                        "No GCP project with BigQuery available for this account. Enable the BigQuery "
+                        "API on a project at console.cloud.google.com, then retry (no reconnect needed)."
+                    ),
                 }
             )
         max_results = max(1, min(int(max_results), 1000))
         try:
-            result = _run_query(sql, project_id, max_results)
+            result = _run_query(sql, billing_project, max_results)
         except HTTPError as exc:
             return json.dumps({"status": "error", "error": f"HTTP {exc.code}: {_err_body(exc)}"})
         except (URLError, Exception) as exc:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -12,43 +11,16 @@ from urllib.request import Request, urlopen
 
 from chalkbox.logging.bridge import get_logger
 
-from .._config import get_connector_config, get_credentials_dir
+from .._google import (
+    GOOGLE_AUTH_URI,
+    GOOGLE_BASE_SCOPES,
+    GOOGLE_TOKEN_URI,
+    require_google_client_config,
+)
 
 logger = get_logger(__name__)
 
 _PROMPT_PATH = Path(__file__).parent / "prompt.md"
-
-
-def _load_client_secret_json() -> dict[str, str] | None:
-    """Read client_id/secret from client_secret.json (shared with Gmail connector)."""
-    creds_dir = get_credentials_dir()
-    cfg = get_connector_config("google_drive")
-    filename = cfg.get("client_secret_file", "client_secret.json")
-    path = creds_dir / filename
-
-    if not path.exists():
-        return None
-
-    try:
-        with open(path) as fh:
-            data = json.load(fh)
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("drive connector: failed to read %s: %s", path, exc)
-        return None
-
-    for key in ("web", "installed"):
-        if key in data:
-            inner = data[key]
-            client_id = inner.get("client_id", "")
-            client_secret = inner.get("client_secret", "")
-            if client_id and client_secret:
-                result = {"client_id": client_id, "client_secret": client_secret}
-                redirect_uris = inner.get("redirect_uris") or []
-                if redirect_uris:
-                    result["redirect_uri"] = redirect_uris[0]
-                return result
-
-    return None
 
 
 class GoogleDriveConnectorPlugin:
@@ -56,26 +28,14 @@ class GoogleDriveConnectorPlugin:
     display_name = "Google Drive"
     description = "List, search, and read files from Google Drive (read-only)"
     default_aliases = ["@drive"]
+    listable = False
 
-    oauth_scopes = ["https://www.googleapis.com/auth/drive.readonly"]
-    oauth_auth_uri = "https://accounts.google.com/o/oauth2/v2/auth"
-    oauth_token_uri = "https://oauth2.googleapis.com/token"
+    oauth_scopes = [*GOOGLE_BASE_SCOPES, "https://www.googleapis.com/auth/drive.readonly"]
+    oauth_auth_uri = GOOGLE_AUTH_URI
+    oauth_token_uri = GOOGLE_TOKEN_URI
 
     def get_oauth_client_config(self) -> dict[str, str]:
-        creds = _load_client_secret_json()
-        if creds:
-            return creds
-
-        cfg = get_connector_config("google_drive")
-        client_id = os.environ.get("CONNECTOR_GOOGLE_DRIVE_CLIENT_ID") or cfg.get("client_id", "")
-        client_secret = os.environ.get("CONNECTOR_GOOGLE_DRIVE_CLIENT_SECRET") or cfg.get("client_secret", "")
-        if not client_id or not client_secret:
-            raise RuntimeError(
-                "Google Drive OAuth not configured. Place client_secret.json in "
-                "~/.agentforge/ (or the configured credentials_dir), or set "
-                "client_id/client_secret under connectors.google_drive in config.yaml"
-            )
-        return {"client_id": client_id, "client_secret": client_secret}
+        return require_google_client_config(self.connector_type)
 
     def create_tools(self, connection_id: str, token_accessor: Callable[[], str]) -> list[Callable[..., Any]]:
         from .tools import create_drive_tools

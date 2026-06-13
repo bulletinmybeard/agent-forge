@@ -77,6 +77,8 @@ def register_mode_tier(mode: str, tier: MemoryTier) -> None:
 def get_tier(mode: str) -> MemoryTier:
     """Return the memory tier for *mode*, defaulting to SESSION if unknown."""
     mode = mode or ""
+    if mode.startswith(("custom:connector:", "custom:connector-account:")):
+        return MemoryTier.NONE
     tier = MODE_TIERS.get(mode)
     if tier is not None:
         return tier
