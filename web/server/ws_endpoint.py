@@ -1816,9 +1816,7 @@ def _match_mode_patterns(query_lower: str) -> str | None:
     return None
 
 
-_STICKY_MODES = frozenset(
-    ("web_search", "logs", "sql", "scheduler", "monitor", "research", "coding")
-)
+_STICKY_MODES = frozenset(("web_search", "logs", "sql", "scheduler", "monitor", "research", "coding"))
 
 
 _CHAT_ALIASES = {"@chat"}

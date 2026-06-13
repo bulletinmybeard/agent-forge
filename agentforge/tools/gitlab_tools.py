@@ -45,6 +45,7 @@ _CONFIG_PATH = Path(__file__).resolve().parents[2] / "config.yaml"
 _gitlab_config_cache: dict | None = None
 _connector_override: threading.local = threading.local()
 
+
 def _get_gitlab_config() -> dict:
     """Load and cache the ``gitlab`` section from the config.yaml."""
     global _gitlab_config_cache
@@ -120,6 +121,7 @@ def _gitlab_headers() -> dict[str, str]:
             "Chrome/124.0.0.0 Safari/537.36"
         ),
     }
+
 
 def _gl_get(path: str, params: dict | None = None) -> dict | list:
     """Perform a GET request against the GitLab API v4."""
@@ -1716,13 +1718,13 @@ def register_gitlab_tools(registry: "ToolRegistry") -> int:
     if rw:
         tools.extend(
             [
-                gitlab_merge_request_update,   # MR: draft, labels, assignees, reviewers
+                gitlab_merge_request_update,  # MR: draft, labels, assignees, reviewers
                 gitlab_merge_request_approve,  # MR: approve
-                gitlab_merge_request_merge,    # MR: merge
-                gitlab_pipeline_retry,         # CI/CD: retry failed pipeline
-                gitlab_pipeline_cancel,        # CI/CD: cancel running pipeline
-                gitlab_runner_pause,           # Runner: pause
-                gitlab_runner_resume,          # Runner: resume
+                gitlab_merge_request_merge,  # MR: merge
+                gitlab_pipeline_retry,  # CI/CD: retry failed pipeline
+                gitlab_pipeline_cancel,  # CI/CD: cancel running pipeline
+                gitlab_runner_pause,  # Runner: pause
+                gitlab_runner_resume,  # Runner: resume
             ]
         )
         logger.debug("GitLab read-write mode: write tools enabled")
