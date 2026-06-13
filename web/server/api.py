@@ -44,13 +44,17 @@ Examples:
 """
 
 
-async def _generate_note_title(query: str, calls: list[dict]) -> str:
+async def _generate_note_title(query: str, calls: list[dict], content: str | None = None) -> str:
     """Call the cloud-light Ollama profile to generate a short descriptive title.
 
     Falls back to the raw query (truncated) on any error so saving never fails.
     """
     tool_names = ", ".join(dict.fromkeys(c.get("name", "") for c in calls if c.get("name")))
-    user_msg = f"Query: {query.strip()}\nTool(s): {tool_names}"
+    if content and not tool_names:
+        # Answer bookmark: title from the query + a slice of the answer
+        user_msg = f"Query: {query.strip()}\nAnswer: {content.strip()[:600]}"
+    else:
+        user_msg = f"Query: {query.strip()}\nTool(s): {tool_names}"
 
     try:
         from app.config import settings
@@ -76,9 +80,9 @@ async def _generate_note_title(query: str, calls: list[dict]) -> str:
     except Exception as exc:
         logger.warning("Note title generation failed: %s", exc)
 
-    # Fallback: truncate the raw query
-    fallback = query.strip()
-    return fallback[:120] if fallback else (tool_names or "Command note")
+    # Fallback: truncate the raw query, then the answer, then a generic label
+    fallback = query.strip() or (content or "").strip()
+    return fallback[:120] if fallback else (tool_names or "Bookmark")
 
 
 router = APIRouter(prefix="/api")
@@ -219,8 +223,10 @@ class SessionUpdate(BaseModel):
 class CommandNoteCreate(BaseModel):
     session_id: str | None = None
     title: str
-    commands: list[dict]
+    commands: list[dict] = []
     message_ts: str | None = None
+    kind: str = "tool_calls"
+    content: str | None = None
 
 
 # -- Session endpoints ---------------------------------------------------------
@@ -752,15 +758,16 @@ async def list_command_notes(limit: int = 200, offset: int = 0):
 
 @router.post("/commands", status_code=201)
 async def create_command_note(body: CommandNoteCreate):
-    """Save a new command note. Title is generated via LLM if a raw query is provided."""
+    """Save a new bookmark — tool calls or an agent answer. Title is LLM-generated."""
     db = get_db()
-    # Generate a descriptive title from the user's query + tool calls
-    title = await _generate_note_title(body.title or "", body.commands)
+    title = await _generate_note_title(body.title or "", body.commands, body.content)
     note = db.create_command_note(
         title=title,
         commands=body.commands,
         session_id=body.session_id,
         message_ts=body.message_ts,
+        kind=body.kind,
+        content=body.content,
     )
     return note.to_dict()
 

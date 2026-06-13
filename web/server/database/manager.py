@@ -143,6 +143,20 @@ class ChatDatabase:
                 logger.info("Migration: added created_at column to chat_messages")
             except Exception:
                 pass  # Column already exists
+        with self.engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE command_notes ADD COLUMN kind VARCHAR(20) NOT NULL DEFAULT 'tool_calls'"))
+                conn.commit()
+                logger.info("Migration: added kind column to command_notes")
+            except Exception:
+                pass
+        with self.engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE command_notes ADD COLUMN content TEXT"))
+                conn.commit()
+                logger.info("Migration: added content column to command_notes")
+            except Exception:
+                pass
         # Add sequence to chat_messages
         with self.engine.connect() as conn:
             try:
@@ -576,13 +590,17 @@ class ChatDatabase:
         commands: list[dict],
         session_id: str | None = None,
         message_ts: str | None = None,
+        kind: str = "tool_calls",
+        content: str | None = None,
     ) -> CommandNote:
-        """Save a new command note."""
+        """Save a new command note (tool calls) or answer bookmark."""
         with self.SessionLocal() as session:
             note = CommandNote(
                 session_id=session_id,
                 title=title,
+                kind=kind,
                 commands_json=json.dumps(commands),
+                content=content,
                 message_ts=message_ts,
             )
             session.add(note)

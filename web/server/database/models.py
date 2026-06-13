@@ -172,15 +172,17 @@ class SessionInstruction(Base):
 
 
 class CommandNote(Base):
-    """A saved 'command note' — all tool calls from a single agent run."""
+    """A saved bookmark. Tool calls from a run, or an agent answer."""
 
     __tablename__ = "command_notes"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     session_id = Column(String(36), ForeignKey("chat_sessions.id", ondelete="SET NULL"), nullable=True)
     title = Column(String(500), nullable=False, default="Untitled")
-    commands_json = Column(Text, nullable=False)  # JSON array of {name, args} tool calls
-    message_ts = Column(String(50), nullable=True)  # _ts of the tool_calls panel (for add/remove matching)
+    kind = Column(String(20), nullable=False, default="tool_calls")
+    commands_json = Column(Text, nullable=False)
+    content = Column(Text, nullable=True)
+    message_ts = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=_now, nullable=False)
 
     def __repr__(self) -> str:
@@ -191,7 +193,9 @@ class CommandNote(Base):
             "id": self.id,
             "session_id": self.session_id,
             "title": self.title,
+            "kind": self.kind or "tool_calls",
             "commands": json.loads(self.commands_json) if self.commands_json else [],
+            "content": self.content,
             "message_ts": self.message_ts,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
