@@ -74,7 +74,7 @@ The variables the scripts read:
 | `AGENTFORGE_INTERNAL_TOKEN`  | Shared secret for `/internal/*` worker callbacks (sent as `X-Internal-Token`)             |
 | `SIDECAR_AUTH_TOKEN`         | Shared secret the web/workers send as `X-Sidecar-Token`; sidecar rejects requests without it |
 | `SIDECAR_ALLOW_PRIVATE_URLS` | `1` = let the sidecar fetch private/LAN URLs (otherwise blocked as an SSRF guard)         |
-| `AGENTFORGE_PUBLIC_URL`      | Canonical app origin for OAuth redirects (anti-spoofing; see [gcp-oauth-gmail.md](gcp-oauth-gmail.md)) |
+| `AGENTFORGE_PUBLIC_URL`      | Canonical app origin for OAuth redirects (anti-spoofing; see [connectors.md](connectors.md)) |
 
 See [SECURITY.md](SECURITY.md) for what the auth/token stuff protect and a public-deploy checklist.
 
