@@ -23,7 +23,7 @@ Files uploaded with a prompt (via `/api/upload/{session_id}`) are injected as co
 | `@review`             | review     | Parallel code review: specialist sub-agents merged into one report.                                      |
 | `@research`           | research   | Parallel web research: a planner fans out sub-investigations, then merges a sourced report.              |
 | `@coding`, `@code`    | coding     | Bulk code transforms with diff preview, confirm, snapshots, and undo.                                    |
-| `@conn`, `@connector` | connector  | External account connectors: Google (Gmail, Drive, BigQuery, YouTube) and GitLab. See [connectors.md](connectors.md). |
+| `@conn`, `@connector` | connector  | External account connectors: Google (Gmail, Drive, BigQuery, YouTube), GitLab, and GitHub. See [connectors.md](connectors.md). |
 
 A few that are worth more than one line:
 
@@ -61,7 +61,7 @@ The chat UI lists whatever agents are currently configured (it reads `GET /api/a
 
 ## Connectors (`@conn`)
 
-`@conn` reaches external accounts you have linked, with multi-account support. Two connectors ship: **Google** (one OAuth connection where you pick the products — Gmail, Drive, BigQuery, YouTube) and **GitLab** (a personal access token with a read/write toggle and the full `gitlab_*` toolset). Each connection gets a label that doubles as a `#hashtag` for targeting (`@conn #work-gitlab list my open MRs`); without a tag the mode routes by keyword and recency, and you can also address a connector directly (`@google`, `@gitlab`). Connector tools run in-process (they are bound to each connection's credentials) rather than on the worker queue. Setup is in [connectors.md](connectors.md).
+`@conn` reaches external accounts you have linked, with multi-account support. Three connectors ship: **Google** (one OAuth connection where you pick the products. Gmail, Drive, BigQuery, YouTube), **GitLab** (a personal access token with a read/write toggle and the full `gitlab_*` toolset), and **GitHub** (a personal access token, github.com-only, reusing the `gh` CLI with a read/write toggle). Each connection gets a label that doubles as a `#hashtag` for targeting (`@conn #work-gitlab list my open MRs`); without a tag the mode routes by keyword and recency, and you can also address a connector directly (`@google`, `@gitlab`, `@github`). Connector tools run in-process (they are bound to each connection's credentials) rather than on the worker queue. Setup is in [connectors.md](connectors.md).
 
 ## See also
 

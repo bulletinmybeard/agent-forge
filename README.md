@@ -32,7 +32,7 @@ These projects use AgentForge as their backend and don't run without it:
 - **Agent loop**: think -> act -> observe with tool calling, error recovery, and optional web-search escalation.
 - **Tools**: filesystem, shell, system info, Docker, Git, SSH, archives, network diagnostics, web search/fetch/render, media, code editing, and more.
 - **RAG**: index OpenAPI/SQL schemas, source code, docs, and transcripts into Qdrant. Query with refinement, reranking, and dedup.
-- **Connectors**: link external accounts as agent tools — Gmail, Drive, BigQuery, and YouTube through one Google OAuth client, plus GitLab via a personal access token. Multi-account, in-process, read-only by default.
+- **Connectors**: link external accounts as agent tools. Gmail, Drive, BigQuery, and YouTube through one Google OAuth client, plus GitLab and GitHub via personal access tokens. Multi-account, in-process, read-only by default.
 - **Pluggable**: add your own tools via a `register(registry)` entry point. No fork needed.
 - **Pipelines**: typed multi-step runner, parallel fan-out, and discovery.
 
@@ -46,7 +46,7 @@ Operator guides live in [`docs/`](docs/README.md):
 - [Tools](docs/tools.md): every built-in agent tool by category, plus locality and confirmation gates.
 - [Chunking and indexing into Qdrant](chunking/README.md): the mappers (OpenAPI, SQL/tbls, live DB, code, CLI docs, Markdown), the index pipeline, the `/indexer/*` + `/search/*` endpoints, and dedup/drift QA.
 - [Deploying with custom local domains](docs/local-domains.md): running the stack behind Traefik, the `deploy.env` knobs, and the split-host worker.
-- [Connectors](docs/connectors.md): linking external accounts — the unified Google OAuth connector (Gmail, Drive, BigQuery, YouTube) and the GitLab token connector.
+- [Connectors](docs/connectors.md): linking external accounts. The unified Google OAuth connector (Gmail, Drive, BigQuery, YouTube) and the GitLab and GitHub token connectors.
 - [Authoring tools and private overlays](docs/plugin-authoring.md): adding private tools, the `AGENTFORGE_TOOL_PLUGINS` seam, and the local overlay files.
 - [Instruction markdown](markdown/README.md): the `skills/` and `custom-agents/` markdown you edit to tune agents without touching Python.
 - [Security](docs/SECURITY.md): the auth model, sidecar/internal tokens, interactive sudo, SSRF and read-only guards.

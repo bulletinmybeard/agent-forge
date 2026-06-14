@@ -177,7 +177,7 @@ Grouped by subsystem. See the live `/docs` for full request/response schemas.
 | Configs    | `/api/configs*`                                                                                  | Read-only view of whitelisted YAML config files.                                                 |
 | Services   | `/api/services*`                                                                                 | Container/service health dashboard + log tail/stream.                                            |
 | Catalog    | `/api/catalog/*`, `/api/model-catalog/*`                                                         | Provider/model metadata + cross-provider equivalence (see [model-catalog.md](model-catalog.md)). |
-| Misc       | `/api/{welcome,profiles,providers,agents,tools,skills,presets,location,commands,instructions,dry-run}` | UI-support + config-exposure endpoints. `GET /api/tools` is the runtime tool catalog (name, description, category). |
+| Misc       | `/api/{welcome,profiles,providers,agents,tools,skills,presets,commands,instructions,dry-run}` | UI-support + config-exposure endpoints. `GET /api/tools` is the runtime tool catalog (name, description, category). |
 
 Many of these exist to back the (separate) chat UI.
 The core developer surfaces are search/index (`:8100`), the `/ws/chat` WebSocket, and `/api/memory/*`.
