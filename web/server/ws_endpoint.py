@@ -2775,6 +2775,7 @@ def _init_connectors(rt: SearchRuntime) -> None:
     try:
         from agentforge.connectors import ConnectorRegistry
         from agentforge.connectors.bigquery import BigQueryConnectorPlugin
+        from agentforge.connectors.github import GitHubConnectorPlugin
         from agentforge.connectors.gitlab import GitLabConnectorPlugin
         from agentforge.connectors.gmail import GmailConnectorPlugin
         from agentforge.connectors.google import GoogleConnectorPlugin
@@ -2787,6 +2788,7 @@ def _init_connectors(rt: SearchRuntime) -> None:
         connector_registry = ConnectorRegistry()
         connector_registry.register(GoogleConnectorPlugin())
         connector_registry.register(GitLabConnectorPlugin())
+        connector_registry.register(GitHubConnectorPlugin())
         connector_registry.register(GmailConnectorPlugin())
         connector_registry.register(GoogleDriveConnectorPlugin())
         connector_registry.register(BigQueryConnectorPlugin())

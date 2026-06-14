@@ -15,10 +15,12 @@ Usage::
 
 from __future__ import annotations
 
+import os
 import shlex
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -50,7 +52,9 @@ def _format_result(result: subprocess.CompletedProcess[str]) -> str:
     return output or "(no output)"
 
 
-def _run_argv(argv: list[str], timeout: int = 60, cwd: str | Path | None = None) -> str:
+def _run_argv(
+    argv: list[str], timeout: int = 60, cwd: str | Path | None = None, env: dict | None = None
+) -> str:
     """Run a command as an argv list (shell=False) and return its output."""
     try:
         result = subprocess.run(
@@ -60,6 +64,7 @@ def _run_argv(argv: list[str], timeout: int = 60, cwd: str | Path | None = None)
             text=True,
             timeout=timeout,
             cwd=str(cwd) if cwd is not None else None,
+            env=env,
         )
         return _format_result(result)
     except subprocess.TimeoutExpired:
@@ -317,6 +322,65 @@ def tree_view(
 # gh — GitHub CLI
 # ---------------------------------------------------------------------------
 
+_gh_override = threading.local()
+
+
+def set_gh_token_override(token: str, host: str = "", read_write: bool = True) -> None:
+    """Inject a per-connection GitHub token for ``gh_command`` calls on this thread."""
+    _gh_override.token = token
+    _gh_override.host = host
+    _gh_override.read_write = read_write
+
+
+def clear_gh_token_override() -> None:
+    _gh_override.token = None
+    _gh_override.host = None
+    _gh_override.read_write = None
+
+
+_GH_READ_OK: dict[str, set[str] | None] = {
+    "pr": {"list", "view", "diff", "checks", "status"},
+    "issue": {"list", "view", "status"},
+    "repo": {"list", "view", "clone"},
+    "release": {"list", "view"},
+    "run": {"list", "view"},
+    "workflow": {"list", "view"},
+    "label": {"list"},
+    "gist": {"list", "view"},
+    "auth": {"status"},
+    "search": None,  # whole subcommand is read-only
+    "browse": None,
+    "status": None,
+}
+
+
+def _gh_readonly_guard(gh_args: list[str]) -> str | None:
+    """Return an error if ``gh_args`` is not a read-only-safe gh invocation, else None."""
+    if not gh_args:
+        return None
+    top = gh_args[0]
+    if top == "api":
+        for i, arg in enumerate(gh_args):
+            method = None
+            if arg in ("-X", "--method") and i + 1 < len(gh_args):
+                method = gh_args[i + 1]
+            elif arg.startswith("--method="):
+                method = arg.split("=", 1)[1]
+            elif arg.startswith("-X") and len(arg) > 2:
+                method = arg[2:]
+            if method and method.upper() != "GET":
+                return "Error: read-only GitHub connection — only GET 'gh api' calls are allowed."
+        return None
+    if top not in _GH_READ_OK:
+        return f"Error: read-only GitHub connection — '{top}' commands are not permitted."
+    allowed = _GH_READ_OK[top]
+    if allowed is None:
+        return None
+    sub = gh_args[1] if len(gh_args) > 1 else ""
+    if sub not in allowed:
+        return f"Error: read-only GitHub connection — '{top} {sub}' is not a permitted read command."
+    return None
+
 
 @tool
 def gh_command(args: str, cwd: str = "") -> str:
@@ -368,14 +432,27 @@ def gh_command(args: str, cwd: str = "") -> str:
     except ValueError as exc:
         return f"Error: could not parse gh arguments — {exc}"
 
+    # Connector override: a GitHub connection injects its PAT via GH_TOKEN.
+    run_env: dict | None = None
+    override_token = getattr(_gh_override, "token", None)
+    if override_token:
+        if not getattr(_gh_override, "read_write", True):
+            guard = _gh_readonly_guard(gh_args)
+            if guard:
+                return guard
+        run_env = {**os.environ, "GH_TOKEN": override_token}
+        gh_host = getattr(_gh_override, "host", "") or ""
+        if gh_host:
+            run_env["GH_HOST"] = gh_host
+
     # If cwd is provided, run gh inside it so repo-scoped commands work
     if cwd:
         resolved = Path(cwd).expanduser().resolve()
         if not resolved.is_dir():
             return f"Error: directory not found — {cwd}"
-        result = _run_argv(["gh", *gh_args], timeout=60, cwd=resolved)
+        result = _run_argv(["gh", *gh_args], timeout=60, cwd=resolved, env=run_env)
     else:
-        result = _run_argv(["gh", *gh_args], timeout=60)
+        result = _run_argv(["gh", *gh_args], timeout=60, env=run_env)
 
     # Intercept common failure modes and redirect to the correct approach.
     # Only apply repo-context error to commands that actually need a repo
