@@ -486,49 +486,6 @@ def _fmt_elapsed(seconds: float) -> str:
 # Location context helpers
 # ---------------------------------------------------------------------------
 
-# Keywords that signal the query is location-sensitive.
-# When matched, location context (city, country, timezone, local time) is
-# appended to the system prompt so the LLM can give accurate local answers.
-_LOCATION_KEYWORDS_RE = re.compile(
-    r"\b("
-    r"near(by)?|local(ly)?|around( me)?|in my area|my location|where i am|"
-    r"weather|forecast|temperature|climate|rain|snow|wind|sunny|cloudy|"
-    r"timezone|time[ -]?zone|what time|current time|local time|"
-    r"restaurant|cafe|coffee shop|shop|store|supermarket|pharmacy|hospital|"
-    r"traffic|commute|transit|bus|train|subway|metro|tram|directions?|navigate|"
-    r"sunrise|sunset|"
-    r"open(ing)? hours?|delivery|events? today|tonight"
-    r")\b",
-    re.IGNORECASE,
-)
-
-
-def _needs_location(query: str) -> bool:
-    """Return True if the query is likely to benefit from location context."""
-    return bool(_LOCATION_KEYWORDS_RE.search(query))
-
-
-def _location_context_str(location: dict) -> str:
-    """Format a location dict into a concise system-prompt block."""
-    city = location.get("city") or "Unknown city"
-    country = location.get("country") or "Unknown country"
-    tz = location.get("timezone") or "UTC"
-    local_time = location.get("local_time") or ""
-    lat = location.get("lat")
-    lon = location.get("lon")
-    source = location.get("source", "unknown")
-
-    coord_str = f" ({lat:.4f}°N {lon:.4f}°E)" if (lat is not None and lon is not None) else ""
-    accuracy = "GPS-accurate" if source == "gps" else "approximate (IP-based)"
-
-    lines = [
-        f"User location ({accuracy}): {city}, {country}{coord_str} — timezone {tz}",
-    ]
-    if local_time:
-        lines.append(f"Local time: {local_time}")
-    return "\n".join(lines)
-
-
 # ---------------------------------------------------------------------------
 # Shared state — initialised at app startup (see app.py lifespan)
 # ---------------------------------------------------------------------------
@@ -552,6 +509,11 @@ def set_canvas_database(canvas_db) -> None:
     """Set the canvas database reference (called from app.py lifespan)."""
     global _canvas_db
     _canvas_db = canvas_db
+
+
+def is_canvas_enabled() -> bool:
+    """Whether the Canvas feature is available (canvas DB initialised)."""
+    return _canvas_db is not None
 
 
 def get_db() -> ChatDatabase:
@@ -2813,6 +2775,7 @@ def _init_connectors(rt: SearchRuntime) -> None:
     try:
         from agentforge.connectors import ConnectorRegistry
         from agentforge.connectors.bigquery import BigQueryConnectorPlugin
+        from agentforge.connectors.github import GitHubConnectorPlugin
         from agentforge.connectors.gitlab import GitLabConnectorPlugin
         from agentforge.connectors.gmail import GmailConnectorPlugin
         from agentforge.connectors.google import GoogleConnectorPlugin
@@ -2825,6 +2788,7 @@ def _init_connectors(rt: SearchRuntime) -> None:
         connector_registry = ConnectorRegistry()
         connector_registry.register(GoogleConnectorPlugin())
         connector_registry.register(GitLabConnectorPlugin())
+        connector_registry.register(GitHubConnectorPlugin())
         connector_registry.register(GmailConnectorPlugin())
         connector_registry.register(GoogleDriveConnectorPlugin())
         connector_registry.register(BigQueryConnectorPlugin())
@@ -5322,7 +5286,8 @@ async def websocket_chat(ws: WebSocket, session_id: str | None = None) -> None:
         if session_id:
             from . import state
 
-            state.active_ws.pop(session_id, None)
+            if state.active_ws.get(session_id) is ws:
+                state.active_ws.pop(session_id, None)
 
 
 # ---------------------------------------------------------------------------
@@ -5445,11 +5410,6 @@ async def _run_chat(
                 ),
             },
         ]
-
-        # Inject location context when query is location-sensitive
-        _loc = (overrides or {}).get("location")
-        if _loc and _needs_location(query):
-            llm_messages[0]["content"] += "\n\n" + _location_context_str(_loc)
 
         # Include conversation history for multi-turn context
         for turn in conversation_history:
@@ -6814,13 +6774,6 @@ async def _run_search(
             db, session_id, incognito=(overrides or {}).get("incognito", False), query=query, mode="search"
         )
 
-        # Prepend location context for the RAG refiner when query is location-sensitive
-        _loc = (overrides or {}).get("location")
-        if _loc and _needs_location(query):
-            conversation_history = [
-                {"role": "system", "content": _location_context_str(_loc)},
-            ] + (conversation_history or [])
-
         # --- Persist user query -------------------------------------------
         query_metadata = {"type": "query", "text": query}
         db.add_message(
@@ -7322,10 +7275,6 @@ async def _run_web_search(
         web_search_prompt = _inject_user_context(_build_web_search_system_prompt(), rt)
         # Inject skill instructions
         web_search_prompt = _inject_skills(web_search_prompt, overrides, condensed=False)
-        # Location context is especially useful for web searches
-        _loc = (overrides or {}).get("location")
-        if _loc and _needs_location(query):
-            web_search_prompt = web_search_prompt + "\n\n" + _location_context_str(_loc)
         agent_client = AIClient(profile=profile)
 
         _agent_event = _make_agent_event_callback(send_sync, db, session_id, total_start)
@@ -8281,11 +8230,6 @@ async def _run_agent(
         # Inject skill instructions (full on first turn)
         system_prompt = _inject_skills(system_prompt, overrides, condensed=False)
 
-        # Inject location context when query is location-sensitive
-        _loc = (overrides or {}).get("location")
-        if _loc and _needs_location(query):
-            system_prompt = system_prompt + "\n\n" + _location_context_str(_loc)
-
         # Build condensed prompt for iteration 2+ (if enabled)
         _condensed_prompt: str | None = None
         if rt.af_settings.agent.condense_tool_prompt:
@@ -9032,11 +8976,6 @@ async def _run_sql(
             dialect_hint=dialect_hint,
             schema_context=schema_context,
         )
-
-        # Inject location context (e.g., for timezone-sensitive date queries)
-        _loc = (overrides or {}).get("location")
-        if _loc and _needs_location(query):
-            sql_system_prompt = sql_system_prompt + "\n\n" + _location_context_str(_loc)
 
         await _step_event("context", "done", schema_chunks=len(reranked))
 

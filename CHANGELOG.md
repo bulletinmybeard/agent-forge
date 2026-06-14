@@ -4,6 +4,31 @@ All notable changes to AgentForge are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **GitHub connector** (`@github` / `@gh`): token (PAT) auth, github.com-only. Reuses the `gh` CLI by injecting each connection's PAT as `GH_TOKEN` rather than reimplementing the REST API; read-only connections apply a best-effort allowlist of read `gh` subcommands
+- Per-connection read/write toggle for token connectors (GitLab, GitHub) via `PATCH /api/connectors/{id}`, re-registering the agent so its tools and prompt reflect the mode
+- Answer bookmarks: `command_notes` extended with `kind` + `content`, so agent answers can be saved, not just tool calls
+- `source_branch` / `target_branch` filters on `gitlab_merge_requests`
+- `needs_url` / `default_url` on connector types, so SaaS-only connectors (GitHub) omit the URL field in the connect form
+
+### Changed
+
+- Token connections are verified with a live API call before they are saved so invalid tokens or hosts now fail immediately instead of creating a potential dead connection
+- `/api/agents` returns a `source` field so clients can distinguish connector connections from built-in and custom modes
+- Connection listings expose `read_write`
+- Expanded `user_context.example.md` with richer explanations
+
+### Fixed
+
+- The name-greeting parser tolerates bullet variations in `user_context.md`
+
+### Removed
+
+- The browser-location feature: `location_service.py`, the `/api/location` endpoint, and the location prompt-injection
+
 ## [0.5.0] - 2026-06-13
 
 First public-ready release: cleanup and hardening, a unified Google connector, and the GitLab toolset reintroduced.

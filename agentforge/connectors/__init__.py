@@ -33,6 +33,8 @@ class ConnectorRegistry:
                 "description": p.description,
                 "default_aliases": p.default_aliases,
                 "auth_type": getattr(p, "auth_type", "oauth"),
+                "needs_url": getattr(p, "needs_url", True),
+                "default_url": getattr(p, "default_url", ""),
                 "products": p.available_products() if hasattr(p, "available_products") else [],
             }
             for p in self._plugins.values()

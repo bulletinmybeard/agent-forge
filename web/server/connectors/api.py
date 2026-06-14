@@ -44,7 +44,8 @@ class TokenConnectRequest(BaseModel):
 
 
 class ConnectionUpdate(BaseModel):
-    label: str
+    label: str | None = None
+    read_write: bool | None = None
 
 
 def init_connectors_api(
@@ -118,8 +119,14 @@ async def get_connection(connection_id: str):
 @router.patch("/{connection_id}")
 async def update_connection(connection_id: str, body: ConnectionUpdate):
     _require_init()
-    result = _connection_manager.update_label(connection_id, body.label, _custom_agents)
-    if not result:
+    if body.read_write is None and body.label is None:
+        raise HTTPException(400, "Nothing to update")
+    result = None
+    if body.read_write is not None:
+        result = _connection_manager.set_read_write(connection_id, body.read_write, _custom_agents)
+    if body.label is not None:
+        result = _connection_manager.update_label(connection_id, body.label, _custom_agents)
+    if result is None:
         raise HTTPException(404, "Connection not found")
     return result
 
@@ -153,6 +160,16 @@ async def connect_with_token(body: TokenConnectRequest):
         "token": body.token,
         "read_write": body.read_write,
     }
+
+    # Verify the credentials before persisting
+    # to prevent creating dead connections.
+    try:
+        check = plugin.test_connection(json.dumps(tokens))
+    except Exception as exc:
+        logger.warning("Token verification errored (%s): %s", body.connector_type, exc)
+        raise HTTPException(400, f"Could not verify connection: {exc}") from exc
+    if not check.get("ok"):
+        raise HTTPException(400, check.get("error") or "Token verification failed")
 
     try:
         conn = _connection_manager.create_connection(

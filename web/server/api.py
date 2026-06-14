@@ -18,11 +18,11 @@ from pathlib import Path
 from typing import List
 
 import ollama
-from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Body, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from .database import ChatDatabase
-from .ws_endpoint import get_runtime
+from .ws_endpoint import get_runtime, is_canvas_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +44,17 @@ Examples:
 """
 
 
-async def _generate_note_title(query: str, calls: list[dict]) -> str:
+async def _generate_note_title(query: str, calls: list[dict], content: str | None = None) -> str:
     """Call the cloud-light Ollama profile to generate a short descriptive title.
 
     Falls back to the raw query (truncated) on any error so saving never fails.
     """
     tool_names = ", ".join(dict.fromkeys(c.get("name", "") for c in calls if c.get("name")))
-    user_msg = f"Query: {query.strip()}\nTool(s): {tool_names}"
+    if content and not tool_names:
+        # Answer bookmark: title from the query + a slice of the answer
+        user_msg = f"Query: {query.strip()}\nAnswer: {content.strip()[:600]}"
+    else:
+        user_msg = f"Query: {query.strip()}\nTool(s): {tool_names}"
 
     try:
         from app.config import settings
@@ -76,9 +80,9 @@ async def _generate_note_title(query: str, calls: list[dict]) -> str:
     except Exception as exc:
         logger.warning("Note title generation failed: %s", exc)
 
-    # Fallback: truncate the raw query
-    fallback = query.strip()
-    return fallback[:120] if fallback else (tool_names or "Command note")
+    # Fallback: truncate the raw query, then the answer, then a generic label
+    fallback = query.strip() or (content or "").strip()
+    return fallback[:120] if fallback else (tool_names or "Bookmark")
 
 
 router = APIRouter(prefix="/api")
@@ -142,7 +146,7 @@ def _parse_user_name() -> str:
         ]:
             if candidate.is_file():
                 text = candidate.read_text(encoding="utf-8")
-                m = _re.search(r"^-\s*Name:\s*(.+)", text, _re.MULTILINE)
+                m = _re.search(r"^\s*[-*+]?\s*name\s*:\s*(.+)", text, _re.MULTILINE | _re.IGNORECASE)
                 if m:
                     full_name = m.group(1).strip()
                     name = full_name.split()[0] if full_name else ""
@@ -219,8 +223,10 @@ class SessionUpdate(BaseModel):
 class CommandNoteCreate(BaseModel):
     session_id: str | None = None
     title: str
-    commands: list[dict]
+    commands: list[dict] = []
     message_ts: str | None = None
+    kind: str = "tool_calls"
+    content: str | None = None
 
 
 # -- Session endpoints ---------------------------------------------------------
@@ -257,7 +263,7 @@ async def get_session(session_id: str):
     session = db.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    return session.to_dict()
+    return {**session.to_dict(), "canvas_enabled": is_canvas_enabled()}
 
 
 @router.get("/sessions/{session_id}/token-usage")
@@ -752,15 +758,16 @@ async def list_command_notes(limit: int = 200, offset: int = 0):
 
 @router.post("/commands", status_code=201)
 async def create_command_note(body: CommandNoteCreate):
-    """Save a new command note. Title is generated via LLM if a raw query is provided."""
+    """Save a new bookmark — tool calls or an agent answer. Title is LLM-generated."""
     db = get_db()
-    # Generate a descriptive title from the user's query + tool calls
-    title = await _generate_note_title(body.title or "", body.commands)
+    title = await _generate_note_title(body.title or "", body.commands, body.content)
     note = db.create_command_note(
         title=title,
         commands=body.commands,
         session_id=body.session_id,
         message_ts=body.message_ts,
+        kind=body.kind,
+        content=body.content,
     )
     return note.to_dict()
 
@@ -1014,6 +1021,7 @@ async def list_agents():
                     "profile": agent.get("profile", "cloud-heavy"),
                     "tools": agent.get("tools", []),
                     "max_iterations": agent.get("max_iterations", 10),
+                    "source": agent.get("source"),
                 }
             )
     except RuntimeError:
@@ -1689,48 +1697,6 @@ async def invalidate_cached_schema(database: str):
 
 
 # -- Location endpoint ---------------------------------------------------------
-
-
-@router.get("/location")
-async def get_location(request: Request, lat: float | None = None, lon: float | None = None):
-    """Resolve the user's location for context injection.
-
-    Two modes:
-    - GPS:  ``?lat=X&lon=Y`` — Nominatim reverse geocoding + offline timezone
-    - IP:   no params       — DbIP-City-lite .mmdb lookup from client IP
-
-    Returns: {city, country, timezone, lat, lon, local_time, source}
-    """
-    from .location_service import resolve_from_coords, resolve_from_ip
-
-    if lat is not None and lon is not None:
-        # GPS mode — caller provides coordinates from browser geolocation API
-        result = await resolve_from_coords(lat, lon)
-        if result:
-            return result
-        raise HTTPException(status_code=503, detail="Reverse geocoding unavailable")
-
-    # IP fallback — extract client IP from request.
-    # X-Forwarded-For is client-spoofable; this is used only for best-effort
-    # geolocation context (not auth/authz), so trusting the proxy header here is
-    # acceptable. Do NOT reuse this value for any security decision.
-    client_ip = (
-        request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-        or (request.client.host if request.client else None)
-        or "127.0.0.1"
-    )
-    # Strip IPv6-mapped IPv4 prefix (::ffff:1.2.3.4 → 1.2.3.4)
-    if client_ip.startswith("::ffff:"):
-        client_ip = client_ip[7:]
-
-    result = resolve_from_ip(client_ip)
-    if result:
-        return result
-
-    raise HTTPException(
-        status_code=503,
-        detail="IP location unavailable — DbIP database not installed. Run scripts/download_dbip.sh",
-    )
 
 
 # ---------------------------------------------------------------------------

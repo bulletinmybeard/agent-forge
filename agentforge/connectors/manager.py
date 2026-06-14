@@ -170,6 +170,28 @@ class ConnectionManager:
         self._rebuild_account_agents(custom_agents)
         return result
 
+    def set_read_write(self, connection_id: str, read_write: bool, custom_agents: dict) -> dict | None:
+        """Flip a token connection's read-write flag (stored in its encrypted tokens) and re-register its agent so the tools + prompt reflect the new mode."""
+        from web.server.database.models import Connection
+
+        session = self._db_session_factory()
+        try:
+            row = session.query(Connection).filter(Connection.id == connection_id).first()
+            if not row:
+                return None
+            tokens = decrypt_tokens(row.encrypted_tokens) if row.encrypted_tokens else {}
+            tokens["read_write"] = bool(read_write)
+            row.encrypted_tokens = encrypt_tokens(tokens)
+            session.commit()
+            result = self._to_dict(row)
+        finally:
+            session.close()
+
+        self._unregister_agent(connection_id, custom_agents)
+        self._register_agent(result, custom_agents)
+        self._rebuild_account_agents(custom_agents)
+        return result
+
     def get_connection(self, connection_id: str) -> dict | None:
         from web.server.database.models import Connection
 
@@ -196,7 +218,7 @@ class ConnectionManager:
             if available:
                 c["products"] = [{"label": p["label"], "enabled": p["label"] in granted} for p in available]
             else:
-                c["products"] = [{"label": name, "enabled": True} for name in granted]
+                c["products"] = []
         return conns
 
     def get_access_token(self, connection_id: str) -> str:
@@ -467,7 +489,7 @@ class ConnectionManager:
 
     @staticmethod
     def _to_dict(row: Any) -> dict:
-        return {
+        d = {
             "id": row.id,
             "connector_type": row.connector_type,
             "label": row.label,
@@ -478,3 +500,10 @@ class ConnectionManager:
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         }
+        try:
+            toks = decrypt_tokens(row.encrypted_tokens) if row.encrypted_tokens else {}
+            if isinstance(toks, dict) and "read_write" in toks:
+                d["read_write"] = bool(toks.get("read_write"))
+        except Exception:
+            pass
+        return d
