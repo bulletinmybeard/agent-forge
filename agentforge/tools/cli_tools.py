@@ -52,9 +52,7 @@ def _format_result(result: subprocess.CompletedProcess[str]) -> str:
     return output or "(no output)"
 
 
-def _run_argv(
-    argv: list[str], timeout: int = 60, cwd: str | Path | None = None, env: dict | None = None
-) -> str:
+def _run_argv(argv: list[str], timeout: int = 60, cwd: str | Path | None = None, env: dict | None = None) -> str:
     """Run a command as an argv list (shell=False) and return its output."""
     try:
         result = subprocess.run(

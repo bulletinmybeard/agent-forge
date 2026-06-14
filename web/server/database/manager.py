@@ -145,7 +145,9 @@ class ChatDatabase:
                 pass  # Column already exists
         with self.engine.connect() as conn:
             try:
-                conn.execute(text("ALTER TABLE command_notes ADD COLUMN kind VARCHAR(20) NOT NULL DEFAULT 'tool_calls'"))
+                conn.execute(
+                    text("ALTER TABLE command_notes ADD COLUMN kind VARCHAR(20) NOT NULL DEFAULT 'tool_calls'")
+                )
                 conn.commit()
                 logger.info("Migration: added kind column to command_notes")
             except Exception:
