@@ -23,6 +23,7 @@ The full stack is the chat backend, RAG API, queue workers, Qdrant, Redis, and s
 
 These projects use AgentForge as their backend and don't run without it:
 
+- [agent-forge-webui](https://github.com/bulletinmybeard/agent-forge-webui): a React SPA chat front-end supporting all agent modes, tool calls, and connectors in one UI, with the agent's think > act > observe loop streamed.
 - [agent-forge-ask-page](https://github.com/bulletinmybeard/agent-forge-ask-page): a Chrome side-panel extension — pick any element or scan the whole page, then ask an LLM to extract, summarise, list, translate, or audit it, with real tool calls (web fetch, file download).
 - [agent-forge-felix](https://github.com/bulletinmybeard/agent-forge-felix): an autonomous diagnose -> fix -> verify CLI agent for operational problems (Docker, disk, HTTP).
 
