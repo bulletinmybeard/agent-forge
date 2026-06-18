@@ -14,6 +14,7 @@ A command is DESTRUCTIVE if it could cause DATA LOSS or IRREVERSIBLE CHANGES:
 - Format, partition, or mount/unmount disks
 - Modify git history destructively (git reset --hard, git push --force, git clean -fd, git checkout -- .)
 - Prune, purge, or clean Docker resources (docker rm, docker rmi, docker prune, docker system prune, docker volume rm, docker-compose down -v)
+- Edit files in-place via shell tools (sed -i, perl -pi, ed, ex)
 - Pipe into or redirect to existing files with > (overwrite) unless writing to a clearly new file
 - Run curl/wget piped to sh/bash (curl ... | sh)
 

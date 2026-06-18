@@ -93,6 +93,8 @@ _DESTRUCTIVE_PATTERNS = re.compile(
     r"|docker\s+(?:volume|image|container|network)\s+(?:rm|prune)\b"
     r"|docker\s+rmi\b|docker\s+rm\s+-[a-z]*f"  # rmi / rm -f
     r"|git\s+(?:reset\s+--hard|clean\s+-[a-z]*f|push\s+[^\n]*--force)"
+    r"|sed\s+-[a-z]*i"  # sed -i / -i.bak (in-place file edit)
+    r"|perl\s+-[a-z]*[pi][a-z]*\s+-[a-z]*[pi]"  # perl -pi (in-place)
     r"|:\(\)\s*\{.*\}\s*;\s*:"  # fork bomb
     r")",
     re.IGNORECASE,

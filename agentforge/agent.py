@@ -24,15 +24,21 @@ from __future__ import annotations
 
 import concurrent.futures
 import contextvars
+import difflib
+import hashlib
 import os
 import re
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from chalkbox.logging.bridge import get_logger
+
+from agentforge.tools._file_snapshots import save_snapshot
+from agentforge.tools.routing import dispatch_mode, my_role
 
 from .client import AIClient
 from .config import get_config
@@ -272,8 +278,11 @@ class AgentLoop:
         # Diff-preview confirm: editing tools show a diff card and confirm
         # BEFORE writing, instead of the filename-only pre-execution prompt.
         # Only kicks in interactively (a confirm + diff emitter are wired).
-        if name == "code_edit" and self._registry.supports_preview_confirm():
-            return self._preview_confirm_edit(name, args)
+        if self._registry.supports_preview_confirm():
+            if name == "code_edit":
+                return self._preview_confirm_edit(name, args)
+            if name in ("write_file", "append_file"):
+                return self._preview_confirm_write(name, args)
         return self._dispatch_tool(name, args)
 
     def _dispatch_tool(self, name: str, args: dict, *, internal: bool = False) -> str:
@@ -283,7 +292,6 @@ class AgentLoop:
         badge — used by the diff-preview flow to run code_edit's propose/apply
         passes, which drive their own confirmation.
         """
-        from agentforge.tools.routing import dispatch_mode, my_role
 
         # In-process tools (e.g., connector tools whose closures hold a live
         # connection's credentials) only exist in THIS process — never dispatch
@@ -394,6 +402,56 @@ class AgentLoop:
                 internal=True,
             )
         )
+
+    def _preview_confirm_write(self, tool_name: str, args: dict) -> str:
+        """Show a diff card and confirm before write_file/append_file writes."""
+        target = args.get("path", "")
+        content = args.get("content", "")
+        if not target:
+            return self._dispatch_tool(tool_name, args)
+
+        p = Path(target).expanduser().resolve()
+        try:
+            original = p.read_text(encoding="utf-8") if p.is_file() else ""
+        except Exception:
+            original = ""
+
+        new_content = (original + content) if tool_name == "append_file" else content
+        if new_content == original:
+            return f"No changes to {p}"
+
+        pre_hash = hashlib.sha256(original.encode("utf-8")).hexdigest()
+
+        save_snapshot(pre_hash=pre_hash, path=str(p), content=original, tool=tool_name)
+
+        old_lines = original.splitlines(keepends=True)
+        new_lines = new_content.splitlines(keepends=True)
+        diff_lines = list(difflib.unified_diff(old_lines, new_lines, fromfile=f"a/{p.name}", tofile=f"b/{p.name}"))
+        diff_text = "".join(diff_lines)
+        additions = sum(1 for ln in diff_lines if ln.startswith("+") and not ln.startswith("+++"))
+        deletions = sum(1 for ln in diff_lines if ln.startswith("-") and not ln.startswith("---"))
+
+        action = "edited" if original else "written"
+        self._registry.emit_file_diff(
+            {
+                "tool": tool_name,
+                "action": action,
+                "path": str(p),
+                "pre_hash": pre_hash,
+                "snapshot_id": pre_hash,
+                "post_hash": "",
+                "additions": additions,
+                "deletions": deletions,
+                "diff_text": diff_text,
+            }
+        )
+
+        verb = "Append to" if tool_name == "append_file" else ("Write to" if original else "Write new file")
+        prompt = f"{verb} {p.name}? (+{additions} -{deletions})"
+        if not self._registry.run_confirm(prompt):
+            return "Operation cancelled by user."
+
+        return self._dispatch_tool(tool_name, args, internal=True)
 
     @staticmethod
     def _parse_propose(text: str) -> dict | None:
