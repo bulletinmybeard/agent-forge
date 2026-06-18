@@ -24,15 +24,21 @@ from __future__ import annotations
 
 import concurrent.futures
 import contextvars
+import difflib
+import hashlib
 import os
 import re
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from chalkbox.logging.bridge import get_logger
+
+from agentforge.tools._file_snapshots import save_snapshot
+from agentforge.tools.routing import dispatch_mode, my_role
 
 from .client import AIClient
 from .config import get_config
@@ -272,32 +278,50 @@ class AgentLoop:
         # Diff-preview confirm: editing tools show a diff card and confirm
         # BEFORE writing, instead of the filename-only pre-execution prompt.
         # Only kicks in interactively (a confirm + diff emitter are wired).
-        if name == "code_edit" and self._registry.supports_preview_confirm():
-            return self._preview_confirm_edit(name, args)
+        if self._registry.supports_preview_confirm():
+            if name == "code_edit":
+                return self._preview_confirm_edit(name, args)
+            if name in ("write_file", "append_file"):
+                return self._preview_confirm_write(name, args)
+
+            if name in ("shell", "ssh") and args.get("command"):
+                from agentforge.tools.command_guard import get_guard
+
+                guard = get_guard()
+                if guard.is_destructive(args["command"]):
+                    if not self._registry.run_confirm(
+                        f"! Destructive shell command:\n  $ {args['command']}\nExecute anyway?"
+                    ):
+                        return "Operation cancelled by user."
+                    return self._dispatch_tool(name, args, skip_confirm=True)
+
         return self._dispatch_tool(name, args)
 
-    def _dispatch_tool(self, name: str, args: dict, *, internal: bool = False) -> str:
+    def _dispatch_tool(self, name: str, args: dict, *, internal: bool = False, skip_confirm: bool = False) -> str:
         """Route a tool to its worker (in-process / same-role / cross-role).
 
         ``internal=True`` skips the generic confirm gate and the tool_call
         badge — used by the diff-preview flow to run code_edit's propose/apply
         passes, which drive their own confirmation.
+
+        ``skip_confirm=True`` skips the confirm gate only (events still fire) —
+        used when the caller already ran the confirm at the agent level.
         """
-        from agentforge.tools.routing import dispatch_mode, my_role
+        _skip_confirm = internal or skip_confirm
 
         # In-process tools (e.g., connector tools whose closures hold a live
         # connection's credentials) only exist in THIS process — never dispatch
         # them to a worker whose registry never had them. Runs before the role
         # map so the catch-all `*`->local rule can't ship them off-host.
         if self._registry.is_in_process(name):
-            return self._registry.execute(name, args, skip_confirm=internal, skip_events=internal)
+            return self._registry.execute(name, args, skip_confirm=_skip_confirm, skip_events=internal)
 
         # Single-host / dev: run every tool in-process, no cross-role dispatch.
         # Avoids hanging on a role whose worker isn't running (the enqueue would
         # otherwise block until the SAQ timeout). registry.execute() handles
         # guard + confirm internally, same as the same-role fast path below.
         if dispatch_mode() == "in_process":
-            return self._registry.execute(name, args, skip_confirm=internal, skip_events=internal)
+            return self._registry.execute(name, args, skip_confirm=_skip_confirm, skip_events=internal)
 
         tool_role = self._registry.get_role(name)
         worker_role = my_role()
@@ -305,13 +329,13 @@ class AgentLoop:
         if tool_role == worker_role:
             # Fast path — same role, execute directly. registry.execute()
             # handles guard + confirm internally.
-            return self._registry.execute(name, args, skip_confirm=internal, skip_events=internal)
+            return self._registry.execute(name, args, skip_confirm=_skip_confirm, skip_events=internal)
 
         # Cross-role path: run guard + confirm on THIS side so the browser
         # prompt reaches the user. The remote worker's _check_confirm is a
         # no-op (no broker wired there) and would otherwise let destructive
         # commands through silently.
-        if not internal:
+        if not internal and not skip_confirm:
             cancelled, _guard = self._registry.check_confirmation(name, args)
             if cancelled:
                 return cancelled
@@ -384,16 +408,70 @@ class AgentLoop:
         )
 
         prompt = f"Apply edit to {parsed['path']}? (+{parsed['additions']} -{parsed['deletions']})"
-        if not self._registry.run_confirm(prompt):
+        confirmed = self._registry.run_confirm(prompt)
+        logger.info("[preview_confirm_edit] confirm result=%s for %s", confirmed, parsed["path"])
+        if not confirmed:
             return "Operation cancelled by user."
 
-        return str(
+        apply_result = str(
             self._dispatch_tool(
                 name,
                 {"file_path": args.get("file_path", ""), "instruction": "", "_apply_token": parsed["token"]},
                 internal=True,
             )
         )
+        logger.info("[preview_confirm_edit] apply result (first 200): %s", apply_result[:200])
+        return apply_result
+
+    def _preview_confirm_write(self, tool_name: str, args: dict) -> str:
+        """Show a diff card and confirm before write_file/append_file writes."""
+        target = args.get("path", "")
+        content = args.get("content", "")
+        if not target:
+            return self._dispatch_tool(tool_name, args)
+
+        p = Path(target).expanduser().resolve()
+        try:
+            original = p.read_text(encoding="utf-8") if p.is_file() else ""
+        except Exception:
+            original = ""
+
+        new_content = (original + content) if tool_name == "append_file" else content
+        if new_content == original:
+            return f"No changes to {p}"
+
+        pre_hash = hashlib.sha256(original.encode("utf-8")).hexdigest()
+
+        save_snapshot(pre_hash=pre_hash, path=str(p), content=original, tool=tool_name)
+
+        old_lines = original.splitlines(keepends=True)
+        new_lines = new_content.splitlines(keepends=True)
+        diff_lines = list(difflib.unified_diff(old_lines, new_lines, fromfile=f"a/{p.name}", tofile=f"b/{p.name}"))
+        diff_text = "".join(diff_lines)
+        additions = sum(1 for ln in diff_lines if ln.startswith("+") and not ln.startswith("+++"))
+        deletions = sum(1 for ln in diff_lines if ln.startswith("-") and not ln.startswith("---"))
+
+        action = "edited" if original else "written"
+        self._registry.emit_file_diff(
+            {
+                "tool": tool_name,
+                "action": action,
+                "path": str(p),
+                "pre_hash": pre_hash,
+                "snapshot_id": pre_hash,
+                "post_hash": "",
+                "additions": additions,
+                "deletions": deletions,
+                "diff_text": diff_text,
+            }
+        )
+
+        verb = "Append to" if tool_name == "append_file" else ("Write to" if original else "Write new file")
+        prompt = f"{verb} {p.name}? (+{additions} -{deletions})"
+        if not self._registry.run_confirm(prompt):
+            return "Operation cancelled by user."
+
+        return self._dispatch_tool(tool_name, args, internal=True)
 
     @staticmethod
     def _parse_propose(text: str) -> dict | None:
