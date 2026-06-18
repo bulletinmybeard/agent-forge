@@ -430,11 +430,11 @@ class AgentLoop:
         if not target:
             return self._dispatch_tool(tool_name, args)
 
+        raw = str(self._dispatch_tool("read_file", {"path": target}, internal=True))
+        is_error = raw.startswith("Error")
+        original = "" if is_error else raw
+
         p = Path(target).expanduser().resolve()
-        try:
-            original = p.read_text(encoding="utf-8") if p.is_file() else ""
-        except Exception:
-            original = ""
 
         new_content = (original + content) if tool_name == "append_file" else content
         if new_content == original:
@@ -471,7 +471,28 @@ class AgentLoop:
         if not self._registry.run_confirm(prompt):
             return "Operation cancelled by user."
 
-        return self._dispatch_tool(tool_name, args, internal=True)
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(new_content, encoding="utf-8")
+        except Exception as exc:
+            return f"Error writing file: {exc}"
+
+        post_hash = hashlib.sha256(new_content.encode("utf-8")).hexdigest()
+        real_diff = "".join(
+            difflib.unified_diff(
+                original.splitlines(keepends=True),
+                p.read_text(encoding="utf-8").splitlines(keepends=True),
+                fromfile=f"a/{p.name}",
+                tofile=f"b/{p.name}",
+            )
+        )
+        return (
+            f"✓ VERIFIED {action} {p.name} (+{additions} -{deletions})\n"
+            f"pre_hash={pre_hash}\n"
+            f"post_hash={post_hash}\n"
+            f"snapshot_id={pre_hash}\n"
+            f"{real_diff}"
+        )
 
     @staticmethod
     def _parse_propose(text: str) -> dict | None:

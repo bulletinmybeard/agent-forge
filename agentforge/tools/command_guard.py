@@ -76,6 +76,32 @@ _SAFE_PATTERNS = re.compile(
 # safe-looking prefix (`ls && docker system prune`) can't shortcut past it. Holds
 # even on fail-open. Boundary class keeps `confirm -f` etc. from matching `rm`.
 
+# ---------------------------------------------------------------------------
+# Hard-blocked commands (rejected outright, no confirm bypass)
+# ---------------------------------------------------------------------------
+# Git state-changing commands are blocked because:
+#   - `git init` creates .git/hooks/ with Perl sample scripts that trigger
+#     antivirus false positives (Defender: TurtlePerlsh.A!dha)
+#   - agents should never modify a user's repository state
+# Read-only git commands (status, log, diff, branch, show, remote, tag,
+# stash list) are explicitly allowed in _SAFE_PATTERNS above.
+
+_BLOCKED_PATTERNS = re.compile(
+    r"(?:^|[\s;&|`$(])"
+    r"git\s+(?:"
+    r"init|clone|add|stage|commit|push|pull|fetch|merge|rebase|cherry-pick"
+    r"|checkout|switch|restore|reset|clean|stash(?:\s+(?:push|pop|drop|apply|clear))"
+    r"|rm|mv|bisect|am|format-patch|apply|tag\s+(?:-[ad]|--delete)"
+    r"|branch\s+(?:-[dDmM]|--delete|--move)"
+    r"|remote\s+(?:add|remove|rm|rename|set-url)"
+    r"|submodule|subtree|worktree\s+(?:add|remove|prune)"
+    r"|config|hook|gc|prune|reflog\s+(?:delete|expire)"
+    r"|filter-branch|replace|notes"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
 _DESTRUCTIVE_PATTERNS = re.compile(
     r"(?:^|[\s;&|`$(])("
     r"rm\s+-[a-z]*[rf]"  # rm -rf / -r / -f (short flags)
@@ -92,7 +118,6 @@ _DESTRUCTIVE_PATTERNS = re.compile(
     r"|docker\s+(?:system\s+)?prune\b"  # docker (system) prune
     r"|docker\s+(?:volume|image|container|network)\s+(?:rm|prune)\b"
     r"|docker\s+rmi\b|docker\s+rm\s+-[a-z]*f"  # rmi / rm -f
-    r"|git\s+(?:reset\s+--hard|clean\s+-[a-z]*f|push\s+[^\n]*--force)"
     r"|sed\s+-[a-z]*i"  # sed -i / -i.bak (in-place file edit)
     r"|perl\s+-[a-z]*[pi][a-z]*\s+-[a-z]*[pi]"  # perl -pi (in-place)
     r"|:\(\)\s*\{.*\}\s*;\s*:"  # fork bomb
@@ -197,14 +222,18 @@ class CommandGuard:
         return self._client
 
     def classify(self, command: str) -> str:
-        """Classify a command as DESTRUCTIVE, SUDO, or SAFE.
+        """Classify a command as BLOCKED, DESTRUCTIVE, SUDO, or SAFE.
 
-        Returns one of: "destructive", "sudo", or "safe".
         Also sets self.last_source for metadata.
         """
         if not _is_enabled():
             self.last_source = "disabled"
             return "safe"
+
+        if _BLOCKED_PATTERNS.search(command):
+            logger.debug("[guard] BLOCKED: %s", command[:80])
+            self.last_source = "block-list"
+            return "blocked"
 
         # Deterministic backstop: catastrophic patterns are DESTRUCTIVE without
         # trusting the model — runs before the SAFE fast-path so a safe-looking

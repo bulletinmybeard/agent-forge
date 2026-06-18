@@ -391,6 +391,7 @@ class ToolRegistry:
 
             result = {
                 "source": guard.last_source,
+                "blocked": verdict == "blocked",
                 "destructive": verdict == "destructive",
                 "sudo_only": verdict == "sudo",
                 "auto_confirmed": False,
@@ -547,7 +548,18 @@ class ToolRegistry:
                 logger.info("Tool '%s' cancelled by user", func.__name__)
                 return "Operation cancelled by user."
 
-        # --- Path 2: dynamic CommandGuard for the shell tool ---
+        # --- Path 2a: hard-blocked commands (no confirm, no bypass) ---
+        if guard_result and guard_result.get("blocked"):
+            cmd = args.get("command", "???")
+            logger.warning("Blocked shell command (hard reject): %s", str(cmd)[:80])
+            return (
+                f"Error: this command is blocked by policy and cannot be executed.\n"
+                f"  $ {cmd}\n"
+                f"Git state-changing commands are not permitted. "
+                f"Use the read-only variants (git status, git log, git diff, etc.) instead."
+            )
+
+        # --- Path 2b: dynamic CommandGuard for the shell tool ---
         # Sudo-only commands are gated downstream by the interactive password
         # prompt (the prompt IS the consent), so we do NOT y/n-confirm them here.
         # Only destructive commands still require the confirm gate.
