@@ -4,6 +4,22 @@ All notable changes to AgentForge are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.7.0] - 2026-06-18
+
+### Added
+
+- Diff-preview confirmation gate for `write_file` and `append_file` tools -- shows a unified diff and requires user approval before writing, matching the existing `code_edit` flow
+- Agent-level destructive shell/ssh guard: `sed -i`, `perl -pi`, and other in-place edits are intercepted via `run_confirm()` before execution
+- `sed -i` / `perl -pi` patterns added to CommandGuard's deterministic `_DESTRUCTIVE_PATTERNS` regex
+- `sed -i` / `perl -pi` added to the LLM classification prompt (`command_guard.md`) as explicit destructive examples
+- `skip_confirm` parameter on `_dispatch_tool()` for callers that already ran confirmation at the agent level
+
+### Fixed
+
+- Cross-role dispatch now respects `skip_confirm` separately from `internal`, preventing double-confirmation on pre-gated tools
+
 ## [0.6.0] - 2026-06-14
 
 ### Added
