@@ -283,29 +283,45 @@ class AgentLoop:
                 return self._preview_confirm_edit(name, args)
             if name in ("write_file", "append_file"):
                 return self._preview_confirm_write(name, args)
+
+            if name in ("shell", "ssh") and args.get("command"):
+                from agentforge.tools.command_guard import get_guard
+
+                guard = get_guard()
+                if guard.is_destructive(args["command"]):
+                    if not self._registry.run_confirm(
+                        f"! Destructive shell command:\n  $ {args['command']}\nExecute anyway?"
+                    ):
+                        return "Operation cancelled by user."
+                    return self._dispatch_tool(name, args, skip_confirm=True)
+
         return self._dispatch_tool(name, args)
 
-    def _dispatch_tool(self, name: str, args: dict, *, internal: bool = False) -> str:
+    def _dispatch_tool(self, name: str, args: dict, *, internal: bool = False, skip_confirm: bool = False) -> str:
         """Route a tool to its worker (in-process / same-role / cross-role).
 
         ``internal=True`` skips the generic confirm gate and the tool_call
         badge — used by the diff-preview flow to run code_edit's propose/apply
         passes, which drive their own confirmation.
+
+        ``skip_confirm=True`` skips the confirm gate only (events still fire) —
+        used when the caller already ran the confirm at the agent level.
         """
+        _skip_confirm = internal or skip_confirm
 
         # In-process tools (e.g., connector tools whose closures hold a live
         # connection's credentials) only exist in THIS process — never dispatch
         # them to a worker whose registry never had them. Runs before the role
         # map so the catch-all `*`->local rule can't ship them off-host.
         if self._registry.is_in_process(name):
-            return self._registry.execute(name, args, skip_confirm=internal, skip_events=internal)
+            return self._registry.execute(name, args, skip_confirm=_skip_confirm, skip_events=internal)
 
         # Single-host / dev: run every tool in-process, no cross-role dispatch.
         # Avoids hanging on a role whose worker isn't running (the enqueue would
         # otherwise block until the SAQ timeout). registry.execute() handles
         # guard + confirm internally, same as the same-role fast path below.
         if dispatch_mode() == "in_process":
-            return self._registry.execute(name, args, skip_confirm=internal, skip_events=internal)
+            return self._registry.execute(name, args, skip_confirm=_skip_confirm, skip_events=internal)
 
         tool_role = self._registry.get_role(name)
         worker_role = my_role()
@@ -313,13 +329,13 @@ class AgentLoop:
         if tool_role == worker_role:
             # Fast path — same role, execute directly. registry.execute()
             # handles guard + confirm internally.
-            return self._registry.execute(name, args, skip_confirm=internal, skip_events=internal)
+            return self._registry.execute(name, args, skip_confirm=_skip_confirm, skip_events=internal)
 
         # Cross-role path: run guard + confirm on THIS side so the browser
         # prompt reaches the user. The remote worker's _check_confirm is a
         # no-op (no broker wired there) and would otherwise let destructive
         # commands through silently.
-        if not internal:
+        if not internal and not skip_confirm:
             cancelled, _guard = self._registry.check_confirmation(name, args)
             if cancelled:
                 return cancelled
@@ -392,16 +408,20 @@ class AgentLoop:
         )
 
         prompt = f"Apply edit to {parsed['path']}? (+{parsed['additions']} -{parsed['deletions']})"
-        if not self._registry.run_confirm(prompt):
+        confirmed = self._registry.run_confirm(prompt)
+        logger.info("[preview_confirm_edit] confirm result=%s for %s", confirmed, parsed["path"])
+        if not confirmed:
             return "Operation cancelled by user."
 
-        return str(
+        apply_result = str(
             self._dispatch_tool(
                 name,
                 {"file_path": args.get("file_path", ""), "instruction": "", "_apply_token": parsed["token"]},
                 internal=True,
             )
         )
+        logger.info("[preview_confirm_edit] apply result (first 200): %s", apply_result[:200])
+        return apply_result
 
     def _preview_confirm_write(self, tool_name: str, args: dict) -> str:
         """Show a diff card and confirm before write_file/append_file writes."""
