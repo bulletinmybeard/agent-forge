@@ -25,7 +25,9 @@ import time
 
 import httpx
 
-from web.server.queue.jobs_common import internal_auth_headers
+from app.models.knowledge import CreateEntryRequest
+from app.services.knowledge_service import knowledge_service
+from web.server.queue.jobs_common import _post_status, internal_auth_headers
 
 logger = logging.getLogger(__name__)
 
@@ -739,3 +741,27 @@ async def _store_snapshot(
         )
     except Exception as exc:
         logger.warning("Failed to store monitor snapshot: %s", exc)
+
+
+async def index_knowledge_batch_saq(ctx: dict, *, job_id: str, entries_json: str) -> dict:
+    """Index a batch of knowledge entries (dispatched from /knowledge/entries/batch)."""
+
+    try:
+        raw_entries = json.loads(entries_json)
+    except (json.JSONDecodeError, TypeError) as e:
+        logger.error("Knowledge batch job %s: invalid JSON: %s", job_id, e)
+        _post_status(job_id, "failed", error=str(e))
+        return {"error": str(e), "errors": 1}
+
+    try:
+        entries = [CreateEntryRequest(**entry) for entry in raw_entries]
+    except Exception as e:
+        logger.error("Knowledge batch job %s: validation failed: %s", job_id, e)
+        _post_status(job_id, "failed", error=str(e))
+        return {"error": str(e), "errors": len(raw_entries)}
+
+    _post_status(job_id, "processing")
+    result = knowledge_service.process_batch(entries)
+    _post_status(job_id, "completed")
+    logger.info("Knowledge batch job %s: %s", job_id, result)
+    return result

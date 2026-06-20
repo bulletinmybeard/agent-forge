@@ -33,6 +33,7 @@ These projects use AgentForge as their backend and don't run without it:
 - **Agent loop**: think -> act -> observe with tool calling, error recovery, and optional web-search escalation.
 - **Tools**: filesystem, shell, system info, Docker, Git, SSH, archives, network diagnostics, web search/fetch/render, media, code editing, and more.
 - **RAG**: index OpenAPI/SQL schemas, source code, docs, and transcripts into Qdrant. Query with refinement, reranking, and dedup.
+- **Knowledge Database**: personal snippet/command/URL/config store with one-call ingest, semantic search, tag faceting, and smart updates (re-embeds only when content changes). Dedicated Qdrant collection, same embedding pipeline.
 - **Connectors**: link external accounts as agent tools. Gmail, Drive, BigQuery, and YouTube through one Google OAuth client, plus GitLab and GitHub via personal access tokens. Multi-account, in-process, read-only by default.
 - **Pluggable**: add your own tools via a `register(registry)` entry point. No fork needed.
 - **Pipelines**: typed multi-step runner, parallel fan-out, and discovery.
@@ -42,7 +43,7 @@ These projects use AgentForge as their backend and don't run without it:
 Operator guides live in [`docs/`](docs/README.md):
 
 - [Stack architecture](docs/architecture.md): how the containers fit together: services, ports, worker localities, data stores, and request flow. **Start here.**
-- [HTTP API](docs/api.md): REST + the `/ws/chat` agent WebSocket, memory endpoints, and the live OpenAPI spec.
+- [HTTP API](docs/api.md): REST + the `/ws/chat` agent WebSocket, memory endpoints, the Knowledge Database (`/knowledge/*`), and the live OpenAPI spec.
 - [Modes](docs/modes.md): the `@mode` prefixes (built-in modes, custom agents, connectors) and when to use each.
 - [Tools](docs/tools.md): every built-in agent tool by category, plus locality and confirmation gates.
 - [Chunking and indexing into Qdrant](chunking/README.md): the mappers (OpenAPI, SQL/tbls, live DB, code, CLI docs, Markdown), the index pipeline, the `/indexer/*` + `/search/*` endpoints, and dedup/drift QA.

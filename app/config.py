@@ -748,6 +748,20 @@ class SlackSettings(BaseSettings):
     reply_in_thread: bool = Field(default=_yaml.get("slack", {}).get("reply_in_thread", True))
 
 
+class KnowledgeSettings(BaseSettings):
+    """Personal knowledge database.
+    Dedicated Qdrant collection for user-created entries.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="KNOWLEDGE_")
+
+    collection_name: str = Field(default=_yaml.get("knowledge", {}).get("collection_name", "knowledge_entries"))
+    dedup_threshold: float = Field(default=_yaml.get("knowledge", {}).get("dedup_threshold", 0.92))
+    composite_template: str = Field(
+        default=_yaml.get("knowledge", {}).get("composite_template", "{title}\n{notes}\n{content}")
+    )
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AGENTFORGE_")
 
@@ -784,6 +798,7 @@ class Settings(BaseSettings):
     hashtag_routes: HashtagRoutesSettings = Field(default_factory=HashtagRoutesSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     slack: SlackSettings = Field(default_factory=SlackSettings)
+    knowledge: KnowledgeSettings = Field(default_factory=KnowledgeSettings)
 
 
 settings = Settings()
