@@ -75,6 +75,7 @@ class KnowledgeService:
             "source_url": request.source_url,
             "notes": request.notes,
             "project": request.project,
+            "metadata": request.metadata,
             "content_hash": content_hash,
             "created_at": now,
             "updated_at": now,
@@ -147,6 +148,7 @@ class KnowledgeService:
                     "source_url": entry.source_url,
                     "notes": entry.notes,
                     "project": entry.project,
+                    "metadata": entry.metadata,
                     "content_hash": chunk["content_hash"],
                     "created_at": now,
                     "updated_at": now,
@@ -244,6 +246,7 @@ class KnowledgeService:
                     "source_url": r["payload"].get("source_url"),
                     "notes": r["payload"].get("notes"),
                     "project": r["payload"].get("project", "Uncategorized"),
+                    "metadata": r["payload"].get("metadata"),
                     "created_at": r["payload"].get("created_at", ""),
                 }
                 for r in results
@@ -278,6 +281,7 @@ class KnowledgeService:
             "source_url": payload.get("source_url"),
             "notes": payload.get("notes"),
             "project": payload.get("project", "Uncategorized"),
+            "metadata": payload.get("metadata"),
             "created_at": payload.get("created_at", ""),
             "updated_at": payload.get("updated_at", ""),
         }

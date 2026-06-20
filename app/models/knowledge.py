@@ -128,6 +128,7 @@ class SearchResultResponse(BaseModel):
     source_url: str | None = None
     notes: str | None = None
     project: str = "Uncategorized"
+    metadata: dict | None = None
     created_at: str
 
 
