@@ -60,4 +60,24 @@ class EmbeddingService:
             return settings.embedding.dimension
 
 
-embedding_service = EmbeddingService()
+_embedding_service: EmbeddingService | None = None
+
+
+def get_embedding_service() -> EmbeddingService:
+    """Lazily build the shared EmbeddingService.
+
+    Deferred so importing this module has no side effects — the constructor
+    needs live ollama config, which isn't present in CI/test/lint contexts.
+    """
+    global _embedding_service
+    if _embedding_service is None:
+        _embedding_service = EmbeddingService()
+    return _embedding_service
+
+
+def __getattr__(name: str):
+    # PEP 562: keep `from app.services.embedding_service import embedding_service`
+    # working for existing callers, but build it lazily on first access.
+    if name == "embedding_service":
+        return get_embedding_service()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -21,8 +21,7 @@ from app.models.knowledge import (
 )
 from app.services.dedup_service import DedupService
 from app.services.dedup_service import dedup_service as _default_dedup
-from app.services.embedding_service import EmbeddingService
-from app.services.embedding_service import embedding_service as _default_embed
+from app.services.embedding_service import EmbeddingService, get_embedding_service
 from app.services.knowledge_vector_service import (
     KnowledgeVectorService,
 )
@@ -44,7 +43,7 @@ class KnowledgeService:
         dedup_service: DedupService | None = None,
     ) -> None:
         self._vector = vector_service or _default_vector
-        self._embed = embedding_service or _default_embed
+        self._embed = embedding_service or get_embedding_service()
         self._dedup = dedup_service or _default_dedup
 
     def _build_composite_text(self, title: str, notes: str | None, content: str) -> str:
