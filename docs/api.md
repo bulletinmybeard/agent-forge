@@ -110,7 +110,9 @@ Stored in a dedicated Qdrant collection (`knowledge_entries`), separate from the
   "tags": ["docker", "cleanup", "PROJ-456"], // optional, auto-lowercased
   "source_url": "https://docs.docker.com/...", // optional
   "notes": "Safe to run -- only removes unattached volumes", // optional
-  "project": "AgentForge"                    // optional, default "Uncategorized"
+  "project": "AgentForge",                   // optional, default "Uncategorized"
+  "metadata": { "filename": "cleanup.md" },  // optional, free-form object stored on the point
+  "parent_id": "a1b2c3d4-..."                // optional, link this entry as a child of another (attachments)
 }
 ```
 
@@ -167,6 +169,8 @@ Response (`SearchResponse`):
       "source_url": "https://docs.docker.com/...",
       "notes": "Safe to run -- ...",
       "project": "AgentForge",
+      "metadata": null,
+      "parent_id": null,
       "created_at": "2026-06-20T14:30:00Z"
     }
   ],
@@ -197,6 +201,64 @@ Response (`SearchResponse`):
   "tag_count": 67
 }
 ```
+
+### Filter, passages & attachments
+
+| Method | Path                                  | Purpose                                                                 |
+| ------ | ------------------------------------- | ---------------------------------------------------------------------- |
+| POST   | `/knowledge/filter`                   | List entries by metadata filters — no vector search, no query needed.   |
+| POST   | `/knowledge/entries/{id}/context`     | Most relevant passages from one entry for a query (page-chunk search).  |
+| POST   | `/knowledge/entries/{id}/rechunk`     | Rebuild page chunks for an entry indexed before chunking existed.        |
+| POST   | `/knowledge/extract`                  | Extract text from an uploaded file (PDF, text, code, config).           |
+
+`POST /knowledge/filter` body (`FilterRequest`) — every field optional; entries are matched, not ranked:
+
+```jsonc
+{
+  "content_type": "note",      // optional
+  "tags": ["docker"],          // optional, OR-matched
+  "project": "AgentForge",     // optional
+  "parent_id": "a1b2c3d4-...", // optional — list the children of a parent entry
+  "limit": 50                  // optional, default 50, max 200
+}
+```
+
+Response: `{ "results": [ ...EntryResponse ], "count": N }`.
+
+`POST /knowledge/entries/{id}/context` body (`ContextRequest`): `{ "query": "...", "top_k": 8 }` (`top_k` 1-30, default 8). Returns the best-matching passages plus adjacent pages for context:
+
+```jsonc
+{
+  "entry_title": "NL-ix Payslips 2025",
+  "total_chunks": 13,
+  "passages": [
+    {
+      "text": "...",
+      "score": 0.91,        // 0.0 for adjacent-context pages
+      "position": 12,
+      "page_number": 12,
+      "is_adjacent": false  // true when included only as neighbouring context
+    }
+  ]
+}
+```
+
+`POST /knowledge/extract` takes a `multipart/form-data` upload (`file`). PDFs go through pdfplumber (falling back to the `pdftotext` CLI); everything else is decoded as UTF-8. Returns the extracted text plus file metadata:
+
+```jsonc
+{
+  "text": "...extracted text...",
+  "metadata": {
+    "filename": "report.pdf",
+    "extension": ".pdf",
+    "size_bytes": 20480,
+    "mime_type": "application/pdf",
+    "pages": 4               // PDFs only
+  }
+}
+```
+
+`404` on an unknown entry id (`context`, `rechunk`); `400`/`422` on a missing filename or undecodable/empty upload (`extract`).
 
 ## Health
 

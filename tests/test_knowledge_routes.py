@@ -18,13 +18,7 @@ def mock_knowledge_service():
 
 
 @pytest.fixture()
-def mock_knowledge_vector_service():
-    with patch("app.routes.knowledge.knowledge_vector_service") as mock:
-        yield mock
-
-
-@pytest.fixture()
-def client(mock_knowledge_service, mock_knowledge_vector_service):
+def client(mock_knowledge_service):
     with (
         patch("app.services.knowledge_vector_service.knowledge_vector_service") as mock_kv,
         patch("app.services.vector_service.vector_service") as mock_vs,

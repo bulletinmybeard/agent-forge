@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-21
+
+### Added
+
+- **Knowledge Database** (`/knowledge/*` on `agentforge-api`): a personal store for user-created entries (`code`, `command`, `url`, `config`, `error_solution`, `note`, `api_example`) in its own Qdrant collection (`knowledge_entries`), separate from the RAG index. CRUD, bulk create/delete, and semantic search with tag/type/project filters, tag faceting, and stats
+- Smart re-indexing on update: re-embeds only when `title`, `content`, or `notes` change; metadata-only edits skip the embedding call
+- Parent/child attachments via `parent_id`, with per-page chunking so a parent entry and its attached documents are searchable as passages
+- `POST /knowledge/filter`: list entries by metadata filters (incl. `parent_id`) without a vector search
+- `POST /knowledge/entries/{id}/context`: most relevant passages from one entry for a query, plus adjacent pages for context
+- `POST /knowledge/entries/{id}/rechunk`: rebuild page chunks for entries indexed before chunking existed
+- `POST /knowledge/extract`: server-side text extraction from uploaded files (PDF via pdfplumber, `pdftotext` fallback; text/code/config decoded as UTF-8), reusing AgentForge's extraction path instead of frontend JS
+- `metadata` free-form field on all knowledge points (request + response)
+- `knowledge` config block: `collection_name`, `dedup_threshold`, `composite_template` (env prefix `KNOWLEDGE_`)
+- SAQ batch job for bulk knowledge ingestion
+
 ## [0.7.0] - 2026-06-18
 
 ### Added
