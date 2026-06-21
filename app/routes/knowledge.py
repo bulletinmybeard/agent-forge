@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Response, UploadFile
+from pydantic import BaseModel, Field
 
 from app.models.knowledge import (
     BatchCreateRequest,
@@ -21,6 +22,12 @@ from app.models.knowledge import (
     UpdateEntryRequest,
 )
 from app.services.knowledge_service import knowledge_service
+
+
+class ContextRequest(BaseModel):
+    query: str
+    top_k: int = Field(default=8, ge=1, le=30)
+
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +95,26 @@ def get_tags() -> dict:
     return {"tags": tags}
 
 
+class FilterRequest(BaseModel):
+    content_type: str | None = None
+    tags: list[str] | None = None
+    project: str | None = None
+    parent_id: str | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+@router.post("/filter")
+def filter_entries(request: FilterRequest) -> dict:
+    """Return entries matching filters without vector search."""
+    return knowledge_service.filter_entries(
+        limit=request.limit,
+        content_type=request.content_type,
+        tags=request.tags,
+        project=request.project,
+        parent_id=request.parent_id,
+    )
+
+
 @router.post("/search/smart")
 def search_smart(request: KnowledgeSearchRequest) -> dict:
     result = knowledge_service.search(request)
@@ -99,6 +126,24 @@ def search_smart(request: KnowledgeSearchRequest) -> dict:
 def get_stats() -> StatsResponse:
     result = knowledge_service.get_stats()
     return StatsResponse(**result)
+
+
+@router.post("/entries/{entry_id}/context")
+def get_entry_context(entry_id: str, request: ContextRequest) -> dict:
+    """Retrieve the most relevant passages from an entry for a given query."""
+    result = knowledge_service.get_context(entry_id, request.query, top_k=request.top_k)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return result
+
+
+@router.post("/entries/{entry_id}/rechunk")
+def rechunk_entry(entry_id: str) -> dict:
+    """Re-create page chunks for an existing entry (for entries indexed before chunking was added)."""
+    result = knowledge_service.rechunk_entry(entry_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return result
 
 
 @router.post("/extract")

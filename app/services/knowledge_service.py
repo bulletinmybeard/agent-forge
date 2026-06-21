@@ -5,6 +5,9 @@ Orchestrates: validate -> hash -> composite text -> embed -> dedup -> upsert.
 
 import hashlib
 import logging
+import math
+import re
+import threading
 from datetime import datetime, timezone
 
 from qdrant_client.models import PointStruct
@@ -30,6 +33,7 @@ from app.services.knowledge_vector_service import (
 logger = logging.getLogger(__name__)
 
 REEMBED_FIELDS = {"content", "title", "notes"}
+PAGE_MARKER_RE = re.compile(r"---\s*Page\s+(\d+)\s*---")
 
 
 class KnowledgeService:
@@ -65,6 +69,9 @@ class KnowledgeService:
         composite_text = self._build_composite_text(request.title, request.notes, request.content)
         vector = self._embed.embed(composite_text)
 
+        pages = self._split_pages(request.content)
+        has_chunks = len(pages) > 1
+
         payload = {
             "text": composite_text,
             "title": request.title,
@@ -76,14 +83,26 @@ class KnowledgeService:
             "notes": request.notes,
             "project": request.project,
             "metadata": request.metadata,
+            "parent_id": request.parent_id,
             "content_hash": content_hash,
             "created_at": now,
             "updated_at": now,
             "indexed_at": now,
         }
 
+        if has_chunks:
+            payload["has_chunks"] = True
+            payload["chunk_count"] = len(pages)
+
         point = PointStruct(id=point_id, vector=vector, payload=payload)
         self._vector.upsert_batch([point])
+
+        if has_chunks:
+            threading.Thread(
+                target=self._create_page_chunks,
+                args=(point_id, pages, payload, now),
+                daemon=True,
+            ).start()
 
         return self._payload_to_response(point_id, payload)
 
@@ -149,6 +168,7 @@ class KnowledgeService:
                     "notes": entry.notes,
                     "project": entry.project,
                     "metadata": entry.metadata,
+                    "parent_id": entry.parent_id,
                     "content_hash": chunk["content_hash"],
                     "created_at": now,
                     "updated_at": now,
@@ -201,15 +221,33 @@ class KnowledgeService:
             if "content" in updates:
                 new_point_id = self._vector.generate_point_id(payload["content_hash"])
                 if new_point_id != point_id:
+                    self._vector.delete_by_parent(point_id)
                     self._vector.delete_point(point_id)
+
+            # Re-create page chunks if content changed
+            if "content" in updates:
+                self._vector.delete_by_parent(new_point_id)
+                pages = self._split_pages(payload["content"])
+                if len(pages) > 1:
+                    payload["has_chunks"] = True
+                    payload["chunk_count"] = len(pages)
+                else:
+                    payload.pop("has_chunks", None)
+                    payload.pop("chunk_count", None)
+
             point = PointStruct(id=new_point_id, vector=vector, payload=payload)
             self._vector.upsert_batch([point])
+
+            if "content" in updates and payload.get("has_chunks"):
+                self._create_page_chunks(new_point_id, self._split_pages(payload["content"]), payload, now)
+
             return self._payload_to_response(new_point_id, payload)
 
         self._vector.set_payload(point_id, payload)
         return self._payload_to_response(point_id, payload)
 
     def delete_entry(self, point_id: str) -> None:
+        self._vector.delete_by_parent(point_id)
         self._vector.delete_point(point_id)
 
     def delete_by_filter(self, request: BulkDeleteRequest) -> dict:
@@ -247,10 +285,346 @@ class KnowledgeService:
                     "notes": r["payload"].get("notes"),
                     "project": r["payload"].get("project", "Uncategorized"),
                     "metadata": r["payload"].get("metadata"),
+                    "parent_id": r["payload"].get("parent_id"),
                     "created_at": r["payload"].get("created_at", ""),
                 }
                 for r in results
             ],
+            "count": len(results),
+        }
+
+    def get_context(self, point_id: str, query: str, top_k: int = 8, chunk_size: int = 500) -> dict | None:
+        """Retrieve the most relevant passages from an entry.
+
+        For entries with page chunks: native Qdrant vector search filtered by
+        parent_id, plus adjacent pages for context.
+        For entries without chunks: BM25 pre-filter + semantic re-ranking fallback.
+        """
+        entry = self._vector.get_by_id(point_id)
+        if not entry:
+            return None
+
+        payload = entry["payload"]
+        content = payload.get("content", "")
+        if not content.strip():
+            return {"passages": [], "entry_title": payload.get("title", "")}
+
+        if payload.get("has_chunks"):
+            return self._get_context_from_chunks(point_id, query, top_k, payload)
+
+        return self._get_context_bm25(content, query, top_k, chunk_size, payload)
+
+    def _get_context_from_chunks(self, parent_id: str, query: str, top_k: int, payload: dict) -> dict:
+        """Use native Qdrant vector search across page chunks."""
+        query_vector = self._embed.embed(query)
+
+        hits = self._vector.search_chunks_by_parent(parent_id, query_vector, limit=top_k)
+        if not hits:
+            logger.info("get_context_chunks: no vector hits for parent=%s", parent_id)
+            return {
+                "passages": [],
+                "entry_title": payload.get("title", ""),
+                "total_chunks": payload.get("chunk_count", 0),
+            }
+
+        # Collect matched page numbers + adjacent pages
+        matched_pages = set()
+        for hit in hits:
+            page_num = hit["payload"].get("page_number", 0)
+            matched_pages.add(page_num)
+            matched_pages.add(page_num - 1)
+            matched_pages.add(page_num + 1)
+        matched_pages.discard(0)
+
+        total_pages = payload.get("chunk_count", 0)
+        if total_pages:
+            matched_pages = {p for p in matched_pages if p <= total_pages}
+
+        # Fetch adjacent pages that weren't in the search results
+        hit_pages = {h["payload"].get("page_number", 0) for h in hits}
+        adjacent_needed = matched_pages - hit_pages
+
+        all_pages = {h["payload"].get("page_number", 0): h for h in hits}
+
+        if adjacent_needed:
+            all_chunks = self._vector.get_chunks_by_parent(parent_id)
+            for chunk in all_chunks:
+                pn = chunk["payload"].get("page_number", 0)
+                if pn in adjacent_needed and pn not in all_pages:
+                    all_pages[pn] = chunk
+
+        sorted_pages = sorted(all_pages.items(), key=lambda x: x[0])
+
+        passages = []
+        for page_num, page_data in sorted_pages:
+            score = page_data.get("score", 0.0)
+            is_adjacent = page_num not in hit_pages
+            passages.append(
+                {
+                    "text": page_data["payload"].get("content", ""),
+                    "score": round(score, 4) if score else 0.0,
+                    "position": page_num,
+                    "page_number": page_num,
+                    "is_adjacent": is_adjacent,
+                }
+            )
+
+        logger.info(
+            "get_context_chunks: %d passages (%d matched + %d adjacent) from %d total pages",
+            len(passages),
+            len(hit_pages),
+            len(passages) - len(hit_pages),
+            total_pages,
+        )
+
+        return {
+            "passages": passages,
+            "entry_title": payload.get("title", ""),
+            "total_chunks": total_pages,
+        }
+
+    def _get_context_bm25(self, content: str, query: str, top_k: int, chunk_size: int, payload: dict) -> dict:
+        """Fallback: BM25 pre-filter + semantic re-ranking for non-chunked entries."""
+        chunks = self._chunk_content(content, chunk_size)
+        if not chunks:
+            return {"passages": [], "entry_title": payload.get("title", "")}
+
+        logger.info("get_context_bm25: %d chunks from %d chars, query=%r", len(chunks), len(content), query[:80])
+
+        candidates = self._bm25_prefilter(chunks, query, 15)
+        if not candidates:
+            return {"passages": [], "entry_title": payload.get("title", ""), "total_chunks": len(chunks)}
+
+        texts_to_embed = [query] + [c["text"] for c in candidates]
+        vectors = self._embed.embed_batch(texts_to_embed)
+        query_vec = vectors[0]
+
+        scored = []
+        for i, chunk_vec in enumerate(vectors[1:]):
+            sim = self._cosine_similarity(query_vec, chunk_vec)
+            scored.append((sim, candidates[i]))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top = scored[:top_k]
+        top.sort(key=lambda x: x[1]["index"])
+
+        return {
+            "passages": [
+                {"text": item["text"], "score": round(score, 4), "position": item["index"]} for score, item in top
+            ],
+            "entry_title": payload.get("title", ""),
+            "total_chunks": len(chunks),
+        }
+
+    _MIN_PAGE_CHARS = 50
+    _MERGE_THRESHOLD = 200
+
+    @staticmethod
+    def _split_pages(content: str) -> list[dict]:
+        """Split content on page markers, merging short pages into neighbors."""
+        parts = PAGE_MARKER_RE.split(content)
+        if len(parts) <= 1:
+            return []
+
+        raw_pages = []
+        for i in range(1, len(parts), 2):
+            page_num = int(parts[i])
+            text = parts[i + 1].strip() if i + 1 < len(parts) else ""
+            if text:
+                raw_pages.append({"page_number": page_num, "text": text})
+
+        if not raw_pages:
+            return []
+
+        # Merge short pages into the previous chunk to reduce embedding calls
+        merged = [raw_pages[0]]
+        for page in raw_pages[1:]:
+            prev = merged[-1]
+            if (
+                len(prev["text"]) < KnowledgeService._MERGE_THRESHOLD
+                or len(page["text"]) < KnowledgeService._MIN_PAGE_CHARS
+            ):
+                merged[-1] = {
+                    "page_number": prev["page_number"],
+                    "text": prev["text"] + "\n\n" + page["text"],
+                }
+            else:
+                merged.append(page)
+
+        # Drop any final chunk that's too short
+        return [p for p in merged if len(p["text"]) >= KnowledgeService._MIN_PAGE_CHARS]
+
+    _EMBED_BATCH_SIZE = 20
+
+    def _create_page_chunks(
+        self,
+        parent_id: str,
+        pages: list[dict],
+        parent_payload: dict,
+        now: str,
+    ) -> None:
+        """Create individual Qdrant points for each page of a document."""
+        total_pages = len(pages)
+        title = parent_payload.get("title", "")
+        upserted = 0
+
+        logger.info(
+            "Creating %d page chunks for parent=%s (batches of %d)", total_pages, parent_id, self._EMBED_BATCH_SIZE
+        )
+
+        for batch_start in range(0, len(pages), self._EMBED_BATCH_SIZE):
+            batch_pages = pages[batch_start : batch_start + self._EMBED_BATCH_SIZE]
+            batch_texts = [p["text"] for p in batch_pages]
+            logger.info(
+                "Embedding+upserting batch %d-%d of %d pages",
+                batch_start + 1,
+                batch_start + len(batch_texts),
+                total_pages,
+            )
+
+            try:
+                batch_embeddings = self._embed.embed_batch(batch_texts)
+            except Exception as e:
+                logger.error("Chunk embedding failed for batch %d: %s", batch_start, e)
+                continue
+
+            points = []
+            for i, page in enumerate(batch_pages):
+                chunk_hash = self._compute_content_hash(f"{parent_id}:page:{page['page_number']}")
+                chunk_id = self._vector.generate_point_id(chunk_hash)
+
+                payload = {
+                    "text": page["text"],
+                    "title": f"{title} (Page {page['page_number']})",
+                    "content": page["text"],
+                    "content_type": parent_payload.get("content_type", ""),
+                    "language": parent_payload.get("language"),
+                    "tags": parent_payload.get("tags", []),
+                    "source_url": parent_payload.get("source_url"),
+                    "project": parent_payload.get("project", "Uncategorized"),
+                    "parent_id": parent_id,
+                    "page_number": page["page_number"],
+                    "total_pages": total_pages,
+                    "is_chunk": True,
+                    "content_hash": chunk_hash,
+                    "created_at": now,
+                    "updated_at": now,
+                    "indexed_at": now,
+                }
+
+                points.append(PointStruct(id=chunk_id, vector=batch_embeddings[i], payload=payload))
+
+            self._vector.upsert_batch(points)
+            upserted += len(points)
+
+        logger.info("Finished: upserted %d page chunks for parent=%s", upserted, parent_id)
+
+    @staticmethod
+    def _bm25_prefilter(chunks: list[dict], query: str, limit: int) -> list[dict]:
+        """Score chunks by term frequency and return the top candidates."""
+        terms = re.findall(r"\w{2,}", query.lower())
+        if not terms:
+            return chunks[:limit]
+
+        scored = []
+        for chunk in chunks:
+            lower = chunk["text"].lower()
+            score = sum(lower.count(t) for t in terms)
+            if score > 0:
+                scored.append((score, chunk))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [c for _, c in scored[:limit]]
+
+    @staticmethod
+    def _chunk_content(content: str, target_size: int = 500) -> list[dict]:
+        """Split content into chunks on page markers or paragraph boundaries."""
+        pages = re.split(r"---\s*Page\s+\d+\s*---", content)
+        chunks = []
+        idx = 0
+
+        for page in pages:
+            page = page.strip()
+            if not page:
+                continue
+            paragraphs = re.split(r"\n{2,}", page)
+            current = ""
+            for para in paragraphs:
+                para = para.strip()
+                if not para:
+                    continue
+                if current and len(current) + len(para) > target_size:
+                    chunks.append({"text": current.strip(), "index": idx})
+                    idx += 1
+                    current = para
+                else:
+                    current = f"{current}\n\n{para}" if current else para
+
+            if current.strip():
+                chunks.append({"text": current.strip(), "index": idx})
+                idx += 1
+
+        return chunks
+
+    @staticmethod
+    def _cosine_similarity(a: list[float], b: list[float]) -> float:
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(x * x for x in b))
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return dot / (norm_a * norm_b)
+
+    def rechunk_entry(self, point_id: str) -> dict | None:
+        """Re-create page chunks for an existing entry."""
+        entry = self._vector.get_by_id(point_id)
+        if not entry:
+            return None
+
+        payload = dict(entry["payload"])
+        content = payload.get("content", "")
+        pages = self._split_pages(content)
+
+        # Delete existing chunks
+        self._vector.delete_by_parent(point_id)
+
+        if len(pages) <= 1:
+            payload.pop("has_chunks", None)
+            payload.pop("chunk_count", None)
+            self._vector.set_payload(point_id, payload)
+            return {"status": "no_pages", "chunks_created": 0}
+
+        now = datetime.now(timezone.utc).isoformat()
+        payload["has_chunks"] = True
+        payload["chunk_count"] = len(pages)
+        self._vector.set_payload(point_id, payload)
+
+        threading.Thread(
+            target=self._create_page_chunks,
+            args=(point_id, pages, payload, now),
+            daemon=True,
+        ).start()
+
+        return {"status": "ok", "chunks_creating": len(pages), "entry_id": point_id}
+
+    def filter_entries(
+        self,
+        limit: int = 50,
+        content_type: str | None = None,
+        tags: list[str] | None = None,
+        project: str | None = None,
+        parent_id: str | None = None,
+    ) -> dict:
+        """Return entries matching filters (no vector search)."""
+        results = self._vector.scroll_by_filter(
+            limit=limit,
+            content_type=content_type,
+            tags=tags,
+            project=project,
+            parent_id=parent_id,
+        )
+        return {
+            "results": [self._payload_to_response(r["id"], r["payload"]) for r in results],
             "count": len(results),
         }
 
@@ -282,6 +656,7 @@ class KnowledgeService:
             "notes": payload.get("notes"),
             "project": payload.get("project", "Uncategorized"),
             "metadata": payload.get("metadata"),
+            "parent_id": payload.get("parent_id"),
             "created_at": payload.get("created_at", ""),
             "updated_at": payload.get("updated_at", ""),
         }

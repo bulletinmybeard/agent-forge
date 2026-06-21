@@ -23,6 +23,7 @@ class CreateEntryRequest(BaseModel):
     notes: str | None = None
     project: str = "Uncategorized"
     metadata: dict | None = None
+    parent_id: str | None = None
 
     @field_validator("content_type")
     @classmethod
@@ -113,6 +114,7 @@ class EntryResponse(BaseModel):
     notes: str | None = None
     project: str = "Uncategorized"
     metadata: dict | None = None
+    parent_id: str | None = None
     created_at: str
     updated_at: str
 
@@ -129,6 +131,7 @@ class SearchResultResponse(BaseModel):
     notes: str | None = None
     project: str = "Uncategorized"
     metadata: dict | None = None
+    parent_id: str | None = None
     created_at: str
 
 

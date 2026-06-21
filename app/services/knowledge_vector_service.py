@@ -29,7 +29,7 @@ DISTANCE_MAP = {
     "Dot": Distance.DOT,
 }
 
-PAYLOAD_INDEXES_KEYWORD = ["content_type", "language", "tags", "source_url", "project"]
+PAYLOAD_INDEXES_KEYWORD = ["content_type", "language", "tags", "source_url", "project", "parent_id", "is_chunk"]
 PAYLOAD_INDEXES_DATETIME = ["created_at", "updated_at"]
 
 
@@ -131,7 +131,10 @@ class KnowledgeVectorService:
         if project:
             conditions.append(FieldCondition(key="project", match=MatchValue(value=project)))
 
-        query_filter = Filter(must=conditions) if conditions else None
+        # Exclude page chunks from top-level search results
+        must_not = [FieldCondition(key="is_chunk", match=MatchValue(value=True))]
+
+        query_filter = Filter(must=conditions or None, must_not=must_not)
 
         response = client.query_points(
             collection_name=self._collection,
@@ -207,6 +210,97 @@ class KnowledgeVectorService:
         )
         logger.info("Deleted points matching filter from '%s'", self._collection)
         return -1  # Qdrant delete doesn't return count; caller checks collection info
+
+    def scroll_by_filter(
+        self,
+        limit: int = 50,
+        content_type: str | None = None,
+        tags: list[str] | None = None,
+        project: str | None = None,
+        parent_id: str | None = None,
+    ) -> list[dict]:
+        """Return entries matching filters without vector search."""
+        client = self._get_client()
+        conditions = []
+        if content_type:
+            conditions.append(FieldCondition(key="content_type", match=MatchValue(value=content_type)))
+        if tags:
+            conditions.append(FieldCondition(key="tags", match=MatchAny(any=tags)))
+        if project:
+            conditions.append(FieldCondition(key="project", match=MatchValue(value=project)))
+        if parent_id:
+            conditions.append(FieldCondition(key="parent_id", match=MatchValue(value=parent_id)))
+
+        # Exclude page chunks from filter results
+        must_not = [FieldCondition(key="is_chunk", match=MatchValue(value=True))]
+
+        query_filter = Filter(must=conditions or None, must_not=must_not)
+        points, _ = client.scroll(
+            collection_name=self._collection,
+            scroll_filter=query_filter,
+            limit=limit,
+            with_payload=True,
+            with_vectors=False,
+        )
+        return [{"id": str(p.id), "payload": dict(p.payload) if p.payload else {}} for p in points]
+
+    def search_chunks_by_parent(
+        self,
+        parent_id: str,
+        query_vector: list[float],
+        limit: int = 10,
+    ) -> list[dict]:
+        """Vector search within page chunks belonging to a parent entry."""
+        client = self._get_client()
+        query_filter = Filter(
+            must=[
+                FieldCondition(key="parent_id", match=MatchValue(value=parent_id)),
+                FieldCondition(key="is_chunk", match=MatchValue(value=True)),
+            ]
+        )
+        response = client.query_points(
+            collection_name=self._collection,
+            query=query_vector,
+            limit=limit,
+            query_filter=query_filter,
+            with_payload=True,
+        )
+        return [
+            {"id": str(hit.id), "score": hit.score, "payload": dict(hit.payload) if hit.payload else {}}
+            for hit in response.points
+        ]
+
+    def get_chunks_by_parent(self, parent_id: str) -> list[dict]:
+        """Scroll all page chunks belonging to a parent entry."""
+        client = self._get_client()
+        query_filter = Filter(
+            must=[
+                FieldCondition(key="parent_id", match=MatchValue(value=parent_id)),
+                FieldCondition(key="is_chunk", match=MatchValue(value=True)),
+            ]
+        )
+        points, _ = client.scroll(
+            collection_name=self._collection,
+            scroll_filter=query_filter,
+            limit=1000,
+            with_payload=True,
+            with_vectors=False,
+        )
+        return [{"id": str(p.id), "payload": dict(p.payload) if p.payload else {}} for p in points]
+
+    def delete_by_parent(self, parent_id: str) -> None:
+        """Delete all page chunks belonging to a parent entry."""
+        client = self._get_client()
+        client.delete(
+            collection_name=self._collection,
+            points_selector=Filter(
+                must=[
+                    FieldCondition(key="parent_id", match=MatchValue(value=parent_id)),
+                    FieldCondition(key="is_chunk", match=MatchValue(value=True)),
+                ]
+            ),
+        )
+        logger.debug("Deleted chunks for parent '%s'", parent_id)
 
     def facet_tags(self, limit: int = 2000) -> list[dict]:
         client = self._get_client()
