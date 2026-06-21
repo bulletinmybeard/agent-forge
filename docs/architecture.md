@@ -65,7 +65,7 @@ That is expected, not a missing route.
 
 | Store             | Holds                                                                                              |
 | ----------------- | -------------------------------------------------------------------------------------------------- |
-| Qdrant            | Document vectors and the semantic conversation-memory collection.                                  |
+| Qdrant            | Document vectors, the semantic conversation-memory collection, and the personal Knowledge Database (`knowledge_entries`). |
 | Redis             | Tool-result cache, SAQ queues, audit streams, session pub/sub, schema cache.                       |
 | SQLite (`./data`) | Chat history, extracted facts, scheduler/monitor jobs, and the Canvas / Prompt Lab / Botty stores. |
 

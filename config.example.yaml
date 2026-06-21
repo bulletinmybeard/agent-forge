@@ -104,6 +104,14 @@ dedup:
 #     max_rows: 100
 #     readonly: true
 
+# -- Knowledge Database -------------------------------------------------
+# Dedicated Qdrant collection for user-created snippets, commands, URLs.
+# Used by the /knowledge API endpoints. Env prefix: KNOWLEDGE_
+knowledge:
+  collection_name: "knowledge_entries"
+  dedup_threshold: 0.92                       # cosine; higher = stricter near-dup gate
+  composite_template: "{title}\n{notes}\n{content}"  # text that gets embedded
+
 chunking:
   # Generic project names too common to auto-detect in queries (use the
   # explicit --document_name flag to reach them anyway).

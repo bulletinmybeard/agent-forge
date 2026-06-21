@@ -60,4 +60,34 @@ class EmbeddingService:
             return settings.embedding.dimension
 
 
-embedding_service = EmbeddingService()
+_embedding_service: EmbeddingService | None = None
+
+
+def get_embedding_service() -> EmbeddingService:
+    """Build the shared EmbeddingService on first use.
+
+    The constructor resolves an ollama profile from config, which isn't present
+    in CI/test/lint contexts. Deferring it keeps this module — and everything
+    that holds the proxy below — import-safe, so test collection no longer needs
+    a config.yaml.
+    """
+    global _embedding_service
+    if _embedding_service is None:
+        _embedding_service = EmbeddingService()
+    return _embedding_service
+
+
+class _EmbeddingServiceProxy:
+    """Transparent stand-in for the singleton.
+
+    Forwards every attribute to the lazily-built EmbeddingService, so callers
+    keep using `from app.services.embedding_service import embedding_service` and
+    `embedding_service.embed(...)` while the real construction (and its config
+    lookup) is deferred to the first method call.
+    """
+
+    def __getattr__(self, name: str):
+        return getattr(get_embedding_service(), name)
+
+
+embedding_service: EmbeddingService = _EmbeddingServiceProxy()  # type: ignore[assignment]

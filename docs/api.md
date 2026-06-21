@@ -5,7 +5,7 @@ It runs as two FastAPI apps with different exposure:
 
 | App              | Module              | Port   | Exposure                                                      |
 | ---------------- | ------------------- | ------ | ------------------------------------------------------------- |
-| `agentforge-api` | `app/main.py`       | `8100` | RAG indexing + search. LAN-only.                              |
+| `agentforge-api` | `app/main.py`       | `8100` | RAG indexing + search + Knowledge Database. LAN-only.         |
 | `agentforge-web` | `web/server/app.py` | `8200` | Chat WebSocket + REST + agent runners. The public entrypoint. |
 
 ## Live reference
@@ -32,7 +32,8 @@ API-key auth is off by default (open). When `security.api_keys` is set (see [the
 
 # agentforge-api (:8100): RAG search + indexing
 
-The knowledge-base API: index prepared chunks into Qdrant and query them.
+The knowledge-base API: index prepared chunks into Qdrant and query them, plus the
+personal Knowledge Database for user-created entries.
 LAN-only. Don't expose it to the internet.
 
 ## Search
@@ -77,6 +78,187 @@ All three take the same JSON body (`SearchRequest`):
 | GET    | `/indexer/dedup/drift`           | Doc-vs-code drift report (stale docs).                                                     |
 
 See [the chunking guide](../chunking/README.md) for the mappers, the chunk format, the pipeline, and config keys.
+
+## Knowledge Database
+
+Personal knowledge entries (snippets, commands, URLs, configs, error solutions, notes).
+Stored in a dedicated Qdrant collection (`knowledge_entries`), separate from the RAG collection.
+
+### Content types
+
+`code`, `command`, `url`, `config`, `error_solution`, `note`, `api_example`
+
+### CRUD
+
+| Method | Path                          | Purpose                                                              |
+| ------ | ----------------------------- | -------------------------------------------------------------------- |
+| POST   | `/knowledge/entries`          | Create + index a single entry (sync). `201` on success, `409` on duplicate content. |
+| POST   | `/knowledge/entries/batch`    | Bulk create (up to 100 entries). `202`.                              |
+| GET    | `/knowledge/entries/{id}`     | Get a single entry by point ID.                                      |
+| PUT    | `/knowledge/entries/{id}`     | Update an entry. Smart re-indexing: re-embeds only when `title`, `content`, or `notes` change; metadata-only changes skip embedding. |
+| DELETE | `/knowledge/entries/{id}`     | Delete a single entry. `204`.                                        |
+| DELETE | `/knowledge/entries`          | Bulk delete by filter. At least one filter required (no accidental wipe). |
+
+`POST /knowledge/entries` body (`CreateEntryRequest`):
+
+```jsonc
+{
+  "title": "Docker cleanup unused volumes",  // required, max 200 chars
+  "content": "docker volume prune -f",       // required
+  "content_type": "command",                 // required, one of the types above
+  "language": "bash",                        // optional
+  "tags": ["docker", "cleanup", "PROJ-456"], // optional, auto-lowercased
+  "source_url": "https://docs.docker.com/...", // optional
+  "notes": "Safe to run -- only removes unattached volumes", // optional
+  "project": "AgentForge",                   // optional, default "Uncategorized"
+  "metadata": { "filename": "cleanup.md" },  // optional, free-form object stored on the point
+  "parent_id": "a1b2c3d4-..."                // optional, link this entry as a child of another (attachments)
+}
+```
+
+`PUT /knowledge/entries/{id}` body (`UpdateEntryRequest`): same fields, all optional.
+
+`DELETE /knowledge/entries` body (`BulkDeleteRequest`):
+
+```jsonc
+{
+  "tags": ["deprecated"],           // optional
+  "content_type": "note",           // optional
+  "before": "2026-01-01T00:00:00Z", // optional ISO8601
+  "project": "Salesforce"           // optional
+}
+```
+
+Response: `{ "deleted": 12 }`.
+
+### Search
+
+| Method | Path                       | Purpose                                                    |
+| ------ | -------------------------- | ---------------------------------------------------------- |
+| POST   | `/knowledge/search`        | Semantic search with optional filters.                     |
+| POST   | `/knowledge/search/smart`  | Same as above, with intent metadata (query refinement).    |
+
+Body (`KnowledgeSearchRequest`):
+
+```jsonc
+{
+  "query": "docker cleanup unused volumes", // required
+  "tags": ["kubernetes"],                   // optional, OR-matched
+  "content_type": "command",                // optional
+  "language": null,                         // optional
+  "project": "AgentForge",                  // optional
+  "limit": 10,                              // optional, default 10, max 50
+  "score_threshold": null                   // optional cosine floor
+}
+```
+
+Response (`SearchResponse`):
+
+```jsonc
+{
+  "query": "docker cleanup unused volumes",
+  "results": [
+    {
+      "id": "a1b2c3d4-...",
+      "score": 0.94,
+      "title": "Docker cleanup unused volumes",
+      "content": "docker volume prune -f",
+      "content_type": "command",
+      "language": "bash",
+      "tags": ["docker", "cleanup", "proj-456"],
+      "source_url": "https://docs.docker.com/...",
+      "notes": "Safe to run -- ...",
+      "project": "AgentForge",
+      "metadata": null,
+      "parent_id": null,
+      "created_at": "2026-06-20T14:30:00Z"
+    }
+  ],
+  "count": 1
+}
+```
+
+### Tags & stats
+
+| Method | Path               | Purpose                                       |
+| ------ | ------------------ | --------------------------------------------- |
+| GET    | `/knowledge/tags`  | Tag faceting: unique tags with counts.         |
+| GET    | `/knowledge/stats` | Collection stats: totals, by type, recent, tag count. |
+
+`GET /knowledge/tags` response:
+
+```jsonc
+{ "tags": [{ "tag": "docker", "count": 15 }, { "tag": "python", "count": 42 }] }
+```
+
+`GET /knowledge/stats` response:
+
+```jsonc
+{
+  "total_entries": 234,
+  "by_content_type": { "code": 89, "command": 52, "url": 38, "config": 22, "error_solution": 18, "note": 10, "api_example": 5 },
+  "recent_entries": 12,
+  "tag_count": 67
+}
+```
+
+### Filter, passages & attachments
+
+| Method | Path                                  | Purpose                                                                 |
+| ------ | ------------------------------------- | ---------------------------------------------------------------------- |
+| POST   | `/knowledge/filter`                   | List entries by metadata filters — no vector search, no query needed.   |
+| POST   | `/knowledge/entries/{id}/context`     | Most relevant passages from one entry for a query (page-chunk search).  |
+| POST   | `/knowledge/entries/{id}/rechunk`     | Rebuild page chunks for an entry indexed before chunking existed.        |
+| POST   | `/knowledge/extract`                  | Extract text from an uploaded file (PDF, text, code, config).           |
+
+`POST /knowledge/filter` body (`FilterRequest`) — every field optional; entries are matched, not ranked:
+
+```jsonc
+{
+  "content_type": "note",      // optional
+  "tags": ["docker"],          // optional, OR-matched
+  "project": "AgentForge",     // optional
+  "parent_id": "a1b2c3d4-...", // optional — list the children of a parent entry
+  "limit": 50                  // optional, default 50, max 200
+}
+```
+
+Response: `{ "results": [ ...EntryResponse ], "count": N }`.
+
+`POST /knowledge/entries/{id}/context` body (`ContextRequest`): `{ "query": "...", "top_k": 8 }` (`top_k` 1-30, default 8). Returns the best-matching passages plus adjacent pages for context:
+
+```jsonc
+{
+  "entry_title": "NL-ix Payslips 2025",
+  "total_chunks": 13,
+  "passages": [
+    {
+      "text": "...",
+      "score": 0.91,        // 0.0 for adjacent-context pages
+      "position": 12,
+      "page_number": 12,
+      "is_adjacent": false  // true when included only as neighbouring context
+    }
+  ]
+}
+```
+
+`POST /knowledge/extract` takes a `multipart/form-data` upload (`file`). PDFs go through pdfplumber (falling back to the `pdftotext` CLI); everything else is decoded as UTF-8. Returns the extracted text plus file metadata:
+
+```jsonc
+{
+  "text": "...extracted text...",
+  "metadata": {
+    "filename": "report.pdf",
+    "extension": ".pdf",
+    "size_bytes": 20480,
+    "mime_type": "application/pdf",
+    "pages": 4               // PDFs only
+  }
+}
+```
+
+`404` on an unknown entry id (`context`, `rechunk`); `400`/`422` on a missing filename or undecodable/empty upload (`extract`).
 
 ## Health
 

@@ -7,7 +7,9 @@ from fastapi import FastAPI
 from app.config import settings
 from app.routes.health import router as health_router
 from app.routes.indexer import router as indexer_router
+from app.routes.knowledge import router as knowledge_router
 from app.routes.search import router as search_router
+from app.services.knowledge_vector_service import knowledge_vector_service
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
@@ -51,6 +53,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Could not ensure KB collection on startup: %s", e)
 
+    try:
+        knowledge_vector_service.ensure_collection()
+    except Exception as e:
+        logger.warning("Could not ensure knowledge collection on startup: %s", e)
+
     # Start the Slack bot if enabled
     if settings.slack.enabled:
         try:
@@ -86,6 +93,7 @@ app = FastAPI(
 app.include_router(health_router)
 app.include_router(indexer_router)
 app.include_router(search_router)
+app.include_router(knowledge_router)
 
 # Optional API-key auth (off unless security.api_keys is set). Exempts /health.
 # enforce_auth_policy aborts the boot if we're in a dangerous unauthenticated
