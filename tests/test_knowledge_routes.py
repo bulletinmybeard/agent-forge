@@ -8,7 +8,10 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from app.routes.knowledge import router as knowledge_router
 
 
 @pytest.fixture()
@@ -19,16 +22,14 @@ def mock_knowledge_service():
 
 @pytest.fixture()
 def client(mock_knowledge_service):
-    with (
-        patch("app.services.knowledge_vector_service.knowledge_vector_service") as mock_kv,
-        patch("app.services.vector_service.vector_service") as mock_vs,
-    ):
-        mock_kv.ensure_collection.return_value = None
-        mock_vs.ensure_collection.return_value = None
-        from app.main import app
-
-        with TestClient(app) as c:
-            yield c
+    # Mount only the knowledge router on a bare app. Booting app.main instead
+    # would load the framework config (agentforge.config), which needs a
+    # config.yaml that CI doesn't have. Routes run in isolation against the
+    # mocked service above.
+    app = FastAPI()
+    app.include_router(knowledge_router)
+    with TestClient(app) as c:
+        yield c
 
 
 class TestCreateEntry:
