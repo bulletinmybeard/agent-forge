@@ -47,6 +47,7 @@ class UpdateEntryRequest(BaseModel):
     source_url: str | None = None
     notes: str | None = None
     project: str | None = None
+    parent_id: str | None = None
 
     @field_validator("content_type")
     @classmethod
