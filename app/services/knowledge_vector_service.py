@@ -255,7 +255,15 @@ class KnowledgeVectorService:
             collection_name=self._collection,
             scroll_filter=Filter(must_not=must_not),
             limit=limit,
-            with_payload=["title", "content_type", "language", "tags", "parent_id", "created_at"],
+            with_payload=[
+                "title",
+                "content_type",
+                "language",
+                "tags",
+                "parent_id",
+                "created_at",
+                "metadata",
+            ],
             with_vectors=False,
         )
         return [{"id": str(p.id), "payload": dict(p.payload) if p.payload else {}} for p in points]

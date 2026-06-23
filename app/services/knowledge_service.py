@@ -682,6 +682,7 @@ class KnowledgeService:
                     "tags": r["payload"].get("tags", []),
                     "parent_id": r["payload"].get("parent_id"),
                     "created_at": r["payload"].get("created_at", ""),
+                    "metadata": r["payload"].get("metadata"),
                 }
                 for r in results
             ],
