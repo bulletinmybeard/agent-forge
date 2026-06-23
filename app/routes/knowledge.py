@@ -115,6 +115,12 @@ def filter_entries(request: FilterRequest) -> dict:
     )
 
 
+@router.get("/list")
+def list_entries(limit: int = 2000) -> dict:
+    """Slim listing for the browse view: entry metadata only, no content body."""
+    return knowledge_service.list_overview(limit=limit)
+
+
 @router.post("/search/smart")
 def search_smart(request: KnowledgeSearchRequest) -> dict:
     result = knowledge_service.search(request)

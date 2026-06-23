@@ -244,6 +244,22 @@ class KnowledgeVectorService:
         )
         return [{"id": str(p.id), "payload": dict(p.payload) if p.payload else {}} for p in points]
 
+    def list_slim(self, limit: int = 2000) -> list[dict]:
+        """Lightweight listing: entry metadata only (no content body), chunks excluded.
+
+        A payload selector keeps the heavy content field from ever leaving Qdrant.
+        """
+        client = self._get_client()
+        must_not = [FieldCondition(key="is_chunk", match=MatchValue(value=True))]
+        points, _ = client.scroll(
+            collection_name=self._collection,
+            scroll_filter=Filter(must_not=must_not),
+            limit=limit,
+            with_payload=["title", "content_type", "language", "tags", "parent_id", "created_at"],
+            with_vectors=False,
+        )
+        return [{"id": str(p.id), "payload": dict(p.payload) if p.payload else {}} for p in points]
+
     def search_chunks_by_parent(
         self,
         parent_id: str,
