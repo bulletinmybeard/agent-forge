@@ -2736,23 +2736,13 @@ def init_runtime() -> SearchRuntime:
 
 
 def _init_connectors(rt: SearchRuntime) -> None:
-    """Initialise the connector plugin system and load active connections.
-
-    Registers the unified ``google`` connector plus legacy per-product plugins
-    (``gmail``, ``google_drive``, ``bigquery``, ``youtube``) with
-    ``listable=False`` so existing SQLite rows keep working until migrated.
-    See docs/connectors.md (Legacy Google connections).
-    """
+    """Initialise the connector plugin system and load active connections."""
     try:
         from agentforge.connectors import ConnectorRegistry
-        from agentforge.connectors.bigquery import BigQueryConnectorPlugin
         from agentforge.connectors.github import GitHubConnectorPlugin
         from agentforge.connectors.gitlab import GitLabConnectorPlugin
-        from agentforge.connectors.gmail import GmailConnectorPlugin
         from agentforge.connectors.google import GoogleConnectorPlugin
-        from agentforge.connectors.google_drive import GoogleDriveConnectorPlugin
         from agentforge.connectors.manager import ConnectionManager
-        from agentforge.connectors.youtube import YouTubeConnectorPlugin
 
         db = get_db()
 
@@ -2760,11 +2750,6 @@ def _init_connectors(rt: SearchRuntime) -> None:
         connector_registry.register(GoogleConnectorPlugin())
         connector_registry.register(GitLabConnectorPlugin())
         connector_registry.register(GitHubConnectorPlugin())
-        # Legacy Google product types (hidden from connect UI; existing DB rows only)
-        connector_registry.register(GmailConnectorPlugin())
-        connector_registry.register(GoogleDriveConnectorPlugin())
-        connector_registry.register(BigQueryConnectorPlugin())
-        connector_registry.register(YouTubeConnectorPlugin())
 
         connection_manager = ConnectionManager(
             db_session_factory=db.SessionLocal,

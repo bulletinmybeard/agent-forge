@@ -42,7 +42,6 @@ def register_core_tools(registry: ToolRegistry) -> int:
     from .code_quality_tools import register_code_quality_tools
     from .data_tools import register_data_tools
     from .docker import register_docker_tools
-    from .cloud_tools import register_cloud_tools
     from .filesystem import register_filesystem_tools
     from .git_tools import register_git_tools
     from .icon_generator import register_icon_generator_tools
@@ -95,6 +94,7 @@ def register_optional_tools(registry: ToolRegistry) -> int:
     Each submodule registers only when its env vars are set. Returns the count
     registered.
     """
+    from .cloud_tools import register_cloud_tools
 
     return register_cloud_tools(registry)
 

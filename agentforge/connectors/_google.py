@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 
 from chalkbox.logging.bridge import get_logger
 
-from ._config import get_connector_config, get_connectors_config, get_credentials_dir
+from ._config import get_connectors_config, get_credentials_dir
 
 logger = get_logger(__name__)
 
@@ -35,12 +35,11 @@ _OAUTH_NOT_CONFIGURED = (
 )
 
 
-def read_client_secret_file(connector_type: str = "") -> dict[str, str] | None:
+def read_client_secret_file() -> dict[str, str] | None:
     """Load client_id, secret, and redirect_uri from a client_secret.json file."""
     creds_dir = get_credentials_dir()
     google = get_connectors_config().get("google", {}) or {}
-    legacy = get_connector_config(connector_type) if connector_type else {}
-    filename = google.get("client_secret_file") or legacy.get("client_secret_file") or "client_secret.json"
+    filename = google.get("client_secret_file") or "client_secret.json"
     path = creds_dir / filename
 
     if not path.exists():
@@ -69,9 +68,9 @@ def read_client_secret_file(connector_type: str = "") -> dict[str, str] | None:
     return None
 
 
-def get_google_client_config(connector_type: str = "") -> dict[str, str]:
+def get_google_client_config() -> dict[str, str]:
     """Resolve the shared Google OAuth client config."""
-    creds = read_client_secret_file(connector_type)
+    creds = read_client_secret_file()
     if creds:
         return creds
 
@@ -79,20 +78,14 @@ def get_google_client_config(connector_type: str = "") -> dict[str, str]:
     client_id = os.environ.get("CONNECTOR_GOOGLE_CLIENT_ID") or google.get("client_id", "")
     client_secret = os.environ.get("CONNECTOR_GOOGLE_CLIENT_SECRET") or google.get("client_secret", "")
 
-    if not (client_id and client_secret) and connector_type:
-        legacy = get_connector_config(connector_type)
-        prefix = f"CONNECTOR_{connector_type.upper()}_"
-        client_id = client_id or os.environ.get(f"{prefix}CLIENT_ID") or legacy.get("client_id", "")
-        client_secret = client_secret or os.environ.get(f"{prefix}CLIENT_SECRET") or legacy.get("client_secret", "")
-
     if client_id and client_secret:
         return {"client_id": client_id, "client_secret": client_secret}
     return {}
 
 
-def require_google_client_config(connector_type: str = "") -> dict[str, str]:
+def require_google_client_config() -> dict[str, str]:
     """Like ``get_google_client_config`` but raise RuntimeError when unconfigured."""
-    creds = get_google_client_config(connector_type)
+    creds = get_google_client_config()
     if not creds:
         raise RuntimeError(_OAUTH_NOT_CONFIGURED)
     return creds

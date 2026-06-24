@@ -4,104 +4,16 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 from pathlib import Path
 
-import yaml
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from agentforge.config import load_merged_yaml
 
 logger = logging.getLogger(__name__)
 
 _CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
-_FRAMEWORK_CONFIG_PATH = Path(__file__).parent.parent / "framework-config.yaml"
-
-
-def _load_yaml(path: Path, label: str) -> dict:
-    if path.exists():
-        with open(path) as f:
-            return yaml.safe_load(f) or {}
-    logger.warning("%s not found at %s, using defaults", label, path)
-    return {}
-
-
-def _merge_provider_profiles_into(framework_yaml: dict, root: Path) -> None:
-    """Glob ``profiles/**/*.yaml`` next to *root* and merge each file's
-    ``profiles:`` + ``provider_override_map:`` into *framework_yaml*.
-
-    Mirrors ``agentforge/config.py::_merge_split_profiles`` so both loaders
-    (the framework's :class:`ConfigManager` and this legacy ``app/config``
-    flat-dict path) see the same set of profiles + override-map entries.
-    Silent divergence between the two loaders would surface as "works in
-    chat, blank in indexer".
-    """
-    profiles_dir = root / "profiles"
-    if not profiles_dir.is_dir():
-        return
-    ai = framework_yaml.setdefault("ai", {})
-    profiles = ai.setdefault("profiles", {})
-    override_map = ai.setdefault("provider_override_map", {})
-
-    for yaml_file in sorted(profiles_dir.rglob("*.yaml")):
-        # Skip committed *.example.yaml templates — they're docs for developers
-        # to copy to <provider>.yaml, not real profiles (their stem wouldn't
-        # match the key-prefix rule). Mirrors agentforge/config.py.
-        if yaml_file.name.endswith(".example.yaml"):
-            continue
-        stem = yaml_file.stem
-        expected_prefix = stem + "-"
-        with open(yaml_file) as f:
-            data = yaml.safe_load(f) or {}
-        if not isinstance(data, dict):
-            raise ValueError(
-                f"{yaml_file} must contain a top-level dict (with `profiles:` and/or `provider_override_map:` keys)"
-            )
-        unknown = set(data) - {"profiles", "provider_override_map"}
-        if unknown:
-            raise ValueError(
-                f"{yaml_file.name}: unknown top-level key(s) {sorted(unknown)}. "
-                f"Allowed: 'profiles', 'provider_override_map'."
-            )
-
-        file_profiles = data.get("profiles") or {}
-        if file_profiles:
-            bad = [k for k in file_profiles if not k.startswith(expected_prefix)]
-            if bad:
-                raise ValueError(
-                    f"{yaml_file.name}: profile keys must start with {expected_prefix!r} — found violations: {bad}"
-                )
-            clashes = [k for k in file_profiles if k in profiles]
-            if clashes:
-                raise ValueError(f"{yaml_file.name}: profile name(s) already defined elsewhere: {clashes}")
-            profiles.update(file_profiles)
-
-        file_overrides = data.get("provider_override_map") or {}
-        if file_overrides:
-            existing = override_map.get(stem) or {}
-            if not isinstance(existing, dict):
-                existing = {}
-            map_clashes = [k for k in file_overrides if k in existing]
-            if map_clashes:
-                raise ValueError(f"{yaml_file.name}: override-map key(s) already mapped for {stem!r}: {map_clashes}")
-            override_map[stem] = {**existing, **file_overrides}
-
-
-def _deep_merge(base: dict, override: dict) -> dict:
-    """Recursively merge override into base (override wins on conflicts)."""
-    result = base.copy()
-    for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
-        else:
-            result[key] = value
-    return result
-
-
-# Load and merge: framework-config (base) + config.yaml (overrides).
-# On remote deployments, config.yaml is a pre-merged file containing both,
-# and framework-config.yaml is absent — the merge is a no-op.
-_framework_yaml = _load_yaml(_FRAMEWORK_CONFIG_PATH, "framework-config.yaml")
-# Pull in provider-split profiles (deepinfra/bedrock/openrouter) so the
-# legacy loader sees the same set as agentforge.config.ConfigManager.
-_merge_provider_profiles_into(_framework_yaml, _FRAMEWORK_CONFIG_PATH.parent)
-_yaml = _deep_merge(_framework_yaml, _load_yaml(_CONFIG_PATH, "config.yaml"))
+# Merged YAML via agentforge.config (framework-config + config.yaml + profiles/).
+_yaml = load_merged_yaml(_CONFIG_PATH)
 
 
 # ── AI model profiles ───────────────────────────────────────────────────────

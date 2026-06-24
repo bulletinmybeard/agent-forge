@@ -61,7 +61,7 @@ class GoogleConnectorPlugin:
         return [_PRODUCTS[k]["label"] for k in keys]
 
     def get_oauth_client_config(self) -> dict[str, str]:
-        return require_google_client_config(self.connector_type)
+        return require_google_client_config()
 
     def create_tools(
         self,
