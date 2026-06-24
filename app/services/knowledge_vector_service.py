@@ -1,7 +1,7 @@
 """Qdrant operations for the knowledge_entries collection.
 
 Sibling of VectorService — same patterns, dedicated to user-created
-knowledge entries (snippets, commands, URLs, configs, etc.).
+knowledge entries (notes, references, documentation, documents, cheatsheets, snippets).
 """
 
 import hashlib

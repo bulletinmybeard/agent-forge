@@ -81,12 +81,21 @@ See [the chunking guide](../chunking/README.md) for the mappers, the chunk forma
 
 ## Knowledge Database
 
-Personal knowledge entries (snippets, commands, URLs, configs, error solutions, notes).
+Personal knowledge entries (notes, references, documentation, attached documents, cheatsheets, and code snippets).
 Stored in a dedicated Qdrant collection (`knowledge_entries`), separate from the RAG collection.
 
 ### Content types
 
-`code`, `command`, `url`, `config`, `error_solution`, `note`, `api_example`
+`note`, `reference`, `documentation`, `document`, `cheatsheet`, `snippet`
+
+| Type              | Typical use                                              |
+| ----------------- | -------------------------------------------------------- |
+| `note`            | Free-form notes and short observations                   |
+| `reference`       | Bookmarks, URLs, and pointers to external resources      |
+| `documentation`   | How-to guides, runbooks, and explanatory prose           |
+| `document`        | Attached files and multi-page content (use with `parent_id`) |
+| `cheatsheet`      | Command cheatsheets and quick-reference one-liners       |
+| `snippet`         | Code samples, config fragments, and API examples         |
 
 ### CRUD
 
@@ -105,7 +114,7 @@ Stored in a dedicated Qdrant collection (`knowledge_entries`), separate from the
 {
   "title": "Docker cleanup unused volumes",  // required, max 200 chars
   "content": "docker volume prune -f",       // required
-  "content_type": "command",                 // required, one of the types above
+  "content_type": "cheatsheet",              // required, one of the types above
   "language": "bash",                        // optional
   "tags": ["docker", "cleanup", "PROJ-456"], // optional, auto-lowercased
   "source_url": "https://docs.docker.com/...", // optional
@@ -144,7 +153,7 @@ Body (`KnowledgeSearchRequest`):
 {
   "query": "docker cleanup unused volumes", // required
   "tags": ["kubernetes"],                   // optional, OR-matched
-  "content_type": "command",                // optional
+  "content_type": "cheatsheet",             // optional
   "language": null,                         // optional
   "project": "AgentForge",                  // optional
   "limit": 10,                              // optional, default 10, max 50
@@ -163,7 +172,7 @@ Response (`SearchResponse`):
       "score": 0.94,
       "title": "Docker cleanup unused volumes",
       "content": "docker volume prune -f",
-      "content_type": "command",
+      "content_type": "cheatsheet",
       "language": "bash",
       "tags": ["docker", "cleanup", "proj-456"],
       "source_url": "https://docs.docker.com/...",
@@ -182,6 +191,7 @@ Response (`SearchResponse`):
 
 | Method | Path               | Purpose                                       |
 | ------ | ------------------ | --------------------------------------------- |
+| GET    | `/knowledge/list`  | Slim browse listing: metadata only, no content body (default limit 2000). |
 | GET    | `/knowledge/tags`  | Tag faceting: unique tags with counts.         |
 | GET    | `/knowledge/stats` | Collection stats: totals, by type, recent, tag count. |
 
@@ -196,9 +206,29 @@ Response (`SearchResponse`):
 ```jsonc
 {
   "total_entries": 234,
-  "by_content_type": { "code": 89, "command": 52, "url": 38, "config": 22, "error_solution": 18, "note": 10, "api_example": 5 },
+  "by_content_type": { "snippet": 89, "cheatsheet": 52, "reference": 38, "documentation": 22, "note": 18, "document": 10 },
   "recent_entries": 12,
   "tag_count": 67
+}
+```
+
+`GET /knowledge/list` response (no `content` field — use `GET /knowledge/entries/{id}` for the body):
+
+```jsonc
+{
+  "results": [
+    {
+      "id": "a1b2c3d4-...",
+      "title": "Docker cleanup unused volumes",
+      "content_type": "cheatsheet",
+      "language": "bash",
+      "tags": ["docker", "cleanup"],
+      "parent_id": null,
+      "created_at": "2026-06-20T14:30:00Z",
+      "metadata": { "filename": "cleanup.md" }
+    }
+  ],
+  "count": 1
 }
 ```
 

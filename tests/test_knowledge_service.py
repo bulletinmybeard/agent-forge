@@ -52,11 +52,11 @@ def service(mock_vector_svc, mock_embedding_svc, mock_dedup_svc):
 
 class TestCreateEntry:
     def test_creates_and_returns_entry(self, service, mock_vector_svc, mock_embedding_svc):
-        req = CreateEntryRequest(title="Test", content="echo hello", content_type="command")
+        req = CreateEntryRequest(title="Test", content="echo hello", content_type="cheatsheet")
         result = service.create_entry(req)
         assert result["title"] == "Test"
         assert result["content"] == "echo hello"
-        assert result["content_type"] == "command"
+        assert result["content_type"] == "cheatsheet"
         assert "id" in result
         assert "created_at" in result
         mock_embedding_svc.embed.assert_called_once()
@@ -66,7 +66,7 @@ class TestCreateEntry:
         req = CreateEntryRequest(
             title="My Title",
             content="my content",
-            content_type="code",
+            content_type="snippet",
             notes="my notes",
         )
         service.create_entry(req)
@@ -88,20 +88,32 @@ class TestCreateEntry:
             "payload": {
                 "title": "Existing",
                 "content": content,
-                "content_type": "command",
+                "content_type": "cheatsheet",
                 "tags": [],
                 "created_at": "2026-01-01T00:00:00Z",
                 "updated_at": "2026-01-01T00:00:00Z",
             },
         }
-        req = CreateEntryRequest(title="Test", content=content, content_type="command")
+        req = CreateEntryRequest(title="Test", content=content, content_type="cheatsheet")
         result = service.create_entry(req)
         assert result.get("_conflict") is True
 
     def test_tags_preserved(self, service):
-        req = CreateEntryRequest(title="T", content="c", content_type="code", tags=["python", "utils"])
+        req = CreateEntryRequest(title="T", content="c", content_type="snippet", tags=["python", "utils"])
         result = service.create_entry(req)
         assert result["tags"] == ["python", "utils"]
+
+    def test_metadata_and_parent_id_preserved(self, service):
+        req = CreateEntryRequest(
+            title="Attachment",
+            content="page text",
+            content_type="document",
+            metadata={"filename": "guide.pdf", "pages": 2},
+            parent_id="parent-abc",
+        )
+        result = service.create_entry(req)
+        assert result["metadata"] == {"filename": "guide.pdf", "pages": 2}
+        assert result["parent_id"] == "parent-abc"
 
 
 class TestUpdateEntry:
@@ -111,7 +123,7 @@ class TestUpdateEntry:
             "payload": {
                 "title": "Old Title",
                 "content": "echo hello",
-                "content_type": "command",
+                "content_type": "cheatsheet",
                 "tags": ["old"],
                 "notes": None,
                 "language": None,
@@ -136,7 +148,7 @@ class TestUpdateEntry:
             "payload": {
                 "title": "Title",
                 "content": "old content",
-                "content_type": "code",
+                "content_type": "snippet",
                 "tags": [],
                 "notes": None,
                 "language": None,
@@ -168,7 +180,7 @@ class TestSearch:
                 "payload": {
                     "title": "Docker prune",
                     "content": "docker volume prune",
-                    "content_type": "command",
+                    "content_type": "cheatsheet",
                     "tags": ["docker"],
                     "created_at": "2026-01-01T00:00:00Z",
                 },
@@ -189,8 +201,8 @@ class TestProcessBatch:
         mock_embedding_svc.embed_batch.return_value = [[0.1], [0.2]]
 
         entries = [
-            CreateEntryRequest(title="A", content="a", content_type="code"),
-            CreateEntryRequest(title="B", content="b", content_type="command"),
+            CreateEntryRequest(title="A", content="a", content_type="snippet"),
+            CreateEntryRequest(title="B", content="b", content_type="cheatsheet"),
         ]
         result = service.process_batch(entries)
         assert result["indexed"] == 2
@@ -201,7 +213,7 @@ class TestProcessBatch:
 class TestGetStats:
     def test_returns_stats(self, service, mock_vector_svc):
         mock_vector_svc.get_collection_info.return_value = {"points_count": 100}
-        mock_vector_svc.count_by_content_type.return_value = {"code": 50, "command": 30}
+        mock_vector_svc.count_by_content_type.return_value = {"snippet": 50, "cheatsheet": 30}
         mock_vector_svc.count_recent.return_value = 5
         mock_vector_svc.facet_tags.return_value = [
             {"tag": "python", "count": 10},
@@ -209,6 +221,60 @@ class TestGetStats:
         ]
         result = service.get_stats()
         assert result["total_entries"] == 100
-        assert result["by_content_type"]["code"] == 50
+        assert result["by_content_type"]["snippet"] == 50
         assert result["recent_entries"] == 5
         assert result["tag_count"] == 2
+
+
+class TestFilterEntries:
+    def test_scrolls_by_parent_id(self, service, mock_vector_svc):
+        mock_vector_svc.scroll_by_filter.return_value = [
+            {
+                "id": "child-1",
+                "payload": {
+                    "title": "Page 1",
+                    "content": "text",
+                    "content_type": "document",
+                    "tags": [],
+                    "parent_id": "parent-1",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                },
+            }
+        ]
+        result = service.filter_entries(limit=10, parent_id="parent-1")
+        assert result["count"] == 1
+        assert result["results"][0]["parent_id"] == "parent-1"
+        mock_vector_svc.scroll_by_filter.assert_called_once_with(
+            limit=10,
+            content_type=None,
+            tags=None,
+            project=None,
+            parent_id="parent-1",
+        )
+
+
+class TestListOverview:
+    def test_returns_slim_metadata_only(self, service, mock_vector_svc):
+        mock_vector_svc.list_slim.return_value = [
+            {
+                "id": "pt-1",
+                "payload": {
+                    "title": "Docker prune",
+                    "content_type": "cheatsheet",
+                    "language": "bash",
+                    "tags": ["docker"],
+                    "parent_id": None,
+                    "created_at": "2026-06-20T00:00:00Z",
+                    "metadata": {"filename": "cleanup.md"},
+                    "content": "docker volume prune -f",
+                },
+            }
+        ]
+        result = service.list_overview(limit=500)
+        assert result["count"] == 1
+        entry = result["results"][0]
+        assert entry["title"] == "Docker prune"
+        assert entry["metadata"] == {"filename": "cleanup.md"}
+        assert "content" not in entry
+        mock_vector_svc.list_slim.assert_called_once_with(limit=500)

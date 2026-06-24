@@ -520,7 +520,7 @@ class DiscoveryRunner:
 
                 cmd_start = time.perf_counter()
                 try:
-                    output = self._registry.execute_with_locality(
+                    output = self._registry.execute_with_role(
                         "shell",
                         {
                             "command": command,
@@ -847,7 +847,7 @@ class DiscoveryRunner:
                     )
 
                 try:
-                    output = self._registry.execute_with_locality(
+                    output = self._registry.execute_with_role(
                         "shell",
                         {
                             "command": command,

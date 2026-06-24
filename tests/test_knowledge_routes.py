@@ -38,7 +38,7 @@ class TestCreateEntry:
             "id": "abc-123",
             "title": "Test",
             "content": "echo hello",
-            "content_type": "command",
+            "content_type": "cheatsheet",
             "language": None,
             "tags": [],
             "source_url": None,
@@ -48,7 +48,7 @@ class TestCreateEntry:
         }
         response = client.post(
             "/knowledge/entries",
-            json={"title": "Test", "content": "echo hello", "content_type": "command"},
+            json={"title": "Test", "content": "echo hello", "content_type": "cheatsheet"},
         )
         assert response.status_code == 201
         assert response.json()["id"] == "abc-123"
@@ -58,7 +58,7 @@ class TestCreateEntry:
             "id": "abc-123",
             "title": "Test",
             "content": "echo hello",
-            "content_type": "command",
+            "content_type": "cheatsheet",
             "tags": [],
             "created_at": "2026-06-20T00:00:00Z",
             "updated_at": "2026-06-20T00:00:00Z",
@@ -66,7 +66,7 @@ class TestCreateEntry:
         }
         response = client.post(
             "/knowledge/entries",
-            json={"title": "Test", "content": "echo hello", "content_type": "command"},
+            json={"title": "Test", "content": "echo hello", "content_type": "cheatsheet"},
         )
         assert response.status_code == 409
 
@@ -84,7 +84,7 @@ class TestGetEntry:
             "id": "abc-123",
             "title": "Test",
             "content": "x",
-            "content_type": "code",
+            "content_type": "snippet",
             "tags": [],
             "created_at": "2026-01-01T00:00:00Z",
             "updated_at": "2026-01-01T00:00:00Z",
@@ -104,7 +104,7 @@ class TestUpdateEntry:
             "id": "abc-123",
             "title": "Updated",
             "content": "x",
-            "content_type": "code",
+            "content_type": "snippet",
             "tags": ["new"],
             "created_at": "2026-01-01T00:00:00Z",
             "updated_at": "2026-06-20T00:00:00Z",
@@ -150,10 +150,100 @@ class TestStats:
     def test_returns_stats(self, client, mock_knowledge_service):
         mock_knowledge_service.get_stats.return_value = {
             "total_entries": 100,
-            "by_content_type": {"code": 50},
+            "by_content_type": {"snippet": 50},
             "recent_entries": 5,
             "tag_count": 10,
         }
         response = client.get("/knowledge/stats")
         assert response.status_code == 200
         assert response.json()["total_entries"] == 100
+
+
+class TestListEntries:
+    def test_returns_slim_overview(self, client, mock_knowledge_service):
+        mock_knowledge_service.list_overview.return_value = {
+            "results": [
+                {
+                    "id": "abc-123",
+                    "title": "Docker prune",
+                    "content_type": "cheatsheet",
+                    "language": "bash",
+                    "tags": ["docker"],
+                    "parent_id": None,
+                    "created_at": "2026-06-20T00:00:00Z",
+                    "metadata": {"filename": "cleanup.md"},
+                }
+            ],
+            "count": 1,
+        }
+        response = client.get("/knowledge/list?limit=100")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["count"] == 1
+        assert body["results"][0]["title"] == "Docker prune"
+        assert "content" not in body["results"][0]
+        mock_knowledge_service.list_overview.assert_called_once_with(limit=100)
+
+
+class TestFilterEntries:
+    def test_filters_by_parent_id(self, client, mock_knowledge_service):
+        mock_knowledge_service.filter_entries.return_value = {
+            "results": [
+                {
+                    "id": "child-1",
+                    "title": "Page 1",
+                    "content": "text",
+                    "content_type": "document",
+                    "tags": [],
+                    "created_at": "2026-06-20T00:00:00Z",
+                    "updated_at": "2026-06-20T00:00:00Z",
+                    "parent_id": "parent-1",
+                }
+            ],
+            "count": 1,
+        }
+        response = client.post(
+            "/knowledge/filter",
+            json={"parent_id": "parent-1", "limit": 10},
+        )
+        assert response.status_code == 200
+        assert response.json()["count"] == 1
+        mock_knowledge_service.filter_entries.assert_called_once_with(
+            limit=10,
+            content_type=None,
+            tags=None,
+            project=None,
+            parent_id="parent-1",
+        )
+
+
+class TestCreateWithMetadata:
+    def test_passes_metadata_and_parent_id(self, client, mock_knowledge_service):
+        mock_knowledge_service.create_entry.return_value = {
+            "id": "abc-123",
+            "title": "Child page",
+            "content": "body",
+            "content_type": "document",
+            "language": None,
+            "tags": [],
+            "source_url": None,
+            "notes": None,
+            "metadata": {"filename": "doc.pdf"},
+            "parent_id": "parent-uuid",
+            "created_at": "2026-06-20T00:00:00Z",
+            "updated_at": "2026-06-20T00:00:00Z",
+        }
+        response = client.post(
+            "/knowledge/entries",
+            json={
+                "title": "Child page",
+                "content": "body",
+                "content_type": "document",
+                "metadata": {"filename": "doc.pdf"},
+                "parent_id": "parent-uuid",
+            },
+        )
+        assert response.status_code == 201
+        call_args = mock_knowledge_service.create_entry.call_args[0][0]
+        assert call_args.metadata == {"filename": "doc.pdf"}
+        assert call_args.parent_id == "parent-uuid"

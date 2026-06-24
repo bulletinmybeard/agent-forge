@@ -105,7 +105,7 @@ dedup:
 #     readonly: true
 
 # -- Knowledge Database -------------------------------------------------
-# Dedicated Qdrant collection for user-created snippets, commands, URLs.
+# Dedicated Qdrant collection for user-created knowledge entries (notes, snippets, etc.).
 # Used by the /knowledge API endpoints. Env prefix: KNOWLEDGE_
 knowledge:
   collection_name: "knowledge_entries"

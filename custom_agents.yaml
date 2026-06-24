@@ -183,10 +183,10 @@ agents:
   # (gitignored), which the loader merges on top of this file. Drop your own
   # agents there to keep them out of the published repo.
 
-  # ── GitLab — migrated to connector system (framework/connectors/gitlab/)
+  # ── GitLab — migrated to connector system (agentforge/connectors/gitlab/)
   # Connect via /connectors page with host URL + API token.
 
-  # ── Email (Gmail) — migrated to connector system (framework/connectors/gmail/)
+  # ── Email (Gmail) — migrated to connector system (agentforge/connectors/gmail/)
   # Create connections via /connectors page. Aliases @email, @gmail are
   # dynamically registered by ConnectionManager.
 

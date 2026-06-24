@@ -475,15 +475,6 @@ class ToolRegistry:
             )
             return str(self.execute(name, args))
 
-    # Deprecated alias — keep for one release cycle while callers migrate.
-    def execute_with_locality(self, name: str, args: dict[str, Any]) -> str:
-        warnings.warn(
-            "execute_with_locality() is deprecated; use execute_with_role()",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.execute_with_role(name, args)
-
     def check_confirmation(self, name: str, args: dict[str, Any]) -> tuple[str | None, dict | None]:
         """Public entry point: run guard + confirm for a tool *without* executing it.
 
@@ -632,15 +623,6 @@ class ToolRegistry:
         from .routing import check_decorator_drift
 
         return check_decorator_drift(dict(self._tool_locality))
-
-    def get_locality(self, name: str) -> str:
-        """Deprecated. Use :meth:`get_role`."""
-        warnings.warn(
-            "ToolRegistry.get_locality() is deprecated; use get_role()",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self._tool_locality.get(name, "local")
 
     @staticmethod
     def _missing_required_args(func: Callable, args: dict[str, Any]) -> list[str]:

@@ -27,7 +27,7 @@ class TestIndexKnowledgeBatchSaq:
             {
                 "title": "A",
                 "content": "a",
-                "content_type": "code",
+                "content_type": "snippet",
                 "tags": [],
                 "language": None,
                 "source_url": None,
@@ -36,7 +36,7 @@ class TestIndexKnowledgeBatchSaq:
             {
                 "title": "B",
                 "content": "b",
-                "content_type": "command",
+                "content_type": "cheatsheet",
                 "tags": [],
                 "language": None,
                 "source_url": None,

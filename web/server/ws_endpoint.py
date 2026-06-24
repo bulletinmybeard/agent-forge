@@ -1179,7 +1179,7 @@ def _parse_query(
 ) -> tuple[str, dict[str, str], bool]:
     """Parse @source prefixes and --flags from the query, apply sticky filters.
 
-    Returns (clean_query, filters, is_sticky) matching agentforge_chat.py behaviour.
+    Returns (clean_query, filters, is_sticky) for @docs / RAG query parsing.
     """
     sticky = _session_sticky.get(session_id, {})
     parts = raw_query.split()
