@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import typing
-import warnings
 from collections.abc import Callable
 from typing import Any
 
