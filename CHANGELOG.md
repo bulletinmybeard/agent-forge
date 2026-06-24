@@ -12,6 +12,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Botty engine reads `analysis_interval`, `max_frequency_seconds`, and `dismissal_cooldown_seconds` from config.
 - `canvas.enabled` and `botty.enabled` in `config.yaml` now gate Canvas init and the `/ws/botty` route (defaults remain `true`).
 - `prompt_lab.enabled` gates Prompt Lab DB init and `/api/prompt-lab/*` endpoints; `canvas.enabled` also gates the `/api/canvas/*` router (not just init).
+- Chat sessions are namespaced by `chat_sessions.source` (`web`, `kb`, …): clients pass `overrides.source` and/or `?source=` on `/ws/chat`; worker auto-create reads the active job's overrides. Agent Chat lists `source=web` only.
+- `web/server/api.py` imports hoisted to module top (lazy imports kept for optional `indexer_service` / `pdfplumber` only).
+- In-code RAG comments in `ws_endpoint.py` now treat `@qdrant` as canonical (`@docs` / `@find` as aliases).
 - `OllamaSettings` profile resolution always delegates to `agentforge.config.ConfigManager` (removed duplicate `_merge_profile_chain` fallback).
 - Config loading consolidated: `app/config.py` and `agentforge.config.ConfigManager` both use `load_merged_yaml()` (framework-config + config.yaml + split profiles). `ConfigManager.raw` exposes the merged dict.
 - Legacy per-product Google connector plugins (`gmail`, `google_drive`, `bigquery`, `youtube`) removed; unified `google` connector only. Unmigrated SQLite rows are skipped at startup (see `scripts/list-legacy-connections.py`).
@@ -30,6 +33,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `tests/test_config_loader.py`: merged YAML parity between `app.config` and `agentforge.config`.
 - `tests/test_feature_flags.py`: default `canvas.enabled` / `botty.enabled` settings.
 - `tests/test_mode_prefixes.py`, `tests/test_botty_engine.py`: shared RAG aliases and Botty rate limits.
+- `web/server/session_source.py`, `tests/test_session_source.py`: shared session `source` resolution for WS and worker paths.
 
 ### Removed
 

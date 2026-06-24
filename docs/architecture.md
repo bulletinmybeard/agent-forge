@@ -98,6 +98,8 @@ These ship with `agentforge-web` but are independent of core chat/RAG. Each has 
 | **Botty**    | `botty.enabled` (default `true`)         | Proactive session-awareness companion on `/ws/botty` (nudges, recall). Disable to drop the WebSocket route entirely. |
 | **Prompt Lab** | `prompt_lab.enabled` (default `true`)  | Multi-profile prompt comparison for developers/UI: `/api/prompt-lab/*` (separate `prompt_lab.db`). Uses opening-prompt refinement when `prompt_refinement.enabled` is set. |
 
+**Session namespacing.** `chat_sessions.source` tags which client created a session (`web` for the Agent Chat UI, `kb` for the Knowledge Base SPA, etc.). The tag is stamped once at creation from `overrides.source`, the WebSocket `?source=` query param, or the active worker job's overrides. `GET /api/sessions?source=web` (the default) keeps external sessions out of the Agent Chat sidebar.
+
 Botty honors `analysis_interval` (process every Nth completed run), `max_frequency_seconds` (minimum gap between nudges), and `dismissal_cooldown_seconds` (quiet period after a dismiss). Model roles and the Qdrant `insights` collection are configured under `botty:` but not yet used by the engine.
 
 ## Configuration
