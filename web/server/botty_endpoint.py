@@ -36,11 +36,23 @@ import asyncio
 import json
 import logging
 import os
+import sys
+import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+_SERVICE_ROOT = Path(__file__).resolve().parents[2]
+if str(_SERVICE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SERVICE_ROOT))
+
+from app.config import BottySettings
+from app.config import settings as af_settings
+from app.security import negotiate_ws
+
+from . import protocol
 from .database import ChatDatabase
 from .session_events import SessionEventSubscriber
 
@@ -78,14 +90,24 @@ class BottyEngine:
     Nudges are minimal and actionable (max 1-2 per session to avoid noise).
     """
 
-    def __init__(self, db: ChatDatabase, session_id: str) -> None:
+    def __init__(
+        self,
+        db: ChatDatabase,
+        session_id: str,
+        *,
+        botty_settings: BottySettings | None = None,
+    ) -> None:
         """Initialize the engine with database and current session context."""
         self.db = db
         self.session_id = session_id
+        self._cfg = botty_settings or af_settings.botty
         self.nudge_queue: list[dict[str, Any]] = []
         self.momentum: int = 0  # Energy level (0-100)
         self.phase: str = "observe"  # observe, recall, suggest
         self.message_count: int = 0
+        self._runs_seen: int = 0
+        self._last_nudge_at: float = 0.0
+        self._quiet_until: float = 0.0
 
     async def on_run_completed(
         self,
@@ -96,6 +118,14 @@ class BottyEngine:
 
         # Only process if this is a successful completion
         if event.get("status") != "success":
+            return nudges
+
+        self._runs_seen += 1
+        if self._cfg.analysis_interval > 1 and self._runs_seen % self._cfg.analysis_interval != 0:
+            return nudges
+
+        now = time.monotonic()
+        if now < self._quiet_until:
             return nudges
 
         try:
@@ -121,6 +151,17 @@ class BottyEngine:
         except Exception as exc:
             logger.warning("Error processing run_completed event: %s", exc)
 
+        return self._apply_rate_limits(nudges)
+
+    def _apply_rate_limits(self, nudges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not nudges:
+            return []
+        now = time.monotonic()
+        if now < self._quiet_until:
+            return []
+        if self._last_nudge_at and (now - self._last_nudge_at) < self._cfg.max_frequency_seconds:
+            return []
+        self._last_nudge_at = now
         return nudges
 
     async def _generate_cross_session_nudge(
@@ -248,10 +289,15 @@ class BottyEngine:
 
         return nudges
 
-    def dismiss_nudge(self, nudge_id: str) -> None:
-        """Mark a nudge as dismissed (reduces momentum)."""
+    def dismiss_nudge(self, nudge_id: str) -> dict[str, Any] | None:
+        """Mark a nudge as dismissed (reduces momentum) and enter quiet period."""
         self.momentum = max(0, self.momentum - 5)
+        cooldown = max(0, int(self._cfg.dismissal_cooldown_seconds))
+        if cooldown:
+            self._quiet_until = time.monotonic() + cooldown
+            return protocol.botty_quiet("dismissed", resume_after_seconds=cooldown)
         logger.debug("Dismissed nudge %s", nudge_id)
+        return None
 
     def mark_helpful(self, nudge_id: str) -> None:
         """Mark a nudge as helpful (increases momentum and future likelihood)."""
@@ -341,8 +387,6 @@ async def websocket_botty(ws: WebSocket, session_id: str | None = None) -> None:
     # Optional API-key auth (off unless security.api_keys is set) — same gate as
     # /ws/chat. When a key is supplied via Sec-WebSocket-Protocol it must be
     # echoed back on accept().
-    from app.security import negotiate_ws
-
     _ws_authorized, _ws_subprotocol = negotiate_ws(ws)
     if not _ws_authorized:
         await ws.close(code=1008)  # policy violation
@@ -503,7 +547,9 @@ async def _handle_client(ws: WebSocket, engine: BottyEngine, db: ChatDatabase) -
 
                 elif msg_type == "botty.dismiss":
                     nudge_id = data.get("nudge_id", "")
-                    engine.dismiss_nudge(nudge_id)
+                    quiet = engine.dismiss_nudge(nudge_id)
+                    if quiet:
+                        await ws.send_json(quiet)
 
                 elif msg_type == "botty.helpful":
                     nudge_id = data.get("nudge_id", "")

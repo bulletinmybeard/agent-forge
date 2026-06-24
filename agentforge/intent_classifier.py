@@ -14,6 +14,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from .mode_prefixes import RAG_SEARCH_ALIASES, RAG_SEARCH_MODE
+
 logger = logging.getLogger(__name__)
 
 VALID_MODES = {
@@ -39,9 +41,9 @@ VALID_MODES = {
 
 _PREFIX_MAP = {
     "@chat": "chat",
-    "@qdrant": "search",
-    "@docs": "search",  # alias and same mode as @qdrant (docs + older clients)
-    "@find": "search",  # alias and same mode as @qdrant
+    "@qdrant": RAG_SEARCH_MODE,
+    "@docs": RAG_SEARCH_MODE,
+    "@find": RAG_SEARCH_MODE,
     "@search": "web_search",
     "@web": "web_search",
     "@tooling": "agent",
@@ -80,7 +82,7 @@ class RouteResult:
     source: str  # "prefix", "llm", or "fallback"
 
 
-_ANYWHERE_PREFIXES = frozenset({"@qdrant", "@docs", "@find"})  # anywhere in query
+_ANYWHERE_PREFIXES = RAG_SEARCH_ALIASES
 
 
 def _detect_prefix(query: str) -> tuple[str, str] | None:

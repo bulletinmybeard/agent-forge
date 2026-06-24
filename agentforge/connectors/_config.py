@@ -41,14 +41,6 @@ def get_connectors_config() -> dict:
     return _load().get("connectors", {}) or {}
 
 
-def get_connector_config(connector_type: str) -> dict:
-    """Return the config dict for a specific connector type.
-
-    Reads from config.yaml -> connectors -> <connector_type>.
-    """
-    return get_connectors_config().get(connector_type, {})
-
-
 def get_encryption_key() -> str:
     """Return the Fernet encryption key.
 

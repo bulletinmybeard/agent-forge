@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- RAG `@` aliases centralized in `agentforge/mode_prefixes.py` (shared by `mode_routing` and `intent_classifier`).
+- Botty engine reads `analysis_interval`, `max_frequency_seconds`, and `dismissal_cooldown_seconds` from config.
 - `canvas.enabled` and `botty.enabled` in `config.yaml` now gate Canvas init and the `/ws/botty` route (defaults remain `true`).
 - `OllamaSettings` profile resolution always delegates to `agentforge.config.ConfigManager` (removed duplicate `_merge_profile_chain` fallback).
 - Config loading consolidated: `app/config.py` and `agentforge.config.ConfigManager` both use `load_merged_yaml()` (framework-config + config.yaml + split profiles). `ConfigManager.raw` exposes the merged dict.
@@ -26,9 +28,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `tests/test_mode_routing.py`: prefix stripping for `@qdrant` / `@docs` / `@find`.
 - `tests/test_config_loader.py`: merged YAML parity between `app.config` and `agentforge.config`.
 - `tests/test_feature_flags.py`: default `canvas.enabled` / `botty.enabled` settings.
+- `tests/test_mode_prefixes.py`, `tests/test_botty_engine.py`: shared RAG aliases and Botty rate limits.
 
 ### Removed
 
+- `get_connector_config()` (unused after unified Google OAuth cleanup).
 - `strip_agent_prefix()` (unused after mode-routing extraction).
 - `translate_legacy_locality()` (empty map; inlined at call sites).
 - `tools.shell.sudo_password` startup warning in the CLI (the key was already ignored; interactive sudo is the only path).

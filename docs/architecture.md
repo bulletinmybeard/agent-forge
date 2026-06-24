@@ -98,7 +98,7 @@ These ship with `agentforge-web` but are independent of core chat/RAG. Each has 
 | **Botty**    | `botty.enabled` (default `true`)         | Proactive session-awareness companion on `/ws/botty` (nudges, recall). Disable to drop the WebSocket route entirely. |
 | **Prompt Lab** | always on (separate `prompt_lab.db`) | Multi-profile prompt comparison for developers/UI: `/api/prompt-lab/*`. Uses opening-prompt refinement when `prompt_refinement.enabled` is set. |
 
-Botty's finer knobs (`analysis_interval`, `intervention_threshold`, model roles, Qdrant `insights` collection) live in `config.yaml` under `botty:` for future engine wiring; only `enabled` gates startup today.
+Botty honors `analysis_interval` (process every Nth completed run), `max_frequency_seconds` (minimum gap between nudges), and `dismissal_cooldown_seconds` (quiet period after a dismiss). Model roles and the Qdrant `insights` collection are configured under `botty:` but not yet used by the engine.
 
 ## Configuration
 

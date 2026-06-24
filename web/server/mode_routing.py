@@ -6,12 +6,12 @@ returns the cleaned query plus the forced mode name.
 
 from __future__ import annotations
 
+from agentforge.mode_prefixes import RAG_SEARCH_ALIASES, RAG_SEARCH_MODE
+
 STICKY_MODES = frozenset(("web_search", "logs", "sql", "scheduler", "monitor", "research", "coding"))
 
 CHAT_ALIASES = {"@chat"}
 AGENT_ALIASES = {"@agent"}
-# RAG over indexed data (@qdrant is canonical). @docs/@find are backward-compatible aliases.
-RAG_SEARCH_ALIASES = frozenset({"@qdrant", "@docs", "@find"})
 SEARCH_ALIASES = RAG_SEARCH_ALIASES
 WEB_SEARCH_ALIASES = {"@search"}
 LOGS_ALIASES = {"@logs"}
@@ -33,7 +33,7 @@ _PREFIX_GROUPS: list[tuple[set[str], str]] = [
     (AGENT_ALIASES, "agent"),
     (WEB_SEARCH_ALIASES, "web_search"),
     (LOGS_ALIASES, "logs"),
-    (SEARCH_ALIASES, "search"),
+    (SEARCH_ALIASES, RAG_SEARCH_MODE),
     (DISCOVER_ALIASES, "discover"),
     (PIPELINE_ALIASES, "pipeline"),
     (REVIEW_ALIASES, "review"),
@@ -67,6 +67,6 @@ def strip_mode_prefix(query: str) -> tuple[str, str | None]:
         if alias in lower:
             idx = lower.index(alias)
             rest = (stripped[:idx] + stripped[idx + len(alias) :]).strip()
-            return rest, "search"
+            return rest, RAG_SEARCH_MODE
 
     return query, None
