@@ -445,6 +445,14 @@ class CanvasSettings(BaseSettings):
     enabled: bool = Field(default=_yaml.get("canvas", {}).get("enabled", True))
 
 
+class PromptLabSettings(BaseSettings):
+    """Multi-provider prompt comparison — developer/UI tool at /api/prompt-lab/*."""
+
+    model_config = SettingsConfigDict(env_prefix="PROMPT_LAB_")
+
+    enabled: bool = Field(default=_yaml.get("prompt_lab", {}).get("enabled", True))
+
+
 class BottySettings(BaseSettings):
     """Settings for Botty — the session awareness layer."""
 
@@ -605,6 +613,7 @@ class Settings(BaseSettings):
     sql_databases: SqlDatabasesSettings = Field(default_factory=SqlDatabasesSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     canvas: CanvasSettings = Field(default_factory=CanvasSettings)
+    prompt_lab: PromptLabSettings = Field(default_factory=PromptLabSettings)
     botty: BottySettings = Field(default_factory=BottySettings)
     review: ReviewSettings = Field(default_factory=ReviewSettings)
     persona: PersonaSettings = Field(default_factory=PersonaSettings)

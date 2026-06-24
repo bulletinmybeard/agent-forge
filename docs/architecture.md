@@ -96,7 +96,7 @@ These ship with `agentforge-web` but are independent of core chat/RAG. Each has 
 | ------------ | ---------------------------------------- | ----------------------------------------------------------------------- |
 | **Canvas**   | `canvas.enabled` (default `true`)        | Per-session scratch pad: auto-collects URLs, `#tags`, and attachments. REST at `/api/canvas/*`; `session.init` reports `canvas_enabled`. |
 | **Botty**    | `botty.enabled` (default `true`)         | Proactive session-awareness companion on `/ws/botty` (nudges, recall). Disable to drop the WebSocket route entirely. |
-| **Prompt Lab** | always on (separate `prompt_lab.db`) | Multi-profile prompt comparison for developers/UI: `/api/prompt-lab/*`. Uses opening-prompt refinement when `prompt_refinement.enabled` is set. |
+| **Prompt Lab** | `prompt_lab.enabled` (default `true`)  | Multi-profile prompt comparison for developers/UI: `/api/prompt-lab/*` (separate `prompt_lab.db`). Uses opening-prompt refinement when `prompt_refinement.enabled` is set. |
 
 Botty honors `analysis_interval` (process every Nth completed run), `max_frequency_seconds` (minimum gap between nudges), and `dismissal_cooldown_seconds` (quiet period after a dismiss). Model roles and the Qdrant `insights` collection are configured under `botty:` but not yet used by the engine.
 

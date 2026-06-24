@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - RAG `@` aliases centralized in `agentforge/mode_prefixes.py` (shared by `mode_routing` and `intent_classifier`).
 - Botty engine reads `analysis_interval`, `max_frequency_seconds`, and `dismissal_cooldown_seconds` from config.
 - `canvas.enabled` and `botty.enabled` in `config.yaml` now gate Canvas init and the `/ws/botty` route (defaults remain `true`).
+- `prompt_lab.enabled` gates Prompt Lab DB init and `/api/prompt-lab/*` endpoints; `canvas.enabled` also gates the `/api/canvas/*` router (not just init).
 - `OllamaSettings` profile resolution always delegates to `agentforge.config.ConfigManager` (removed duplicate `_merge_profile_chain` fallback).
 - Config loading consolidated: `app/config.py` and `agentforge.config.ConfigManager` both use `load_merged_yaml()` (framework-config + config.yaml + split profiles). `ConfigManager.raw` exposes the merged dict.
 - Legacy per-product Google connector plugins (`gmail`, `google_drive`, `bigquery`, `youtube`) removed; unified `google` connector only. Unmigrated SQLite rows are skipped at startup (see `scripts/list-legacy-connections.py`).

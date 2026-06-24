@@ -180,14 +180,17 @@ async def lifespan(app: FastAPI):
         logger.warning("MonitorService failed to start: %s — monitor mode will be unavailable", exc)
 
     # Initialise Prompt Lab (separate DB — persists /api/prompt-lab/* runs)
-    try:
-        prompt_lab_db_path = SERVICE_ROOT / "data" / "prompt_lab.db"
-        prompt_lab_db = PromptLabDatabase(prompt_lab_db_path)
-        prompt_lab_db.create_tables()
-        api_module.init_prompt_lab_db(prompt_lab_db)
-        logger.info("Prompt Lab initialised (db: %s)", prompt_lab_db_path)
-    except Exception as exc:
-        logger.warning("Prompt Lab failed to initialise: %s — history will be unavailable", exc)
+    if af_settings.prompt_lab.enabled:
+        try:
+            prompt_lab_db_path = SERVICE_ROOT / "data" / "prompt_lab.db"
+            prompt_lab_db = PromptLabDatabase(prompt_lab_db_path)
+            prompt_lab_db.create_tables()
+            api_module.init_prompt_lab_db(prompt_lab_db)
+            logger.info("Prompt Lab initialised (db: %s)", prompt_lab_db_path)
+        except Exception as exc:
+            logger.warning("Prompt Lab failed to initialise: %s — history will be unavailable", exc)
+    else:
+        logger.info("Prompt Lab disabled (prompt_lab.enabled=false)")
 
     # Initialise Canvas (shares the same SQLite file as chat messages)
     if af_settings.canvas.enabled:
@@ -328,8 +331,9 @@ app.include_router(services_api_router)
 # Configs viewer — read-only YAML inspection (verifies deployment landed)
 app.include_router(configs_api_router)
 
-# Canvas endpoints
-app.include_router(canvas_api_router)
+# Canvas endpoints — gated by canvas.enabled in config.yaml
+if af_settings.canvas.enabled:
+    app.include_router(canvas_api_router)
 
 # Catalog API — unified model-metadata across LLM providers (Redis-cached)
 app.include_router(catalog_api_router)

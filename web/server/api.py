@@ -21,6 +21,8 @@ import ollama
 from fastapi import APIRouter, Body, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from app.config import settings as af_settings
+
 from .database import ChatDatabase
 from .ws_endpoint import get_runtime, is_canvas_enabled
 
@@ -1193,6 +1195,12 @@ def init_prompt_lab_db(db) -> None:
     _prompt_lab_db = db
 
 
+def _require_prompt_lab() -> None:
+    """Raise 503 when Prompt Lab is disabled via prompt_lab.enabled=false."""
+    if not af_settings.prompt_lab.enabled:
+        raise HTTPException(status_code=503, detail="Prompt Lab disabled (prompt_lab.enabled=false)")
+
+
 class PromptLabRequest(BaseModel):
     """Request body for ``POST /api/prompt-lab/run``."""
 
@@ -1240,6 +1248,7 @@ async def run_prompt_lab(req: PromptLabRequest) -> PromptLabResponse:
     are isolated per profile — a failing profile returns a result with the
     ``error`` field set while the others complete normally.
     """
+    _require_prompt_lab()
     if not req.prompt or not req.prompt.strip():
         raise HTTPException(status_code=400, detail="prompt is required")
     if not req.profiles:
@@ -1327,6 +1336,7 @@ async def list_prompt_lab_runs(limit: int = 20):
     total_latency_ms. Full results are not included — fetch via
     ``GET /api/prompt-lab/runs/{id}`` when needed.
     """
+    _require_prompt_lab()
     if _prompt_lab_db is None:
         return {"runs": []}
     runs = _prompt_lab_db.list_runs(limit=limit)
@@ -1343,6 +1353,7 @@ async def list_prompt_lab_runs(limit: int = 20):
 @router.get("/prompt-lab/runs/{run_id}")
 async def get_prompt_lab_run(run_id: str):
     """Fetch a single persisted run + all its per-profile results."""
+    _require_prompt_lab()
     if _prompt_lab_db is None:
         raise HTTPException(status_code=503, detail="prompt_lab DB unavailable")
     run = _prompt_lab_db.get_run(run_id)
