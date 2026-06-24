@@ -9,10 +9,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - Knowledge Database content types are now `note`, `reference`, `documentation`, `document`, `cheatsheet`, and `snippet` (replacing the earlier `code` / `command` / `url` / `config` / `error_solution` / `api_example` set). Update clients and any indexed entries accordingly.
+- `@felix` moved out of tracked `custom_agents.yaml` into `custom_agents.local.yaml.example` (copy to gitignored `custom_agents.local.yaml` to enable).
 
 ### Added
 
 - `GET /knowledge/list`: slim metadata listing for the browse view (no content body; optional `limit`, default 2000).
+- `custom_agents.local.yaml.example` template for private agent overlays.
+
+### Removed
+
+- `tools.shell.sudo_password` startup warning in the CLI (the key was already ignored; interactive sudo is the only path).
+- `AGENTFORGE_WORKER_LOCALITY` env fallback in worker role resolution (use `AGENTFORGE_WORKER_ROLE`).
+- Legacy `connectors.google.gmail.credentials_dir` config path for OAuth client secrets (use `connectors.credentials_dir` or `GMAIL_CREDENTIALS_DIR`).
 
 ## [0.8.0] - 2026-06-21
 

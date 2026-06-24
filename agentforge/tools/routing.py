@@ -212,24 +212,8 @@ def translate_legacy_locality(value: str) -> str:
 
 
 def my_role() -> str:
-    """Resolve this worker's role.
-
-    Reads ``AGENTFORGE_WORKER_ROLE`` first, then falls back to ``AGENTFORGE_WORKER_LOCALITY``
-    (translated through :func:`translate_legacy_locality`), then to ``default_role``.
-    """
-    role = os.environ.get("AGENTFORGE_WORKER_ROLE")
-    if role:
-        return role
-    legacy = os.environ.get("AGENTFORGE_WORKER_LOCALITY")
-    if legacy:
-        translated = translate_legacy_locality(legacy)
-        logger.warning(
-            "AGENTFORGE_WORKER_LOCALITY=%r is deprecated; set AGENTFORGE_WORKER_ROLE=%r instead",
-            legacy,
-            translated,
-        )
-        return translated
-    return default_role()
+    """Resolve this worker's role from ``AGENTFORGE_WORKER_ROLE``, else ``default_role``."""
+    return os.environ.get("AGENTFORGE_WORKER_ROLE") or default_role()
 
 
 def check_decorator_drift(tool_localities: dict[str, str]) -> list[tuple[str, str, str]]:

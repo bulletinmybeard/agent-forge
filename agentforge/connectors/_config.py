@@ -81,20 +81,14 @@ def get_encryption_key() -> str:
 def get_credentials_dir() -> Path:
     """Resolve the directory containing client_secret.json.
 
-    Same priority as the old gmail_tools.py:
-    GMAIL_CREDENTIALS_DIR env → config.yaml google.gmail.credentials_dir → ~/.agentforge/
+    Precedence: ``GMAIL_CREDENTIALS_DIR`` env → ``connectors.credentials_dir`` in
+    config.yaml → ``~/.agentforge/``.
     """
     env_dir = os.environ.get("GMAIL_CREDENTIALS_DIR")
     if env_dir:
         return Path(env_dir).expanduser()
 
-    # Check legacy config.yaml path (google.gmail.credentials_dir)
     cfg = _load()
-    legacy_dir = cfg.get("google", {}).get("gmail", {}).get("credentials_dir")
-    if legacy_dir:
-        return Path(str(legacy_dir)).expanduser()
-
-    # Check new connectors config path
     conn_dir = cfg.get("connectors", {}).get("credentials_dir")
     if conn_dir:
         return Path(str(conn_dir)).expanduser()

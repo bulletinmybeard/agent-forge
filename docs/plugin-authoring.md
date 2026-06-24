@@ -100,7 +100,7 @@ Dispatch modes:
 - `in_process`: every tool runs in the current worker. The single-host/dev default. No separate native worker needed.
 - `split`: each tool is dispatched to its role's queue. Needs a worker running for every role a tool can route to.
 
-Relevant env overrides: `AGENTFORGE_TOOL_ROUTING` (path to the YAML), `AGENTFORGE_DISPATCH_MODE`, `AGENTFORGE_WORKER_ROLE` (and the deprecated `AGENTFORGE_WORKER_LOCALITY`), `AGENTFORGE_SAQ_TOOL_TIMEOUT`, `AGENTFORGE_SAQ_AGENT_TIMEOUT`.
+Relevant env overrides: `AGENTFORGE_TOOL_ROUTING` (path to the YAML), `AGENTFORGE_DISPATCH_MODE`, `AGENTFORGE_WORKER_ROLE`, `AGENTFORGE_SAQ_TOOL_TIMEOUT`, `AGENTFORGE_SAQ_AGENT_TIMEOUT`.
 
 ## Private overlays
 
@@ -110,7 +110,7 @@ The published repo ships generic examples. Your private copy never gets committe
 | Overlay                    | Overlays / merges into                                                                                                          |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `config.yaml`              | The live config (secrets, API keys, private sections). The published example is `config.example.yaml`.                          |
-| `custom_agents.local.yaml` | Extra custom agents. Merged over `custom_agents.yaml` (local entries win).                                                      |
+| `custom_agents.local.yaml` | Extra custom agents. Merged over `custom_agents.yaml` (local entries win). Template: `custom_agents.local.yaml.example`.          |
 | `tool_routing.local.yaml`  | Extra routing. Its `rules` are prepended (checked first). `roles`/`modes` are merged.                                           |
 | `markdown/local/`          | Private agent prompt files referenced from `custom_agents.local.yaml`.                                                          |
 | `plugins/*`                | Private tool modules. Only `plugins/__init__.py` is committed. The rest is gitignored and loaded via `AGENTFORGE_TOOL_PLUGINS`. |

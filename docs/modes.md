@@ -55,7 +55,8 @@ Custom agents are focused presets defined in `custom_agents.yaml` and loaded at 
 | `@health`   | infra-health   | Full-stack infrastructure health check                             |
 | `@test`     | test-mode      | Run tests, diagnose failures, and suggest fixes                    |
 | `@api`      | api-test       | API endpoint testing, validation, and exploration                  |
-| `@felix`    | felix          | Autonomous diagnostic-repair: diagnose, fix, verify (Docker, disk/system, HTTP) |
+
+`@felix` (diagnostic-repair) is not in the published `custom_agents.yaml`; copy `custom_agents.local.yaml.example` to `custom_agents.local.yaml` to enable it. See [plugin-authoring.md](plugin-authoring.md).
 
 The chat UI lists whatever agents are currently configured (it reads `GET /api/agents`), so your set may differ from the defaults above.
 
