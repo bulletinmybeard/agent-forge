@@ -104,8 +104,6 @@ def _init_database() -> ChatDatabase:
         sys.path.insert(0, str(SERVICE_ROOT))
 
     # Read web-specific DB path from agentforge config.yaml
-    import yaml
-
     config_path = SERVICE_ROOT / "config.yaml"
     db_path = "data/web_chat.db"  # default
 
@@ -358,8 +356,6 @@ async def health():
 # In production: serve the built React app as static files.
 # This must be registered LAST so it doesn't shadow API/WS routes.
 if CLIENT_DIST.is_dir():
-    from fastapi.responses import FileResponse
-
     _SPA_INDEX = CLIENT_DIST / "index.html"
 
     # Serve static assets (JS, CSS, images) from dist/

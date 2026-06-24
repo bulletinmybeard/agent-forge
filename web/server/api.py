@@ -12,19 +12,64 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re as _re
 import subprocess
 import time
+from datetime import datetime as _dt
 from pathlib import Path
 from typing import List
 
 import ollama
+import yaml
 from fastapi import APIRouter, Body, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from agentforge.client import AIClient
+from agentforge.config import get_config as get_fw_config
+from agentforge.router import ProfileRouter
+from agentforge.tools.sql_schema_tool import (
+    _cache_key,
+    _compact_schema,
+    _get_redis,
+    get_all_cached_schemas,
+)
+from agentforge.tools.sql_schema_tool import (
+    get_cached_schema as fetch_cached_schema,
+)
 from app.config import settings as af_settings
 
+from . import state
+from .audit_log import get_audit_log
 from .database import ChatDatabase
-from .ws_endpoint import get_runtime, is_canvas_enabled
+from .mode_routing import STICKY_MODES, strip_mode_prefix
+from .monitor_service import get_monitor_service
+from .prompt_refiner import refine_prompt
+from .queue.models import JobStatus
+from .queue.store import job_store
+from .result_store import get_result_store
+from .scheduler_service import get_scheduler_service
+from .session_event_buffer import get_session_event_buffer
+from .ws_endpoint import (
+    _AGENT_KEYWORDS,
+    _AGENT_PATTERNS,
+    _DEFAULT_CONTEXT_SIZE,
+    _LOG_ANALYSIS_TOOLS,
+    _MODEL_CONTEXT_SIZES,
+    _WEB_SEARCH_TOOLS,
+    _WORKER_MODES,
+    _build_conversation_history,
+    _classify_mode,
+    _classify_mode_heuristic,
+    _is_worker_mode,
+    _match_mode_patterns,
+    _resolve_skills,
+    _runtime,
+    _runtime_ready,
+    _strip_custom_prefix,
+    get_runtime,
+    is_canvas_enabled,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +104,7 @@ async def _generate_note_title(query: str, calls: list[dict], content: str | Non
         user_msg = f"Query: {query.strip()}\nTool(s): {tool_names}"
 
     try:
-        from app.config import settings
-
-        role = settings.ollama.get_role("query_refinement")  # cloud-light profile
+        role = af_settings.ollama.get_role("query_refinement")  # cloud-light profile
         client = ollama.AsyncClient(
             host=role.profile.host,
             headers=role.profile.headers,
@@ -119,9 +162,6 @@ def get_db() -> ChatDatabase:
 
 
 # -- Welcome message -----------------------------------------------------------
-
-import re as _re
-from datetime import datetime as _dt
 
 _USER_CONTEXT_CACHE: dict[str, str] = {}  # key: "name" → first name
 
@@ -245,15 +285,13 @@ async def list_sessions(limit: int = 50, offset: int = 0, source: str = "web"):
     UI). External-app sessions are hidden unless asked for: ``?source=all`` lists
     every source, ``?source=<name>`` a single one.
     """
-    from .queue.store import job_store as _job_store
-
     sources = None if source == "all" else (source,)
     db = get_db()
     sessions = db.list_sessions(limit=limit, offset=offset, sources=sources)
     result = []
     for s in sessions:
         d = s.to_dict()
-        d["has_active_job"] = _job_store.get_active_job(s.id) is not None
+        d["has_active_job"] = job_store.get_active_job(s.id) is not None
         result.append(d)
     return result
 
@@ -390,8 +428,6 @@ async def get_active_job(session_id: str):
     Used by the frontend on reconnect to decide whether to resume polling.
     Returns the job info or 404 if no active job exists.
     """
-    from .queue.store import job_store
-
     job = job_store.get_active_job(session_id)
     if not job:
         raise HTTPException(status_code=404, detail="No active job")
@@ -525,9 +561,6 @@ async def broadcast_worker_event(session_id: str, body: dict = Body(...)):
     mirrored to the buffer — they're interactions (confirm dialogs) that
     would re-pop on reload and confuse the user.
     """
-    from . import state
-    from .session_event_buffer import get_session_event_buffer
-
     ws = state.active_ws.get(session_id)
     if ws:
         try:
@@ -552,8 +585,6 @@ async def push_worker_event(session_id: str, body: _EventBody):
 
     Called by HttpCallbackSocket in jobs_common.py for every send_and_persist call.
     """
-    from . import state
-
     db = get_db()
 
     # Ensure the session row exists (worker may start before first WS connect)
@@ -593,8 +624,6 @@ async def poll_confirm_response(session_id: str, request_id: str):
     Returns {"ready": True, "confirmed": bool, "auto_accept": bool} once they have.
     The response is consumed on first read (pop) so the worker doesn't see it twice.
     """
-    from . import state
-
     key = f"{session_id}:{request_id}"
     response = state.confirm_responses.pop(key, None)
     if response is None:
@@ -614,8 +643,6 @@ async def poll_secret_response(session_id: str, request_id: str):
     {"ready": True, "value": "..."} or {"ready": True, "cancelled": True}.
     Consumed on first read (pop) and never logged — the value is memory-only.
     """
-    from . import state
-
     key = f"{session_id}:{request_id}"
     response = state.secret_responses.pop(key, None)
     if response is None:
@@ -640,9 +667,6 @@ async def update_message_metadata(session_id: str, msg_type: str, body: dict = B
 @internal.post("/jobs/{job_id}/status", status_code=200)
 async def update_job_status(job_id: str, body: _StatusBody):
     """Update job status from the worker (running / done / error)."""
-    from .queue.models import JobStatus
-    from .queue.store import job_store
-
     status_map = {
         "running": JobStatus.RUNNING,
         "done": JobStatus.DONE,
@@ -664,9 +688,6 @@ async def check_job_cancelled(job_id: str):
     Also returns ``done=true`` when the job is in any terminal state
     (DONE, ERROR, CANCELLED) so the worker can skip duplicate execution.
     """
-    from .queue.models import JobStatus
-    from .queue.store import job_store
-
     _TERMINAL = {JobStatus.DONE, JobStatus.ERROR, JobStatus.CANCELLED}
     job = job_store.get_job(job_id)
     cancelled = job is not None and job.status == JobStatus.CANCELLED
@@ -831,8 +852,6 @@ async def list_agents():
     Used by the Help modal to render an up-to-date agents/modes reference.
     Built-in modes are returned in canonical order; custom agents follow.
     """
-    from .ws_endpoint import get_runtime
-
     # Aliases must match the _*_ALIASES sets in ws_endpoint.py — any alias
     # listed here that isn't in the matching set will silently not work.
     built_in = [
@@ -843,7 +862,8 @@ async def list_agents():
             "title": "Chat",
             "description": (
                 "General LLM knowledge. No Qdrant search, no tools. Uses the answer-generation "
-                "profile with conversation history. For indexed docs, use @docs."
+                "profile with conversation history. For indexed docs, use @qdrant "
+                "(or @docs/@find)."
             ),
             "example": "what is a REST API?",
             "profile": "cloud-light",
@@ -1079,15 +1099,11 @@ async def get_profiles(include_abstract: bool = False):
     individual ``bedrock-claude-*`` / ``deepinfra-*`` / ``openrouter-*`` abstracts
     directly.
     """
-    from app.config import settings as af_settings
-
     # Resolved profile info (model + temp + max_tokens + provider + abstract).
     profiles = af_settings.ollama.list_selectable_profiles(include_abstract=include_abstract)
 
     # Build the role → profile-name map from config.yaml's ollama.model_roles so
     # the UI can surface the per-pipeline-step assignments.
-    import yaml
-
     config_path = Path(__file__).resolve().parent.parent.parent / "config.yaml"
     roles: dict[str, str] = {}
     if config_path.exists():
@@ -1128,9 +1144,6 @@ async def get_providers():
     working. Mirrors the try/except pattern in ``app/config.py``'s
     ``list_selectable_profiles``.
     """
-    from agentforge.config import get_config as _get_fw_config
-    from app.config import settings as af_settings
-
     profiles = af_settings.ollama.list_selectable_profiles(include_abstract=True)
     available = sorted({(info.get("declared_provider") or "ollama").lower() for info in profiles.values()})
 
@@ -1148,7 +1161,7 @@ async def get_providers():
         models_by_provider.setdefault(prov, {})[name] = model
 
     try:
-        fw = _get_fw_config()
+        fw = get_fw_config()
     except Exception as exc:  # noqa: BLE001 — degraded mode covers all init errors
         logger.warning(
             "/api/providers: ConfigManager unavailable (%s); returning ollama-only",
@@ -1253,10 +1266,6 @@ async def run_prompt_lab(req: PromptLabRequest) -> PromptLabResponse:
         raise HTTPException(status_code=400, detail="prompt is required")
     if not req.profiles:
         raise HTTPException(status_code=400, detail="at least one profile is required")
-
-    from agentforge.client import AIClient
-
-    from .prompt_refiner import refine_prompt
 
     # Refine the opening prompt once (when enabled). The same refined text feeds
     # every profile. No-op + returns the original when refinement is off.
@@ -1374,7 +1383,6 @@ async def get_knowledge():
     without needing a separate connection to the main service.
     """
     try:
-        from app.config import settings as af_settings
         from app.services.indexer_service import indexer_service
     except Exception as exc:
         logger.warning("Could not import indexer_service: %s", exc)
@@ -1436,8 +1444,6 @@ async def get_knowledge():
 @router.get("/upload-limits")
 async def upload_limits():
     """Return file upload constraints and model context info for client-side budget checks."""
-    from .ws_endpoint import _DEFAULT_CONTEXT_SIZE, _MODEL_CONTEXT_SIZES
-
     return {
         "max_file_size_bytes": _max_file_size,
         "max_file_size_mb": _max_file_size // (1024 * 1024),
@@ -1560,8 +1566,6 @@ async def audit_tool_executions(
     count: int = 100,
 ):
     """Query the tool execution audit log (Redis Streams)."""
-    from .audit_log import get_audit_log
-
     audit = get_audit_log()
     if not audit:
         raise HTTPException(status_code=503, detail="Audit log not available")
@@ -1584,8 +1588,6 @@ async def audit_agent_runs(
     count: int = 100,
 ):
     """Query the agent run audit log (Redis Streams)."""
-    from .audit_log import get_audit_log
-
     audit = get_audit_log()
     if not audit:
         raise HTTPException(status_code=503, detail="Audit log not available")
@@ -1603,8 +1605,6 @@ async def audit_agent_runs(
 @router.get("/audit/stats")
 async def audit_stats(since_minutes: int | None = None):
     """Aggregated audit stats: total calls, error rate, top tools."""
-    from .audit_log import get_audit_log
-
     audit = get_audit_log()
     if not audit:
         raise HTTPException(status_code=503, detail="Audit log not available")
@@ -1620,8 +1620,6 @@ async def audit_stats(since_minutes: int | None = None):
 @router.get("/results/{session_id}")
 async def list_session_results(session_id: str):
     """List all cached result labels for a session (metadata only, no data)."""
-    from .result_store import get_result_store
-
     store = get_result_store()
     if not store:
         raise HTTPException(status_code=503, detail="Result store not available")
@@ -1631,8 +1629,6 @@ async def list_session_results(session_id: str):
 @router.get("/results/{session_id}/{label}")
 async def get_session_result(session_id: str, label: str):
     """Retrieve a specific cached result by label."""
-    from .result_store import get_result_store
-
     store = get_result_store()
     if not store:
         raise HTTPException(status_code=503, detail="Result store not available")
@@ -1645,8 +1641,6 @@ async def get_session_result(session_id: str, label: str):
 @router.delete("/results/{session_id}")
 async def clear_session_results(session_id: str):
     """Clear all cached results for a session."""
-    from .result_store import get_result_store
-
     store = get_result_store()
     if not store:
         raise HTTPException(status_code=503, detail="Result store not available")
@@ -1663,8 +1657,6 @@ async def list_cached_schemas():
 
     These are global (not session-scoped) — any chat session can use them.
     """
-    from agentforge.tools.sql_schema_tool import get_all_cached_schemas
-
     schemas = get_all_cached_schemas()
     summary = []
     for db_name, schema in schemas.items():
@@ -1683,10 +1675,7 @@ async def list_cached_schemas():
 @router.get("/schemas/{database}")
 async def get_cached_schema(database: str, format: str = "json"):
     """Retrieve a cached database schema."""
-    from agentforge.tools.sql_schema_tool import _compact_schema
-    from agentforge.tools.sql_schema_tool import get_cached_schema as _get
-
-    schema = _get(database)
+    schema = fetch_cached_schema(database)
     if not schema:
         raise HTTPException(status_code=404, detail=f"No cached schema for '{database}'")
     if format == "compact":
@@ -1697,8 +1686,6 @@ async def get_cached_schema(database: str, format: str = "json"):
 @router.delete("/schemas/{database}")
 async def invalidate_cached_schema(database: str):
     """Invalidate (delete) the cached schema for a database."""
-    from agentforge.tools.sql_schema_tool import _cache_key, _get_redis
-
     r = _get_redis()
     if not r:
         raise HTTPException(status_code=503, detail="Redis not available")
@@ -1729,8 +1716,6 @@ async def get_presets():
     if not _PRESETS_PATH.exists():
         return []
     try:
-        import yaml
-
         data = yaml.safe_load(_PRESETS_PATH.read_text()) or {}
         presets = data.get("presets", [])
         # Normalise: ensure each entry has at least name + message
@@ -1764,8 +1749,6 @@ class SchedulerJobUpdate(BaseModel):
 @router.get("/scheduler/jobs")
 async def list_scheduler_jobs():
     """List all scheduled jobs."""
-    from .scheduler_service import get_scheduler_service
-
     svc = get_scheduler_service()
     return {"jobs": svc.list_jobs()}
 
@@ -1773,8 +1756,6 @@ async def list_scheduler_jobs():
 @router.get("/scheduler/jobs/{job_id}")
 async def get_scheduler_job(job_id: str):
     """Get a single scheduled job."""
-    from .scheduler_service import get_scheduler_service
-
     svc = get_scheduler_service()
     job = svc.get_job(job_id)
     if not job:
@@ -1785,8 +1766,6 @@ async def get_scheduler_job(job_id: str):
 @router.post("/scheduler/jobs", status_code=201)
 async def create_scheduler_job(body: SchedulerJobCreate):
     """Create a new scheduled job."""
-    from .scheduler_service import get_scheduler_service
-
     svc = get_scheduler_service()
 
     # Vet the command through the safety guard
@@ -1815,8 +1794,6 @@ async def create_scheduler_job(body: SchedulerJobCreate):
 @router.put("/scheduler/jobs/{job_id}")
 async def update_scheduler_job(job_id: str, body: SchedulerJobUpdate):
     """Update a scheduled job."""
-    from .scheduler_service import get_scheduler_service
-
     svc = get_scheduler_service()
     fields = {k: v for k, v in body.model_dump().items() if v is not None}
     if not fields:
@@ -1844,8 +1821,6 @@ async def update_scheduler_job(job_id: str, body: SchedulerJobUpdate):
 @router.delete("/scheduler/jobs/{job_id}")
 async def delete_scheduler_job(job_id: str):
     """Delete a scheduled job."""
-    from .scheduler_service import get_scheduler_service
-
     svc = get_scheduler_service()
     deleted = svc.delete_job(job_id)
     if not deleted:
@@ -1856,8 +1831,6 @@ async def delete_scheduler_job(job_id: str):
 @router.get("/scheduler/jobs/{job_id}/runs")
 async def get_scheduler_job_runs(job_id: str, limit: int = 20):
     """Get recent runs for a scheduled job."""
-    from .scheduler_service import get_scheduler_service
-
     svc = get_scheduler_service()
     job = svc.get_job(job_id)
     if not job:
@@ -1897,8 +1870,6 @@ class MonitorJobUpdate(BaseModel):
 @router.get("/monitor/jobs")
 async def list_monitor_jobs():
     """List all monitor jobs."""
-    from .monitor_service import get_monitor_service
-
     svc = get_monitor_service()
     return {"jobs": svc.list_jobs()}
 
@@ -1906,8 +1877,6 @@ async def list_monitor_jobs():
 @router.get("/monitor/jobs/{job_id}")
 async def get_monitor_job(job_id: str):
     """Get a single monitor job."""
-    from .monitor_service import get_monitor_service
-
     svc = get_monitor_service()
     job = svc.get_job(job_id)
     if not job:
@@ -1918,8 +1887,6 @@ async def get_monitor_job(job_id: str):
 @router.post("/monitor/jobs", status_code=201)
 async def create_monitor_job(body: MonitorJobCreate):
     """Create a new monitor job."""
-    from .monitor_service import get_monitor_service
-
     svc = get_monitor_service()
     try:
         job = svc.create_job(
@@ -1943,8 +1910,6 @@ async def create_monitor_job(body: MonitorJobCreate):
 @router.put("/monitor/jobs/{job_id}")
 async def update_monitor_job(job_id: str, body: MonitorJobUpdate):
     """Update a monitor job."""
-    from .monitor_service import get_monitor_service
-
     svc = get_monitor_service()
     fields = {k: v for k, v in body.model_dump().items() if v is not None}
     if not fields:
@@ -1963,8 +1928,6 @@ async def update_monitor_job(job_id: str, body: MonitorJobUpdate):
 @router.delete("/monitor/jobs/{job_id}")
 async def delete_monitor_job(job_id: str):
     """Delete a monitor job."""
-    from .monitor_service import get_monitor_service
-
     svc = get_monitor_service()
     deleted = svc.delete_job(job_id)
     if not deleted:
@@ -1975,8 +1938,6 @@ async def delete_monitor_job(job_id: str):
 @router.get("/monitor/jobs/{job_id}/checks")
 async def get_monitor_job_checks(job_id: str, limit: int = 20):
     """Get recent checks for a monitor job."""
-    from .monitor_service import get_monitor_service
-
     svc = get_monitor_service()
     job = svc.get_job(job_id)
     if not job:
@@ -1988,8 +1949,6 @@ async def get_monitor_job_checks(job_id: str, limit: int = 20):
 @router.post("/monitor/jobs/{job_id}/check")
 async def trigger_monitor_check(job_id: str):
     """Trigger an immediate check for a monitor job."""
-    from .monitor_service import get_monitor_service
-
     svc = get_monitor_service()
     result = svc.check_now(job_id)
     if result is None:
@@ -2063,8 +2022,6 @@ def _extract_pdf(pdf_path: Path) -> Path | None:
 @router.get("/skills")
 async def list_skills():
     """Return all available skills from skills.yaml."""
-    from .ws_endpoint import _runtime, _runtime_ready
-
     try:
         await asyncio.wait_for(_runtime_ready.wait(), timeout=10)
     except asyncio.TimeoutError:
@@ -2110,17 +2067,6 @@ def _trace_heuristic(
     last_mode: str = "chat",
 ) -> list[dict]:
     """Replay the heuristic classifier logic and record which sub-checks fired."""
-    from .mode_routing import STICKY_MODES as _STICKY_MODES
-    from .mode_routing import strip_mode_prefix as _smp
-    from .ws_endpoint import (
-        _AGENT_KEYWORDS,
-        _AGENT_PATTERNS,
-        _match_mode_patterns,
-    )
-    from .ws_endpoint import (
-        _strip_custom_prefix as _scp,
-    )
-
     sub: list[dict] = []
     query_lower = query.lower()
 
@@ -2140,7 +2086,7 @@ def _trace_heuristic(
     )
 
     # 2. Custom agent alias
-    _, custom_mode = _scp(query, rt)
+    _, custom_mode = _strip_custom_prefix(query, rt)
     if custom_mode:
         sub.append(
             {
@@ -2161,7 +2107,7 @@ def _trace_heuristic(
     )
 
     # 3. Prefix check
-    _, forced_mode = _smp(query)
+    _, forced_mode = strip_mode_prefix(query)
     if forced_mode:
         sub.append(
             {
@@ -2258,7 +2204,7 @@ def _trace_heuristic(
     )
 
     # 7. Sticky mode
-    sticky_modes = _STICKY_MODES
+    sticky_modes = STICKY_MODES
     if last_mode in sticky_modes:
         _FOLLOWUP_PRONOUNS = _re.compile(r"\bthem\b|\bthose\b|\bthese\b|\bthey\b|\bits?\b|\bthat\b")
         _FOLLOWUP_PHRASES = _re.compile(
@@ -2384,19 +2330,6 @@ async def dry_run(body: DryRunRequest):
     profile routing, query refinement, dispatch decision, and conversation
     history assembly — with timing for each step.
     """
-    from .mode_routing import strip_mode_prefix as _strip_mode_prefix
-    from .ws_endpoint import (
-        _WORKER_MODES,
-        _build_conversation_history,
-        _classify_mode,
-        _classify_mode_heuristic,
-        _is_worker_mode,
-        _resolve_skills,
-        _runtime,
-        _runtime_ready,
-        _strip_custom_prefix,
-    )
-
     # Wait for runtime (max 10s)
     try:
         await asyncio.wait_for(_runtime_ready.wait(), timeout=10)
@@ -2417,7 +2350,7 @@ async def dry_run(body: DryRunRequest):
 
     # ── Step 1: Mode prefix detection (pure, sync) ────────────────────────
     t0 = time.perf_counter()
-    cleaned_text, forced_mode = _strip_mode_prefix(query)
+    cleaned_text, forced_mode = strip_mode_prefix(query)
     steps.append(
         {
             "step": "mode_prefix",
@@ -2682,9 +2615,6 @@ async def dry_run(body: DryRunRequest):
                     }
                 )
                 try:
-                    from agentforge.client import AIClient
-                    from agentforge.router import ProfileRouter
-
                     router_client = AIClient(profile="tool")
                     prof_router = ProfileRouter(router_client)
                     route = await asyncio.to_thread(prof_router.select, query)
@@ -2736,8 +2666,6 @@ async def dry_run(body: DryRunRequest):
     t0 = time.perf_counter()
     model_info: dict = {"model": None, "profile_name": None, "host": None}
     try:
-        from app.config import settings as af_settings
-
         target_profile = profile_result.get("profile")
         if target_profile:
             # Use _resolve_profile() which reads from YAML config
@@ -2814,8 +2742,6 @@ async def dry_run(body: DryRunRequest):
     tool_info: dict = {"tools": [], "count": 0, "source": None, "error": None}
     tool_sub_steps: list[dict] = []
     try:
-        from .ws_endpoint import _LOG_ANALYSIS_TOOLS, _WEB_SEARCH_TOOLS
-
         if base_mode == "web_search":
             tool_info["tools"] = list(_WEB_SEARCH_TOOLS)
             tool_info["count"] = len(_WEB_SEARCH_TOOLS)
@@ -3034,8 +2960,6 @@ async def serve_screenshot(filename: str):
     correct Content-Type and cache headers regardless of reverse proxy config.
     Uses the same _upload_base configured by app.py lifespan.
     """
-    from fastapi.responses import FileResponse
-
     # Use the authoritative upload base set by app.py (same as the static mount)
     if _upload_base is None:
         raise HTTPException(status_code=503, detail="Upload directory not configured")

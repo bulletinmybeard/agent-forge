@@ -1182,7 +1182,8 @@ def _parse_query(
 ) -> tuple[str, dict[str, str], bool]:
     """Parse @source prefixes and --flags from the query, apply sticky filters.
 
-    Returns (clean_query, filters, is_sticky) for @docs / RAG query parsing.
+    Returns (clean_query, filters, is_sticky) for @qdrant / RAG query parsing
+    (@docs and @find are aliases).
     """
     sticky = _session_sticky.get(session_id, {})
     parts = raw_query.split()
@@ -2286,7 +2287,7 @@ def _classify_mode_heuristic(
 
     # Explicit mode prefix: @agent/@tooling/@tools/@run/@exec → agent
     #                        @search/@web → web_search (web search via agent)
-    #                        @docs/@find → search (local RAG)
+    #                        @qdrant/@docs/@find → search (local RAG)
     #                        @discover/@discovery/@investigate → discover
     _, forced_mode = _strip_mode_prefix(query)
     if forced_mode == "agent":
@@ -2704,7 +2705,7 @@ def init_runtime() -> SearchRuntime:
     _runtime = SearchRuntime()
 
     # --- Ensure the knowledge-base collection exists (empty is fine) -------
-    # A fresh deployment has no indexed data, so searches (@docs, @sql schema
+    # A fresh deployment has no indexed data, so searches (@qdrant/@docs, @sql schema
     # context) would 404 on a missing collection. Create it empty + idempotent
     # so queries succeed and simply return nothing until data is indexed.
     _ensure_kb_collection()
@@ -3869,7 +3870,7 @@ def _build_conversation_history(
     # --- Semantic recall --------------------------------------------------
     # Retrieve relevant past exchanges from conversation memory and prepend
     # them as a system context block.  Gated by memory_policy — only FULL
-    # tier modes (@docs, default chat, @pipeline) recall; SESSION tier
+    # tier modes (@qdrant/@docs, default chat, @pipeline) recall; SESSION tier
     # (@agent, @research, @sql, …) and NONE tier (@cloud, @monitor, …)
     # skip the injection entirely, preventing stale context from steering
     # the model toward a different query / pattern.
@@ -4630,7 +4631,7 @@ async def websocket_chat(ws: WebSocket, session_id: str | None = None) -> None:
             # Build the list of valid prefixes — keep this in sync with
             # mode_routing.strip_mode_prefix / framework.intent_classifier._PREFIX_MAP.
             built_in = (
-                "@chat, @agent, @docs/@qdrant, @search/@web, @logs, "
+                "@chat, @agent, @qdrant/@docs/@find, @search/@web, @logs, "
                 "@discover, @sql, @pipeline, @scheduler, @monitor, "
                 "@review, @research, @coding/@code"
             )
@@ -10308,7 +10309,7 @@ async def _run_coding(
                         "`@coding` handles structural code transformations "
                         "(find X → replace with Y across files). For review, "
                         "analysis, or open-ended questions about a file, "
-                        "use `@chat`, `@docs`, or `@agent` instead."
+                        "use `@chat`, `@qdrant`/`@docs`, or `@agent` instead."
                     )
                     await send_and_persist(
                         protocol.agent_result(text=msg, elapsed=time.perf_counter() - total_start),
@@ -10380,7 +10381,7 @@ async def _run_coding(
                     "edits). That's almost never what you want.\n\n"
                     "Either narrow the prompt to a specific construct "
                     "(*'find every `<Card>` with a `data-*` attr and remove "
-                    "the attr'*), or use `@chat` / `@docs` / `@agent` for "
+                    "the attr'*), or use `@chat` / `@qdrant` / `@docs` / `@agent` for "
                     "review and analysis."
                 )
                 await send_and_persist(
