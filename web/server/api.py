@@ -50,6 +50,7 @@ from .queue.store import job_store
 from .result_store import get_result_store
 from .scheduler_service import get_scheduler_service
 from .session_event_buffer import get_session_event_buffer
+from .session_source import resolve_session_source
 from .ws_endpoint import (
     _AGENT_KEYWORDS,
     _AGENT_PATTERNS,
@@ -587,9 +588,10 @@ async def push_worker_event(session_id: str, body: _EventBody):
     """
     db = get_db()
 
-    # Ensure the session row exists (worker may start before first WS connect)
+    # Ensure the session row exists. Stamp source from the active job's overrides
+    # when present so KB/external clients are not mis-tagged as "web".
     if not db.get_session(session_id):
-        db.create_session(session_id)
+        db.create_session(session_id, source=resolve_session_source(session_id))
 
     db.add_message(
         session_id=session_id,

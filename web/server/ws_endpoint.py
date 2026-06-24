@@ -4347,7 +4347,11 @@ async def _wait_job_done(
 
 
 @router.websocket("/ws/chat")
-async def websocket_chat(ws: WebSocket, session_id: str | None = None) -> None:
+async def websocket_chat(
+    ws: WebSocket,
+    session_id: str | None = None,
+    source: str | None = None,
+) -> None:
     # Optional API-key auth (off unless security.api_keys is set). When a key is
     # supplied via Sec-WebSocket-Protocol it must be echoed back on accept().
     from app.security import negotiate_ws
@@ -4373,6 +4377,10 @@ async def websocket_chat(ws: WebSocket, session_id: str | None = None) -> None:
             )
             await ws.close()
             return
+
+    from .session_source import resolve_session_source
+
+    _connect_source = (source or "").strip().lower() or None
 
     rt = get_runtime()
     db = get_db()
@@ -5019,10 +5027,14 @@ async def websocket_chat(ws: WebSocket, session_id: str | None = None) -> None:
                     # mutated afterwards. NULL = use the global default. The
                     # frontend only sends `provider` on the very first query.
                     initial_provider = (overrides or {}).get("provider")
-                    # External clients self-identify via overrides.source so
-                    # their sessions can be kept out of the
-                    # human Agent Chat sidebar. The web UI omits it -> "web".
-                    initial_source = (overrides or {}).get("source") or "web"
+                    # External clients self-identify via overrides.source and/or
+                    # ?source= on the WebSocket URL. The Agent Chat UI omits both
+                    # -> "web".
+                    initial_source = resolve_session_source(
+                        session_id,
+                        connect_source=_connect_source,
+                        overrides=overrides,
+                    )
                     db.create_session(
                         session_id,
                         title="New chat",
