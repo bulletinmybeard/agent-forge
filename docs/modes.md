@@ -1,6 +1,6 @@
 # Modes
 
-Every prompt runs in a mode. You pick one with an `@prefix` at the start of the message (see [api-examples.md](api-examples.md) for how to send it). Without a prefix the message goes to plain chat, or the server classifies it for you. `@docs` is the one prefix that can appear anywhere in the prompt; the rest must lead.
+Every prompt runs in a mode. You pick one with an `@prefix` at the start of the message (see [api-examples.md](api-examples.md) for how to send it). Without a prefix the message goes to plain chat, or the server classifies it for you. RAG prefixes (`@qdrant` and its aliases `@docs` / `@find`) can appear anywhere in the prompt; the rest must lead.
 
 Modes also read the in-prompt `#source` filters and `--flags` documented in [api-examples.md](api-examples.md#specify-the-mode-sources-and-flags-per-prompt).
 
@@ -10,8 +10,9 @@ Files uploaded with a prompt (via `/api/upload/{session_id}`) are injected as co
 
 | Prefix                | Mode       | What it does                                                                                             |
 | --------------------- | ---------- | -------------------------------------------------------------------------------------------------------- |
-| _(none)_              | chat       | General LLM knowledge. No vector search, no tools. For indexed data use `@docs`.                         |
-| `@docs`               | search     | RAG over your indexed data in Qdrant. `#source` tags filter by source. Can appear anywhere.              |
+| _(none)_              | chat       | General LLM knowledge. No vector search, no tools. For indexed data use `@qdrant`.                         |
+| `@qdrant`             | search     | RAG over your indexed data in Qdrant. `#source` tags filter by source. Can appear anywhere.              |
+| `@docs`, `@find`      | search     | Aliases for `@qdrant` (same mode; kept for older prompts and docs).                                      |
 | `@search`             | web_search | Live web search (`web_search`, `web_fetch`, `web_fetch_rendered`).                                       |
 | `@agent`              | agent      | Full tool-calling agent (files, shell, git, Docker, SSH, ...). Iterates until the task is done.          |
 | `@sql`                | sql        | Generate and run SQL from natural language. Needs the SQL plugin (see below).                            |
@@ -27,14 +28,14 @@ Files uploaded with a prompt (via `/api/upload/{session_id}`) are injected as co
 
 A few that are worth more than one line:
 
-- **`@docs`** searches the data you have indexed (see [the chunking guide](../chunking/README.md)). Filter to a source with `#name`; names resolve through `search.source_aliases` in `config.yaml`, and multiple tags combine with OR. Example: `@docs #api how do I authenticate? --brief`.
+- **`@qdrant`** (aliases: `@docs`, `@find`) searches the data you have indexed (see [the chunking guide](../chunking/README.md)). Filter to a source with `#name`; names resolve through `search.source_aliases` in `config.yaml`, and multiple tags combine with OR. Example: `@qdrant #api how do I authenticate? --brief`.
 - **`@agent`** runs tools in a think-act-observe loop until the task is done. Destructive operations (delete, edit, ...) pause for a confirmation, with a "yes to all" option to auto-approve the rest of the run.
 - **`@sql`** first calls `sql_extract_schema` (cached in Redis) to learn the tables, then generates and runs the query with `execute_sql`. A `#name` tag targets a specific database, and write queries (`INSERT`/`UPDATE`/`DELETE`) require confirmation. This mode needs the optional SQL tools (see [tools.md](tools.md#optional-sql-tools)) plus a `databases` / `sql_databases` entry in `config.yaml`.
 - **`@pipeline`** uses purpose-built tools (`read_file`, `grep_text`, `find_files`, `search_knowledge_base`, `execute_sql`, `save_result` / `load_result`, `git_log` / `git_show`) instead of raw `shell`, and keeps a per-session result cache.
 - **`@review`** spins up specialist sub-agents (error handling, type design, test coverage, code quality) that read the code independently, then merges their findings. Pass a path or it defaults to the current directory.
 - **`@coding`** (alias `@code`) is map-reduce: ripgrep discovery and regex narrowing are deterministic, only the per-file edit runs through an LLM, and those calls fan out in parallel. You get unified-diff preview cards, then a confirm, then verified writes with a snapshot. Undo a whole run with `@coding undo <id>`. A path argument is required.
 
-Some modes depend on services that a [light deployment](architecture.md#deployment-presets-light-vs-full) may not run: `@docs` needs Qdrant (off when `AGENTFORGE_QDRANT=off`), and `@search` needs a configured web-search provider key. When the backing service is absent the mode is simply unavailable, not broken.
+Some modes depend on services that a [light deployment](architecture.md#deployment-presets-light-vs-full) may not run: `@qdrant` / `@docs` needs Qdrant (off when `AGENTFORGE_QDRANT=off`), and `@search` needs a configured web-search provider key. When the backing service is absent the mode is simply unavailable, not broken.
 
 ## Prompt refinement (optional)
 
@@ -44,7 +45,7 @@ The original is always kept: the lab response carries `original_prompt` + `refin
 
 ## Custom agents
 
-Custom agents are focused presets defined in `custom_agents.yaml` and loaded at startup. Each is an `@agent`-style loop restricted to a curated tool allowlist and a task-specific system prompt. Edit the file and restart to add your own.
+Custom agents are focused presets defined in `custom_agents.yaml` (copy from `custom_agents.example.yaml`) and loaded at startup. Each is an `@agent`-style loop restricted to a curated tool allowlist and a task-specific system prompt. Edit the file and restart to add your own.
 
 | Prefix      | Agent          | Purpose                                                            |
 | ----------- | -------------- | ------------------------------------------------------------------ |
@@ -55,7 +56,8 @@ Custom agents are focused presets defined in `custom_agents.yaml` and loaded at 
 | `@health`   | infra-health   | Full-stack infrastructure health check                             |
 | `@test`     | test-mode      | Run tests, diagnose failures, and suggest fixes                    |
 | `@api`      | api-test       | API endpoint testing, validation, and exploration                  |
-| `@felix`    | felix          | Autonomous diagnostic-repair: diagnose, fix, verify (Docker, disk/system, HTTP) |
+
+Add private agents such as `@felix` in your gitignored `custom_agents.yaml` after copying `custom_agents.example.yaml`. See [plugin-authoring.md](plugin-authoring.md).
 
 The chat UI lists whatever agents are currently configured (it reads `GET /api/agents`), so your set may differ from the defaults above.
 

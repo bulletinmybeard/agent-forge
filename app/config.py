@@ -4,104 +4,16 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 from pathlib import Path
 
-import yaml
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from agentforge.config import load_merged_yaml
 
 logger = logging.getLogger(__name__)
 
 _CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
-_FRAMEWORK_CONFIG_PATH = Path(__file__).parent.parent / "framework-config.yaml"
-
-
-def _load_yaml(path: Path, label: str) -> dict:
-    if path.exists():
-        with open(path) as f:
-            return yaml.safe_load(f) or {}
-    logger.warning("%s not found at %s, using defaults", label, path)
-    return {}
-
-
-def _merge_provider_profiles_into(framework_yaml: dict, root: Path) -> None:
-    """Glob ``profiles/**/*.yaml`` next to *root* and merge each file's
-    ``profiles:`` + ``provider_override_map:`` into *framework_yaml*.
-
-    Mirrors ``agentforge/config.py::_merge_split_profiles`` so both loaders
-    (the framework's :class:`ConfigManager` and this legacy ``app/config``
-    flat-dict path) see the same set of profiles + override-map entries.
-    Silent divergence between the two loaders would surface as "works in
-    chat, blank in indexer".
-    """
-    profiles_dir = root / "profiles"
-    if not profiles_dir.is_dir():
-        return
-    ai = framework_yaml.setdefault("ai", {})
-    profiles = ai.setdefault("profiles", {})
-    override_map = ai.setdefault("provider_override_map", {})
-
-    for yaml_file in sorted(profiles_dir.rglob("*.yaml")):
-        # Skip committed *.example.yaml templates — they're docs for developers
-        # to copy to <provider>.yaml, not real profiles (their stem wouldn't
-        # match the key-prefix rule). Mirrors agentforge/config.py.
-        if yaml_file.name.endswith(".example.yaml"):
-            continue
-        stem = yaml_file.stem
-        expected_prefix = stem + "-"
-        with open(yaml_file) as f:
-            data = yaml.safe_load(f) or {}
-        if not isinstance(data, dict):
-            raise ValueError(
-                f"{yaml_file} must contain a top-level dict (with `profiles:` and/or `provider_override_map:` keys)"
-            )
-        unknown = set(data) - {"profiles", "provider_override_map"}
-        if unknown:
-            raise ValueError(
-                f"{yaml_file.name}: unknown top-level key(s) {sorted(unknown)}. "
-                f"Allowed: 'profiles', 'provider_override_map'."
-            )
-
-        file_profiles = data.get("profiles") or {}
-        if file_profiles:
-            bad = [k for k in file_profiles if not k.startswith(expected_prefix)]
-            if bad:
-                raise ValueError(
-                    f"{yaml_file.name}: profile keys must start with {expected_prefix!r} — found violations: {bad}"
-                )
-            clashes = [k for k in file_profiles if k in profiles]
-            if clashes:
-                raise ValueError(f"{yaml_file.name}: profile name(s) already defined elsewhere: {clashes}")
-            profiles.update(file_profiles)
-
-        file_overrides = data.get("provider_override_map") or {}
-        if file_overrides:
-            existing = override_map.get(stem) or {}
-            if not isinstance(existing, dict):
-                existing = {}
-            map_clashes = [k for k in file_overrides if k in existing]
-            if map_clashes:
-                raise ValueError(f"{yaml_file.name}: override-map key(s) already mapped for {stem!r}: {map_clashes}")
-            override_map[stem] = {**existing, **file_overrides}
-
-
-def _deep_merge(base: dict, override: dict) -> dict:
-    """Recursively merge override into base (override wins on conflicts)."""
-    result = base.copy()
-    for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
-        else:
-            result[key] = value
-    return result
-
-
-# Load and merge: framework-config (base) + config.yaml (overrides).
-# On remote deployments, config.yaml is a pre-merged file containing both,
-# and framework-config.yaml is absent — the merge is a no-op.
-_framework_yaml = _load_yaml(_FRAMEWORK_CONFIG_PATH, "framework-config.yaml")
-# Pull in provider-split profiles (deepinfra/bedrock/openrouter) so the
-# legacy loader sees the same set as agentforge.config.ConfigManager.
-_merge_provider_profiles_into(_framework_yaml, _FRAMEWORK_CONFIG_PATH.parent)
-_yaml = _deep_merge(_framework_yaml, _load_yaml(_CONFIG_PATH, "config.yaml"))
+# Merged YAML via agentforge.config (framework-config + config.yaml + profiles/).
+_yaml = load_merged_yaml(_CONFIG_PATH)
 
 
 # ── AI model profiles ───────────────────────────────────────────────────────
@@ -197,97 +109,21 @@ class OllamaSettings(BaseSettings):
 
     host: str = Field(default=_yaml.get("ollama", {}).get("host", "http://localhost:11434"))
 
-    @staticmethod
-    def _merge_profile_chain(
-        profile_name: str,
-        profiles: dict,
-        visited: tuple = (),
-    ) -> dict:
-        """Recursively merge a profile with its parent(s) via the ``profile:`` key.
-
-        Profile inheritance lets a profile declare ``profile: <parent-name>``
-        to inherit the parent's model + options; any other keys on the child
-        override the parent.  This mirrors the same resolution done by
-        ``agentforge/config.py`` so that both loaders agree on the final shape.
-        """
-        if profile_name in visited:
-            cycle = " → ".join((*visited, profile_name))
-            raise ValueError(f"Circular profile inheritance detected: {cycle}")
-
-        if profile_name not in profiles:
-            raise ValueError(
-                f"Profile '{profile_name}' not found in config.yaml. "
-                f"Available profiles: {', '.join(sorted(profiles)) or '(none)'}"
-            )
-
-        raw = profiles[profile_name]
-        parent_name = raw.get("profile") if isinstance(raw, dict) else None
-        if parent_name is None:
-            return dict(raw) if isinstance(raw, dict) else {}
-
-        parent_merged = OllamaSettings._merge_profile_chain(parent_name, profiles, (*visited, profile_name))
-        # `abstract` is a per-definition marker and MUST NOT be inherited —
-        # otherwise every child of an abstract model profile would also be
-        # abstract and get filtered out of UI profile lists.
-        parent_merged.pop("abstract", None)
-        child_overrides = {k: v for k, v in raw.items() if k != "profile"}
-        return {**parent_merged, **child_overrides}
-
     def _resolve_profile(self, profile_name: str) -> ResolvedProfile:
-        """Resolve a profile name to a fully populated ResolvedProfile.
+        """Resolve a profile via :class:`agentforge.config.ConfigManager`.
 
-        Delegates to the framework's :class:`ConfigManager.get_profile` so
-        ``ai.provider_override`` + ``ai.provider_override_map`` are applied
-        here exactly the same way they are for every other LLM call path.
-        Without this, roles resolved through agentforge's own config
-        (``@chat``, scheduler, RAG) silently bypassed the override and kept
-        hitting Ollama even when the global switch was flipped to DeepInfra,
-        Bedrock, or OpenRouter.
-
-        Falls back to the legacy local merger if the framework's config
-        singleton can't be loaded (e.g., at very early import time before
-        ``ConfigManager`` has initialised).
+        Keeps RAG / scheduler / chat role resolution aligned with the global
+        ``ai.provider_override`` and ``provider_override_map``.
         """
-        try:
-            from agentforge.config import get_config as _get_framework_config
+        from agentforge.config import get_config as _get_framework_config
 
-            fw_prof = _get_framework_config().get_profile(profile_name)
-            return ResolvedProfile(
-                name=fw_prof.name,
-                model=fw_prof.model,
-                # Non-Ollama providers store their endpoint in base_url;
-                # fall back to host for Ollama profiles.
-                host=fw_prof.base_url or fw_prof.host,
-                api_key=fw_prof.api_key or "",
-                provider=(fw_prof.provider or "ollama").lower(),
-            )
-        except Exception as exc:
-            logger.warning(
-                "OllamaSettings._resolve_profile: framework ConfigManager "
-                "unavailable (%s); falling back to local merger — "
-                "provider_override will NOT be applied for '%s'",
-                exc,
-                profile_name,
-            )
-
-        ai_cfg = _yaml.get("ai", {})
-        profiles = ai_cfg.get("profiles", {})
-
-        merged = self._merge_profile_chain(profile_name, profiles)
-
-        model = merged.get("model")
-        if not model:
-            raise ValueError(
-                f"Profile '{profile_name}' in config.yaml has no 'model' key "
-                f"(neither directly nor via its parent profile chain)"
-            )
-
+        fw_prof = _get_framework_config().get_profile(profile_name)
         return ResolvedProfile(
-            name=profile_name,
-            model=model,
-            host=merged.get("host", self.host),
-            api_key=merged.get("api_key", ""),
-            provider=(merged.get("provider") or "ollama").lower(),
+            name=fw_prof.name,
+            model=fw_prof.model,
+            host=fw_prof.base_url or fw_prof.host,
+            api_key=fw_prof.api_key or "",
+            provider=(fw_prof.provider or "ollama").lower(),
         )
 
     def get_role(self, role: str) -> ResolvedRole:
@@ -351,19 +187,7 @@ class OllamaSettings(BaseSettings):
 
         ai_cfg = _yaml.get("ai", {})
         profiles = ai_cfg.get("profiles", {})
-
-        try:
-            fw_cfg = _get_framework_config()
-        except Exception as e:
-            # Framework config unavailable — fall back to the legacy local
-            # merger so the endpoint still returns something usable.
-            logger.warning(
-                "Framework ConfigManager unavailable (%s); falling back to "
-                "local _merge_profile_chain — provider_override will NOT be "
-                "applied to the dropdown",
-                e,
-            )
-            fw_cfg = None
+        fw_cfg = _get_framework_config()
 
         def _walk_declared_provider(start: str) -> str:
             """Return the provider DECLARED in YAML (no override applied).
@@ -400,43 +224,23 @@ class OllamaSettings(BaseSettings):
 
             declared_provider = _walk_declared_provider(name)
 
-            if fw_cfg is not None:
-                try:
-                    prof = fw_cfg.get_profile(name)
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("Skipping unresolvable profile '%s': %s", name, e)
-                    continue
-                model = prof.model
-                if not model:
-                    logger.warning("Skipping profile '%s' with no resolved model", name)
-                    continue
-                result[name] = {
-                    "model": model,
-                    "temperature": float(prof.temperature),
-                    "max_tokens": int(prof.max_tokens),
-                    "provider": (prof.provider or "ollama").lower(),
-                    "declared_provider": declared_provider,
-                    "abstract": is_abstract,
-                }
-            else:
-                # Fallback path — legacy local merger, no override applied
-                try:
-                    merged = self._merge_profile_chain(name, profiles)
-                except ValueError as e:
-                    logger.warning("Skipping unresolvable profile '%s': %s", name, e)
-                    continue
-                model = merged.get("model")
-                if not model:
-                    logger.warning("Skipping profile '%s' with no resolved model", name)
-                    continue
-                result[name] = {
-                    "model": model,
-                    "temperature": float(merged.get("temperature", 0.7)),
-                    "max_tokens": int(merged.get("max_tokens", 4000)),
-                    "provider": (merged.get("provider") or "ollama").lower(),
-                    "declared_provider": declared_provider,
-                    "abstract": is_abstract,
-                }
+            try:
+                prof = fw_cfg.get_profile(name)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Skipping unresolvable profile '%s': %s", name, e)
+                continue
+            model = prof.model
+            if not model:
+                logger.warning("Skipping profile '%s' with no resolved model", name)
+                continue
+            result[name] = {
+                "model": model,
+                "temperature": float(prof.temperature),
+                "max_tokens": int(prof.max_tokens),
+                "provider": (prof.provider or "ollama").lower(),
+                "declared_provider": declared_provider,
+                "abstract": is_abstract,
+            }
         return result
 
 
@@ -633,6 +437,22 @@ class SqlDatabasesSettings(BaseSettings):
         return list(self.databases.keys())
 
 
+class CanvasSettings(BaseSettings):
+    """Session Canvas — per-session scratch pad for URLs, tags, and files."""
+
+    model_config = SettingsConfigDict(env_prefix="CANVAS_")
+
+    enabled: bool = Field(default=_yaml.get("canvas", {}).get("enabled", True))
+
+
+class PromptLabSettings(BaseSettings):
+    """Multi-provider prompt comparison — developer/UI tool at /api/prompt-lab/*."""
+
+    model_config = SettingsConfigDict(env_prefix="PROMPT_LAB_")
+
+    enabled: bool = Field(default=_yaml.get("prompt_lab", {}).get("enabled", True))
+
+
 class BottySettings(BaseSettings):
     """Settings for Botty — the session awareness layer."""
 
@@ -792,6 +612,8 @@ class Settings(BaseSettings):
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
     sql_databases: SqlDatabasesSettings = Field(default_factory=SqlDatabasesSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
+    canvas: CanvasSettings = Field(default_factory=CanvasSettings)
+    prompt_lab: PromptLabSettings = Field(default_factory=PromptLabSettings)
     botty: BottySettings = Field(default_factory=BottySettings)
     review: ReviewSettings = Field(default_factory=ReviewSettings)
     persona: PersonaSettings = Field(default_factory=PersonaSettings)

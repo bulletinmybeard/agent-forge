@@ -64,6 +64,15 @@ class ConnectionManager:
             session.close()
 
         for conn in conns:
+            if not self._registry.get(conn["connector_type"]):
+                logger.warning(
+                    "Skipping connection %s (%s): unknown connector_type %r — "
+                    "migrate legacy Google rows to connector_type 'google' or delete them",
+                    conn["id"],
+                    conn["label"],
+                    conn["connector_type"],
+                )
+                continue
             try:
                 self._register_agent(conn, custom_agents)
                 logger.info("Loaded connector agent: %s (%s)", conn["label"], conn["connector_type"])

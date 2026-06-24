@@ -6,13 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-24
+
 ### Changed
 
+- RAG `@` aliases centralized in `agentforge/mode_prefixes.py` (shared by `mode_routing` and `intent_classifier`).
+- Botty engine reads `analysis_interval`, `max_frequency_seconds`, and `dismissal_cooldown_seconds` from config.
+- `canvas.enabled` and `botty.enabled` in `config.yaml` now gate Canvas init and the `/ws/botty` route (defaults remain `true`).
+- `prompt_lab.enabled` gates Prompt Lab DB init and `/api/prompt-lab/*` endpoints; `canvas.enabled` also gates the `/api/canvas/*` router (not just init).
+- Chat sessions are namespaced by `chat_sessions.source` (`web`, `kb`, …): clients pass `overrides.source` and/or `?source=` on `/ws/chat`; worker auto-create reads the active job's overrides. Agent Chat lists `source=web` only.
+- `web/server/api.py` imports hoisted to module top; `sql_schema_tool` stays lazy (private/gitignored module).
+- In-code RAG comments in `ws_endpoint.py` now treat `@qdrant` as canonical (`@docs` / `@find` as aliases).
+- `OllamaSettings` profile resolution always delegates to `agentforge.config.ConfigManager` (removed duplicate `_merge_profile_chain` fallback).
+- Config loading consolidated: `app/config.py` and `agentforge.config.ConfigManager` both use `load_merged_yaml()` (framework-config + config.yaml + split profiles). `ConfigManager.raw` exposes the merged dict. When gitignored config files are absent, `load_merged_yaml()` falls back to the committed `*.example.yaml` templates (CI / fresh clone).
+- Legacy per-product Google connector plugins (`gmail`, `google_drive`, `bigquery`, `youtube`) removed; unified `google` connector only. Unmigrated SQLite rows are skipped at startup (see `scripts/list-legacy-connections.py`).
 - Knowledge Database content types are now `note`, `reference`, `documentation`, `document`, `cheatsheet`, and `snippet` (replacing the earlier `code` / `command` / `url` / `config` / `error_solution` / `api_example` set). Update clients and any indexed entries accordingly.
+- `custom_agents.yaml` is gitignored (per-deployment, like `config.yaml`); shipped template is `custom_agents.example.yaml` with example fallback in the loader.
+- RAG search mode: `@qdrant` is canonical; `@docs` and `@find` are documented aliases (all three route to the same mode and can appear anywhere in a prompt).
+- Mode prefix detection extracted from `ws_endpoint.py` to `web/server/mode_routing.py`.
+- Put.io / Premiumize (`cloud_tools`) moved from `register_core_tools` to `register_optional_tools` (still registered by `register_all_tools` when credentials are set).
 
 ### Added
 
 - `GET /knowledge/list`: slim metadata listing for the browse view (no content body; optional `limit`, default 2000).
+- `custom_agents.example.yaml` template for custom agents (copy to gitignored `custom_agents.yaml`).
+- `scripts/list-legacy-connections.py`: read-only audit of legacy per-product Google connector rows.
+- `tests/test_mode_routing.py`: prefix stripping for `@qdrant` / `@docs` / `@find`.
+- `tests/test_config_loader.py`: merged YAML parity between `app.config` and `agentforge.config`.
+- `tests/test_feature_flags.py`: default `canvas.enabled` / `botty.enabled` settings.
+- `tests/test_mode_prefixes.py`, `tests/test_botty_engine.py`: shared RAG aliases and Botty rate limits.
+- `web/server/session_source.py`, `tests/test_session_source.py`: shared session `source` resolution for WS and worker paths.
+
+### Removed
+
+- `get_connector_config()` (unused after unified Google OAuth cleanup).
+- `strip_agent_prefix()` (unused after mode-routing extraction).
+- `translate_legacy_locality()` (empty map; inlined at call sites).
+- `tools.shell.sudo_password` startup warning in the CLI (the key was already ignored; interactive sudo is the only path).
+- `AGENTFORGE_WORKER_LOCALITY` env fallback in worker role resolution (use `AGENTFORGE_WORKER_ROLE`).
+- Legacy `connectors.google.gmail.credentials_dir` config path for OAuth client secrets (use `connectors.credentials_dir` or `GMAIL_CREDENTIALS_DIR`).
+
+### Breaking
+
+- Knowledge Database content type rename (see Changed above).
+- Legacy per-product Google connector plugins removed (see Changed above).
+- Chat session listing is scoped by `source`; clients must pass `overrides.source` / `?source=` where appropriate.
 
 ## [0.8.0] - 2026-06-21
 

@@ -18,17 +18,17 @@ import sys
 from pathlib import Path
 
 import sandbox  # noqa: F401 — ensure bootstrap has run
-from app.config import Settings, _deep_merge, _load_yaml  # noqa: E402
+from agentforge.config import _deep_merge, load_merged_yaml, load_yaml_file  # noqa: E402
+from app.config import Settings  # noqa: E402
 
 _repo_root = Path(__file__).parent.parent
 if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
-_framework_yaml = _load_yaml(_repo_root / "framework-config.yaml", "framework-config.yaml")
-_service_yaml = _load_yaml(_repo_root / "config.yaml", "config.yaml")
-_sandbox_yaml = _load_yaml(Path(__file__).parent / "config.yaml", "sandbox/config.yaml")
+_service_yaml = load_merged_yaml(_repo_root / "config.yaml")
+_sandbox_yaml = load_yaml_file(Path(__file__).parent / "config.yaml", "sandbox/config.yaml")
 
-raw: dict = _deep_merge(_deep_merge(_framework_yaml, _service_yaml), _sandbox_yaml)
+raw: dict = _deep_merge(_service_yaml, _sandbox_yaml)
 
 # Env vars are already set by __init__.py — Settings() picks them up correctly.
 settings = Settings()

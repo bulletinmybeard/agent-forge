@@ -6,7 +6,7 @@ The mappers run offline (no service needed). The indexing and search routes live
 The flow is two steps:
 
 1. Chunk a source into JSON files with one of the mappers below (or write the JSON by hand).
-2. Index those files into Qdrant via the `/indexer/*` endpoints, then query with `/search/*` or the `@docs` chat mode.
+2. Index those files into Qdrant via the `/indexer/*` endpoints, then query with `/search/*` or `@qdrant` in chat (`@docs` / `@find` are aliases).
 
 ## Mappers
 
@@ -209,7 +209,7 @@ curl -X POST http://localhost:8100/search/answer \
   -d '{"query": "how do I delete a chat session?"}'
 ```
 
-In the chat UI, `@docs` then searches these endpoints, for example `@docs how do I delete a chat session?`.
+In the chat UI, `@qdrant` searches these endpoints (e.g. `@qdrant how do I delete a chat session?`; `@docs` and `@find` work too).
 Re-run the chunk + index steps after the API changes. Drop `clean=true` to let `content_hash` skip the operations that did not change.
 
 ## The index pipeline

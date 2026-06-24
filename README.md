@@ -84,7 +84,7 @@ The full stack is eight containers. On a MacBook you can run just the agent, web
 scripts/deploy-local.sh --preset light
 ```
 
-Put repeatable local settings in `deploy.local.env` (copy from `deploy.local.example.env`) — preset, plus `AGENTFORGE_QDRANT=host` / `AGENTFORGE_REDIS=host` to reuse services you already run (`brew services`), or `AGENTFORGE_QDRANT=off` to skip the vector DB. It's local-only and kept separate from the remote `deploy.env`. Without Qdrant, RAG/`@docs`/semantic-memory are off (the agent still works); without a web-search key, `@search` is simply unavailable. See [Stack architecture -> Deployment presets](docs/architecture.md#deployment-presets-light-vs-full).
+Put repeatable local settings in `deploy.local.env` (copy from `deploy.local.example.env`) — preset, plus `AGENTFORGE_QDRANT=host` / `AGENTFORGE_REDIS=host` to reuse services you already run (`brew services`), or `AGENTFORGE_QDRANT=off` to skip the vector DB. It's local-only and kept separate from the remote `deploy.env`. Without Qdrant, RAG/`@qdrant`/semantic-memory are off (the agent still works); without a web-search key, `@search` is simply unavailable. See [Stack architecture -> Deployment presets](docs/architecture.md#deployment-presets-light-vs-full).
 
 ## Service stack
 

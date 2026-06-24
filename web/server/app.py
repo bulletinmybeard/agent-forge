@@ -21,17 +21,42 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+# agentforge root — for resolving config-relative paths and app.* imports
+SERVICE_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(SERVICE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERVICE_ROOT))
+
+from app.config import settings as af_settings
+from app.security import enforce_auth_policy, install_api_key_auth, install_internal_auth
+
+from . import api as api_module
+from . import ws_endpoint
 from .api import internal as internal_router
 from .api import router as api_router
 from .api import set_database as set_api_database
 from .api import set_upload_config
+from .api_memory import router as memory_router
+from .botty_endpoint import router as botty_router
+from .botty_endpoint import set_database as set_botty_database
+from .canvas.api import init_canvas_api
+from .canvas.api import router as canvas_api_router
+from .canvas.database import CanvasDatabase
+from .catalog_api import router as catalog_api_router
 from .config import settings
+from .configs.api import router as configs_api_router
+from .connectors.api import router as connectors_api_router
 from .database import ChatDatabase
+from .model_catalog.api import router as model_catalog_router
+from .monitor_service import init_monitor, shutdown_monitor
+from .prompt_lab.database.manager import PromptLabDatabase
+from .scheduler_service import init_scheduler, shutdown_scheduler
+from .services.api import router as services_api_router
 from .ws_endpoint import init_runtime
 from .ws_endpoint import router as ws_router
 
@@ -67,9 +92,6 @@ logging.getLogger("uvicorn.access").addFilter(_QuietAccessFilter())
 # Path to the built React app (created by `npm run build` in client/)
 CLIENT_DIST = Path(__file__).parent.parent / "client" / "dist"
 
-# agentforge root — for resolving config-relative paths
-SERVICE_ROOT = Path(__file__).resolve().parent.parent.parent
-
 
 def _init_database() -> ChatDatabase:
     """Initialise the chat database for web GUI sessions.
@@ -82,8 +104,6 @@ def _init_database() -> ChatDatabase:
         sys.path.insert(0, str(SERVICE_ROOT))
 
     # Read web-specific DB path from agentforge config.yaml
-    import yaml
-
     config_path = SERVICE_ROOT / "config.yaml"
     db_path = "data/web_chat.db"  # default
 
@@ -103,17 +123,11 @@ def _init_database() -> ChatDatabase:
 async def lifespan(app: FastAPI):
     logger.info("AgentForge Chat server starting on %s:%s", settings.host, settings.port)
 
-    # Ensure agentforge app is importable
-    if str(SERVICE_ROOT) not in sys.path:
-        sys.path.insert(0, str(SERVICE_ROOT))
-
     # Initialise database
     db = _init_database()
     set_api_database(db)
 
     # Configure file uploads
-    import yaml
-
     config_path = SERVICE_ROOT / "config.yaml"
     upload_path = SERVICE_ROOT / "data" / "uploads"
     max_size = 75
@@ -141,8 +155,6 @@ async def lifespan(app: FastAPI):
         return FileResponse(candidate, headers={"X-Content-Type-Options": "nosniff"})
 
     # Make database available to WebSocket handler
-    from . import ws_endpoint
-
     ws_endpoint.set_database(db)
 
     # Initialise the search runtime in a background thread so startup is instant.
@@ -152,8 +164,6 @@ async def lifespan(app: FastAPI):
     logger.info("SearchRuntime initialising in background thread…")
 
     # Initialise the scheduler service (APScheduler)
-    from .scheduler_service import init_scheduler, shutdown_scheduler
-
     try:
         init_scheduler(db)
         logger.info("SchedulerService started")
@@ -161,8 +171,6 @@ async def lifespan(app: FastAPI):
         logger.warning("SchedulerService failed to start: %s — scheduler mode will be unavailable", exc)
 
     # Initialise the monitor service (APScheduler for website change monitoring)
-    from .monitor_service import init_monitor, shutdown_monitor
-
     try:
         init_monitor(db)
         logger.info("MonitorService started")
@@ -170,41 +178,40 @@ async def lifespan(app: FastAPI):
         logger.warning("MonitorService failed to start: %s — monitor mode will be unavailable", exc)
 
     # Initialise Prompt Lab (separate DB — persists /api/prompt-lab/* runs)
-    try:
-        from . import api as api_module
-        from .prompt_lab.database.manager import PromptLabDatabase
-
-        prompt_lab_db_path = SERVICE_ROOT / "data" / "prompt_lab.db"
-        prompt_lab_db = PromptLabDatabase(prompt_lab_db_path)
-        prompt_lab_db.create_tables()
-        api_module.init_prompt_lab_db(prompt_lab_db)
-        logger.info("Prompt Lab initialised (db: %s)", prompt_lab_db_path)
-    except Exception as exc:
-        logger.warning("Prompt Lab failed to initialise: %s — history will be unavailable", exc)
+    if af_settings.prompt_lab.enabled:
+        try:
+            prompt_lab_db_path = SERVICE_ROOT / "data" / "prompt_lab.db"
+            prompt_lab_db = PromptLabDatabase(prompt_lab_db_path)
+            prompt_lab_db.create_tables()
+            api_module.init_prompt_lab_db(prompt_lab_db)
+            logger.info("Prompt Lab initialised (db: %s)", prompt_lab_db_path)
+        except Exception as exc:
+            logger.warning("Prompt Lab failed to initialise: %s — history will be unavailable", exc)
+    else:
+        logger.info("Prompt Lab disabled (prompt_lab.enabled=false)")
 
     # Initialise Canvas (shares the same SQLite file as chat messages)
-    try:
-        from .canvas.api import init_canvas_api
-        from .canvas.database import CanvasDatabase
-
-        canvas_db = CanvasDatabase(db.db_path)
-        canvas_db.create_tables()
-        init_canvas_api(canvas_db)
-        from . import ws_endpoint as _wse
-
-        _wse.set_canvas_database(canvas_db)
-        logger.info("Canvas initialised (db: %s)", db.db_path)
-    except Exception as exc:
-        logger.warning("Canvas failed to initialise: %s — canvas features will be unavailable", exc)
+    if af_settings.canvas.enabled:
+        try:
+            canvas_db = CanvasDatabase(db.db_path)
+            canvas_db.create_tables()
+            init_canvas_api(canvas_db)
+            ws_endpoint.set_canvas_database(canvas_db)
+            logger.info("Canvas initialised (db: %s)", db.db_path)
+        except Exception as exc:
+            logger.warning("Canvas failed to initialise: %s — canvas features will be unavailable", exc)
+    else:
+        logger.info("Canvas disabled (canvas.enabled=false)")
 
     # Initialise Botty — Session Awareness Layer
-    try:
-        from .botty_endpoint import set_database as set_botty_database
-
-        set_botty_database(db)
-        logger.info("Botty initialised")
-    except Exception as exc:
-        logger.warning("Botty failed to initialise: %s — /ws/botty will be unavailable", exc)
+    if af_settings.botty.enabled:
+        try:
+            set_botty_database(db)
+            logger.info("Botty initialised")
+        except Exception as exc:
+            logger.warning("Botty failed to initialise: %s — /ws/botty will be unavailable", exc)
+    else:
+        logger.info("Botty disabled (botty.enabled=false)")
 
     yield
 
@@ -299,8 +306,6 @@ app.add_middleware(
 # routes except /health + /internal; the WebSocket is checked in ws_endpoint.
 # enforce_auth_policy aborts the boot if the Docker socket is mounted (or
 # AGENTFORGE_REQUIRE_AUTH is set) with no keys — this surface drives the agent.
-from app.security import enforce_auth_policy, install_api_key_auth, install_internal_auth
-
 enforce_auth_policy("agent web")
 install_api_key_auth(app)
 # Shared-secret gate on /internal/* (worker->web callbacks); no-op unless
@@ -317,43 +322,29 @@ app.include_router(api_router)
 app.include_router(internal_router)
 
 # Memory Settings — list / delete facts + conversation memory entries
-from .api_memory import router as memory_router
-
 app.include_router(memory_router)
-
-from .services.api import router as services_api_router
 
 app.include_router(services_api_router)
 
 # Configs viewer — read-only YAML inspection (verifies deployment landed)
-from .configs.api import router as configs_api_router
-
 app.include_router(configs_api_router)
 
-# Canvas endpoints
-from .canvas.api import router as canvas_api_router
-
-app.include_router(canvas_api_router)
+# Canvas endpoints — gated by canvas.enabled in config.yaml
+if af_settings.canvas.enabled:
+    app.include_router(canvas_api_router)
 
 # Catalog API — unified model-metadata across LLM providers (Redis-cached)
-from .catalog_api import router as catalog_api_router
-
 app.include_router(catalog_api_router)
 
 # Model Catalog UI backend — equivalence finder + (later) search + pull
-from .model_catalog.api import router as model_catalog_router
-
 app.include_router(model_catalog_router)
 
 # Connectors — external service integrations (Gmail, Drive, etc.)
-from .connectors.api import router as connectors_api_router
-
 app.include_router(connectors_api_router)
 
-# Botty — Session Awareness Layer (WebSocket)
-from .botty_endpoint import router as botty_router
-
-app.include_router(botty_router)
+# Botty — Session Awareness Layer (WebSocket); gated by botty.enabled in config.yaml
+if af_settings.botty.enabled:
+    app.include_router(botty_router)
 
 
 # Health check
@@ -365,8 +356,6 @@ async def health():
 # In production: serve the built React app as static files.
 # This must be registered LAST so it doesn't shadow API/WS routes.
 if CLIENT_DIST.is_dir():
-    from fastapi.responses import FileResponse
-
     _SPA_INDEX = CLIENT_DIST / "index.html"
 
     # Serve static assets (JS, CSS, images) from dist/

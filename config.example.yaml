@@ -301,6 +301,10 @@ web:
 canvas:
   enabled: true
 
+# Prompt Lab — multi-profile prompt comparison (/api/prompt-lab/*).
+prompt_lab:
+  enabled: true
+
 # Botty — silent session-awareness observer that nudges when it can help.
 botty:
   enabled: true

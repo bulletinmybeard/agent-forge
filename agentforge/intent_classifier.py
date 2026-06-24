@@ -14,6 +14,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from .mode_prefixes import RAG_SEARCH_ALIASES, RAG_SEARCH_MODE
+
 logger = logging.getLogger(__name__)
 
 VALID_MODES = {
@@ -39,9 +41,9 @@ VALID_MODES = {
 
 _PREFIX_MAP = {
     "@chat": "chat",
-    "@qdrant": "search",
-    "@docs": "search",  # deprecated — use @qdrant
-    "@find": "search",  # deprecated — use @qdrant
+    "@qdrant": RAG_SEARCH_MODE,
+    "@docs": RAG_SEARCH_MODE,
+    "@find": RAG_SEARCH_MODE,
     "@search": "web_search",
     "@web": "web_search",
     "@tooling": "agent",
@@ -54,7 +56,7 @@ _PREFIX_MAP = {
     "@discover": "discover",
     "@discovery": "discover",
     "@investigate": "discover",
-    # ws_endpoint.py already knows these prefixes via _strip_mode_prefix;
+    # web/server/mode_routing.py strips these prefixes on the WS path;
     # mirroring them here lets `classify_intent_fallback` route them
     # deterministically without an LLM round-trip when the WS layer isn't on
     # the path.
@@ -80,7 +82,7 @@ class RouteResult:
     source: str  # "prefix", "llm", or "fallback"
 
 
-_ANYWHERE_PREFIXES = {"@qdrant"}  # detected anywhere in query, not just at start
+_ANYWHERE_PREFIXES = RAG_SEARCH_ALIASES
 
 
 def _detect_prefix(query: str) -> tuple[str, str] | None:
@@ -94,8 +96,8 @@ def _detect_prefix(query: str) -> tuple[str, str] | None:
             stripped = query.strip()[len(prefix) :].strip()
             return mode, stripped
 
-    # Anywhere-in-query detection (e.g., @qdrant)
-    for prefix in _ANYWHERE_PREFIXES:
+    # Anywhere-in-query detection (@qdrant / @docs / @find)
+    for prefix in sorted(_ANYWHERE_PREFIXES, key=len, reverse=True):
         if prefix in lower:
             mode = _PREFIX_MAP[prefix]
             # Remove the prefix from wherever it appears

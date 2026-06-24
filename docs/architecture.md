@@ -40,7 +40,7 @@ Pick a preset with `scripts/deploy-local.sh --preset light` (or `AGENTFORGE_PRES
 
 **Reusing host services.** Set `AGENTFORGE_REDIS=host` and/or `AGENTFORGE_QDRANT=host` to skip the bundled container and point the app at a Redis/Qdrant already running on the host (`host.docker.internal` on macOS, via `HOST_REDIS_URL` / `HOST_QDRANT_HOST`). `AGENTFORGE_QDRANT=off` drops the vector DB entirely.
 
-**What degrades in light mode.** Redis is always required (queues + session events). Without Qdrant, RAG search (`/search`, `/answer`), the `@docs`/`@qdrant` modes, and semantic conversation memory are unavailable — the app boots and logs a warning rather than failing (set `memory.semantic.enabled: false` in `config.yaml` to silence it). Web search is unavailable unless a provider key is configured, so `@search` simply doesn't show up. The sidecar being off means `web_fetch_rendered` falls back to local Playwright.
+**What degrades in light mode.** Redis is always required (queues + session events). Without Qdrant, RAG search (`/search`, `/answer`), `@qdrant` (and its `@docs`/`@find` aliases), and semantic conversation memory are unavailable — the app boots and logs a warning rather than failing (set `memory.semantic.enabled: false` in `config.yaml` to silence it). Web search is unavailable unless a provider key is configured, so `@search` simply doesn't show up. The sidecar being off means `web_fetch_rendered` falls back to local Playwright.
 
 ## The two apps
 
@@ -87,6 +87,20 @@ A chat message takes this path:
 4. Tools run in-process or get dispatched to a SAQ worker by locality. The sidecar handles stealthy web fetches.
 5. Redis caches tool results and carries memory + audit events. SQLite persists the session.
 6. The answer streams back over the WebSocket.
+
+## Optional web features
+
+These ship with `agentforge-web` but are independent of core chat/RAG. Each has its own SQLite tables under `./data/` (Canvas shares the chat DB file).
+
+| Feature      | Toggle / surface                         | Purpose                                                                 |
+| ------------ | ---------------------------------------- | ----------------------------------------------------------------------- |
+| **Canvas**   | `canvas.enabled` (default `true`)        | Per-session scratch pad: auto-collects URLs, `#tags`, and attachments. REST at `/api/canvas/*`; `session.init` reports `canvas_enabled`. |
+| **Botty**    | `botty.enabled` (default `true`)         | Proactive session-awareness companion on `/ws/botty` (nudges, recall). Disable to drop the WebSocket route entirely. |
+| **Prompt Lab** | `prompt_lab.enabled` (default `true`)  | Multi-profile prompt comparison for developers/UI: `/api/prompt-lab/*` (separate `prompt_lab.db`). Uses opening-prompt refinement when `prompt_refinement.enabled` is set. |
+
+**Session namespacing.** `chat_sessions.source` tags which client created a session (`web` for the Agent Chat UI, `kb` for the Knowledge Base SPA, etc.). The tag is stamped once at creation from `overrides.source`, the WebSocket `?source=` query param, or the active worker job's overrides. `GET /api/sessions?source=web` (the default) keeps external sessions out of the Agent Chat sidebar.
+
+Botty honors `analysis_interval` (process every Nth completed run), `max_frequency_seconds` (minimum gap between nudges), and `dismissal_cooldown_seconds` (quiet period after a dismiss). Model roles and the Qdrant `insights` collection are configured under `botty:` but not yet used by the engine.
 
 ## Configuration
 

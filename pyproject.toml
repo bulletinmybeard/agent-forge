@@ -1,6 +1,6 @@
 [project]
 name = "agent-forge"
-version = "0.8.0"
+version = "0.9.0"
 description = "AgentForge — a composable, multi-backend agent + pipeline framework with a pluggable tool system."
 readme = "README.md"
 requires-python = ">=3.12,<4.0"
@@ -136,6 +136,7 @@ known-first-party = ["agentforge", "app", "web", "sidecar", "sandbox", "plugins"
 "web/server/app.py" = ["E402"]
 "web/server/api.py" = ["E402"]
 "web/server/ws_endpoint.py" = ["E402"]
+"web/server/botty_endpoint.py" = ["E402"]
 # Sandbox scripts MUST `import sandbox` first (it patches sys.path + sets env)
 # before any agentforge/app import — an ordering isort can't be allowed to touch.
 "sandbox/scripts/*" = ["E402", "I001"]

@@ -103,10 +103,8 @@ def test_prompt_lab_feeds_refined_prompt(monkeypatch):
             captured["messages"] = messages
             return _Resp("ok")
 
-    # run_prompt_lab does `from .prompt_refiner import refine_prompt` and
-    # `from agentforge.client import AIClient` at call time, so patch the sources.
-    monkeypatch.setattr(prompt_refiner, "refine_prompt", fake_refine)
-    monkeypatch.setattr("agentforge.client.AIClient", _LabClient)
+    monkeypatch.setattr(api, "refine_prompt", fake_refine)
+    monkeypatch.setattr(api, "AIClient", _LabClient)
 
     req = api.PromptLabRequest(prompt="hi", profiles=["light"])
     resp = asyncio.run(api.run_prompt_lab(req))

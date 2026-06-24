@@ -304,7 +304,7 @@ The public service: the chat WebSocket, the REST API around it, and every agent 
 
 This is the primary way to drive the agent. REST can't stream the think -> act -> observe loop.
 
-Connect to `wss://<host>/ws/chat`.
+Connect to `wss://<host>/ws/chat` (optionally `?session_id=<uuid>` to resume, `?source=<client>` to namespace the session).
 The client sends a query message. The server streams a sequence of typed JSON events as the run progresses, then a final result + summary.
 
 Client -> server (JSON). The prompt goes in `text`; the mode is chosen from the prompt itself (an `@mode` prefix), so there is no `mode` field:
@@ -312,7 +312,8 @@ Client -> server (JSON). The prompt goes in `text`; the mode is chosen from the 
 ```jsonc
 { "type": "query", "text": "@agent list the markdown files here",
   "session_id": "...",                     // optional; only used to set the id on the first query
-  "overrides": { "provider": "ollama" } }  // optional; provider is stamped once, on the first query
+  "overrides": { "provider": "ollama",     // optional; provider is stamped once, on the first query
+                 "source": "kb" } }         // optional; client tag (write-once); default "web"
 { "type": "cancel" }                       // stop the running job
 { "type": "confirm.response", "request_id": "...", "confirmed": true }
 { "type": "secret.response", "request_id": "...", "value": "..." }  // masked secret (e.g., sudo password)
@@ -338,9 +339,11 @@ Every event the client receives is also persisted, so a reconnect can restore th
 
 ## Sessions & messages
 
+Each chat session row carries a `source` tag (write-once at creation) so external clients can keep their history out of the Agent Chat sidebar. The Agent Chat UI uses `web` (default). Other clients pass `overrides.source` on the first query and/or `?source=` on the WebSocket URL (e.g. `kb` for the Knowledge Base SPA, `felix` / `ask-page` for other frontends). `GET /api/sessions` defaults to `source=web`; pass `source=all` or a specific tag to list others.
+
 | Method | Path                                 | Purpose                                                                |
 | ------ | ------------------------------------ | ---------------------------------------------------------------------- |
-| GET    | `/api/sessions`                      | List sessions (most recent first). Query: `limit`, `offset`, `source`. |
+| GET    | `/api/sessions`                      | List sessions (most recent first). Query: `limit`, `offset`, `source` (default `web`, or `all`). |
 | GET    | `/api/sessions/{id}`                 | Session metadata.                                                      |
 | GET    | `/api/sessions/{id}/messages`        | Messages (paginated: `limit`, `before`. `limit=0` = all).              |
 | GET    | `/api/sessions/{id}/messages/around` | Window around a timestamp. Query: `ts`, `window`.                      |
@@ -368,7 +371,7 @@ Two stores, both populated by the backend after a successful run (not by the cal
 | PUT    | `/api/memory/schemas/cache/disabled` | Toggle "always fetch fresh". Body: `{ disabled }`.                   |
 
 These are **read/manage** endpoints. They don't trigger extraction.
-Facts (SQLite `user_facts`) and conversation memory (Qdrant `conversation_memory`) are written automatically after each run **only for FULL-tier modes** (`chat`, `search`/`@docs`, `pipeline`) and never in incognito.
+Facts (SQLite `user_facts`) and conversation memory (Qdrant `conversation_memory`) are written automatically after each run **only for FULL-tier modes** (`chat`, `search`/`@qdrant`, `pipeline`) and never in incognito.
 Investigative modes (`agent`, `web_search`, `research`, `sql`, ...) keep session chat but skip cross-session memory by policy (`web/server/memory_policy.py`).
 So a deployment that has only run `@search`/`@agent` will show empty memory. That's expected.
 

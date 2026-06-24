@@ -75,10 +75,10 @@ done
 # The apps read config.yaml + framework-config.yaml (both gitignored). Seed them
 # from the committed examples on first run — the local Ollama path needs no
 # credentials; edit the files to add cloud backends.
-for f in config framework-config; do
+for f in config framework-config custom_agents; do
     if [ ! -f "${PROJECT_ROOT}/${f}.yaml" ]; then
         cp "${PROJECT_ROOT}/${f}.example.yaml" "${PROJECT_ROOT}/${f}.yaml"
-        echo -e "${YELLOW}[init] created ${f}.yaml from ${f}.example.yaml — edit it for cloud backends${NC}"
+        echo -e "${YELLOW}[init] created ${f}.yaml from ${f}.example.yaml${NC}"
     fi
 done
 

@@ -96,7 +96,7 @@ To watch the run unfold (routing, tool calls, result), keep the whole `agent.*` 
 
 ```bash
 websocat -n ws://localhost:8200/ws/chat \
-  <<<'{"type":"query","text":"@docs how does session compaction work?"}' \
+  <<<'{"type":"query","text":"@qdrant how does session compaction work?"}' \
   | jq -c 'select(.type | startswith("agent.") or startswith("tool."))'
 ```
 
@@ -132,7 +132,8 @@ The agent has no separate `mode` field. You select behaviour inline, inside `tex
 | Prefix             | What it runs                                        |
 | ------------------ | --------------------------------------------------- |
 | `@chat`            | Plain LLM, no RAG, no tools                         |
-| `@docs`            | RAG over your indexed data (works anywhere in text) |
+| `@qdrant`          | RAG over your indexed data (canonical; works anywhere in text) |
+| `@docs`, `@find`   | Aliases for `@qdrant` (same mode)                  |
 | `@search`          | Web search                                          |
 | `@agent`           | Full tool-calling agent (filesystem, shell, ...)    |
 | `@sql`             | Look up the schema, then run SQL                    |
@@ -145,7 +146,7 @@ The agent has no separate `mode` field. You select behaviour inline, inside `tex
 | `@scheduler`       | Create/list/delete recurring jobs                   |
 | `@monitor`         | Create/list/delete website-change monitors          |
 
-Custom agents add more aliases (`@docker`, `@security`, `@felix`, ...); they are defined in `custom_agents.yaml`. Connectors add their own (`@google`, `@gitlab`, `@github`, or `@conn`).
+Custom agents add more aliases (`@docker`, `@security`, ...); they are defined in `custom_agents.yaml` (copy from `custom_agents.example.yaml`). Connectors add their own (`@google`, `@gitlab`, `@github`, or `@conn`).
 Without a prefix the server classifies the prompt for you.
 
 ### `#source` (anywhere in the prompt)
@@ -169,10 +170,10 @@ Putting them together (all inside `text`):
 
 ```bash
 # scoped RAG, short answer
-{"type":"query","text":"@docs #git how do I amend the last commit? --brief"}
+{"type":"query","text":"@qdrant #git how do I amend the last commit? --brief"}
 
 # only endpoint chunks, top 5
-{"type":"query","text":"@docs what deletes a session? --type=endpoints --limit=5"}
+{"type":"query","text":"@qdrant what deletes a session? --type=endpoints --limit=5"}
 
 # agent with a verbose trace
 {"type":"query","text":"@agent count the python files under app/ --verbose"}
@@ -209,7 +210,7 @@ curl -s "$WEB/api/audit/tools?since_minutes=30" | jq '.entries[].tool_name'
 curl -s "$WEB/api/audit/stats?since_minutes=60"
 ```
 
-Memory (only written for FULL-tier modes like `@chat`, `@docs`, `@pipeline`):
+Memory (only written for FULL-tier modes like `@chat`, `@qdrant`, `@pipeline`):
 
 ```bash
 curl -s "$WEB/api/memory/facts"     | jq '.facts[]?'

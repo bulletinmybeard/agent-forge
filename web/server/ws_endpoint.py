@@ -49,6 +49,9 @@ from . import protocol
 from .agent_bridge import AgentBridge
 from .confirm import ConfirmationBroker
 from .database import ChatDatabase
+from .mode_routing import CONNECTOR_ALIASES as _CONNECTOR_ALIASES
+from .mode_routing import STICKY_MODES as _STICKY_MODES
+from .mode_routing import strip_mode_prefix as _strip_mode_prefix
 from .queue.models import JobStatus
 from .queue.store import job_store
 from .secret import SecretBroker
@@ -873,9 +876,14 @@ class SearchRuntime:
         Builds a mapping of lowercase alias → agent config dict (augmented with
         ``id`` and ``prompt_text`` fields) so that the mode classifier and runner
         can look up agents in O(1) by their trigger alias.
+
+        Falls back to ``custom_agents.example.yaml`` when the gitignored
+        ``custom_agents.yaml`` is absent (CI / fresh clone).
         """
+        from agentforge.config import _config_with_example_fallback
+
         service_root = Path(__file__).resolve().parent.parent.parent
-        config_path = service_root / "custom_agents.yaml"
+        config_path = _config_with_example_fallback(service_root / "custom_agents.yaml")
 
         if not config_path.exists():
             logger.info("custom_agents.yaml not found — custom agents disabled")
@@ -887,8 +895,8 @@ class SearchRuntime:
 
             agents: dict = dict(cfg.get("agents", {}))
 
-            # Private overlay (gitignored) — keeps personal/deployment-specific
-            # agents (e.g., @cloud) out of the published repo. Merged on top.
+            # Optional legacy overlay (gitignored). Most deployments use
+            # custom_agents.yaml only; merged on top when present.
             local_path = service_root / "custom_agents.local.yaml"
             if local_path.exists():
                 try:
@@ -1179,7 +1187,8 @@ def _parse_query(
 ) -> tuple[str, dict[str, str], bool]:
     """Parse @source prefixes and --flags from the query, apply sticky filters.
 
-    Returns (clean_query, filters, is_sticky) for @docs / RAG query parsing.
+    Returns (clean_query, filters, is_sticky) for @qdrant / RAG query parsing
+    (@docs and @find are aliases).
     """
     sticky = _session_sticky.get(session_id, {})
     parts = raw_query.split()
@@ -1812,27 +1821,6 @@ def _match_mode_patterns(query_lower: str) -> str | None:
     return None
 
 
-_STICKY_MODES = frozenset(("web_search", "logs", "sql", "scheduler", "monitor", "research", "coding"))
-
-
-_CHAT_ALIASES = {"@chat"}
-_AGENT_ALIASES = {"@agent"}
-_SEARCH_ALIASES = {"@docs"}
-_WEB_SEARCH_ALIASES = {"@search"}
-_LOGS_ALIASES = {"@logs"}
-_DISCOVER_ALIASES = {"@discover"}
-_SQL_ALIASES = {"@sql"}
-_PIPELINE_ALIASES = {"@pipeline"}
-_SCHEDULER_ALIASES = {"@scheduler"}
-_MONITOR_ALIASES = {"@monitor"}
-_REVIEW_ALIASES = {"@review"}
-_RESEARCH_ALIASES = {"@research"}
-_CODING_ALIASES = {"@coding", "@code"}
-_CONNECTOR_ALIASES = {"@conn", "@connector"}
-# Aliases that can appear anywhere in the query (not just at the start)
-_ANYWHERE_ALIASES = {"@docs"}
-
-
 _CANVAS_URL_RE = re.compile(r'https?://[^\s\'"<>)\]]+')
 _CANVAS_TAG_RE = re.compile(r"(?<!\w)#([a-zA-Z][\w-]*)")
 
@@ -1900,57 +1888,6 @@ async def _canvas_scan_query(
             await _emit(item)
         except Exception:
             logger.debug("Canvas file scan error for %r", filename, exc_info=True)
-
-
-def _strip_mode_prefix(query: str) -> tuple[str, str | None]:
-    """Detect mode aliases in the query and strip them.
-
-    Start-of-query aliases (@agent, @search, @logs, etc.) are checked first.
-    Anywhere aliases (@qdrant) can appear at any position in the query.
-
-    Returns (cleaned_query, forced_mode).
-    forced_mode is "chat", "agent", "search", "web_search", "logs", "discover", "review", or None.
-    """
-    stripped = query.lstrip()
-    lower = stripped.lower()
-
-    # Start-of-query detection (all non-anywhere aliases)
-    _PREFIX_GROUPS: list[tuple[set[str], str]] = [
-        (_CHAT_ALIASES, "chat"),
-        (_SQL_ALIASES, "sql"),
-        (_AGENT_ALIASES, "agent"),
-        (_WEB_SEARCH_ALIASES, "web_search"),
-        (_LOGS_ALIASES, "logs"),
-        (_SEARCH_ALIASES, "search"),
-        (_DISCOVER_ALIASES, "discover"),
-        (_PIPELINE_ALIASES, "pipeline"),
-        (_REVIEW_ALIASES, "review"),
-        (_RESEARCH_ALIASES, "research"),
-        (_SCHEDULER_ALIASES, "scheduler"),
-        (_MONITOR_ALIASES, "monitor"),
-        (_CODING_ALIASES, "coding"),
-    ]
-    for aliases, mode in _PREFIX_GROUPS:
-        for alias in aliases:
-            if lower.startswith(alias):
-                rest = stripped[len(alias) :].lstrip()
-                return rest, mode
-
-    # Anywhere-in-query detection (@qdrant)
-    for alias in _ANYWHERE_ALIASES:
-        if alias in lower:
-            idx = lower.index(alias)
-            rest = (stripped[:idx] + stripped[idx + len(alias) :]).strip()
-            return rest, "search"
-
-    return query, None
-
-
-# Keep backward-compatible name so callers still work
-def _strip_agent_prefix(query: str) -> tuple[str, bool]:
-    """Backward-compatible wrapper around _strip_mode_prefix."""
-    cleaned, mode = _strip_mode_prefix(query)
-    return cleaned, mode == "agent"
 
 
 def _inject_user_context(prompt: str, rt: "SearchRuntime") -> str:
@@ -2355,7 +2292,7 @@ def _classify_mode_heuristic(
 
     # Explicit mode prefix: @agent/@tooling/@tools/@run/@exec → agent
     #                        @search/@web → web_search (web search via agent)
-    #                        @docs/@find → search (local RAG)
+    #                        @qdrant/@docs/@find → search (local RAG)
     #                        @discover/@discovery/@investigate → discover
     _, forced_mode = _strip_mode_prefix(query)
     if forced_mode == "agent":
@@ -2773,7 +2710,7 @@ def init_runtime() -> SearchRuntime:
     _runtime = SearchRuntime()
 
     # --- Ensure the knowledge-base collection exists (empty is fine) -------
-    # A fresh deployment has no indexed data, so searches (@docs, @sql schema
+    # A fresh deployment has no indexed data, so searches (@qdrant/@docs, @sql schema
     # context) would 404 on a missing collection. Create it empty + idempotent
     # so queries succeed and simply return nothing until data is indexed.
     _ensure_kb_collection()
@@ -2808,14 +2745,10 @@ def _init_connectors(rt: SearchRuntime) -> None:
     """Initialise the connector plugin system and load active connections."""
     try:
         from agentforge.connectors import ConnectorRegistry
-        from agentforge.connectors.bigquery import BigQueryConnectorPlugin
         from agentforge.connectors.github import GitHubConnectorPlugin
         from agentforge.connectors.gitlab import GitLabConnectorPlugin
-        from agentforge.connectors.gmail import GmailConnectorPlugin
         from agentforge.connectors.google import GoogleConnectorPlugin
-        from agentforge.connectors.google_drive import GoogleDriveConnectorPlugin
         from agentforge.connectors.manager import ConnectionManager
-        from agentforge.connectors.youtube import YouTubeConnectorPlugin
 
         db = get_db()
 
@@ -2823,10 +2756,6 @@ def _init_connectors(rt: SearchRuntime) -> None:
         connector_registry.register(GoogleConnectorPlugin())
         connector_registry.register(GitLabConnectorPlugin())
         connector_registry.register(GitHubConnectorPlugin())
-        connector_registry.register(GmailConnectorPlugin())
-        connector_registry.register(GoogleDriveConnectorPlugin())
-        connector_registry.register(BigQueryConnectorPlugin())
-        connector_registry.register(YouTubeConnectorPlugin())
 
         connection_manager = ConnectionManager(
             db_session_factory=db.SessionLocal,
@@ -3946,7 +3875,7 @@ def _build_conversation_history(
     # --- Semantic recall --------------------------------------------------
     # Retrieve relevant past exchanges from conversation memory and prepend
     # them as a system context block.  Gated by memory_policy — only FULL
-    # tier modes (@docs, default chat, @pipeline) recall; SESSION tier
+    # tier modes (@qdrant/@docs, default chat, @pipeline) recall; SESSION tier
     # (@agent, @research, @sql, …) and NONE tier (@cloud, @monitor, …)
     # skip the injection entirely, preventing stale context from steering
     # the model toward a different query / pattern.
@@ -4423,7 +4352,11 @@ async def _wait_job_done(
 
 
 @router.websocket("/ws/chat")
-async def websocket_chat(ws: WebSocket, session_id: str | None = None) -> None:
+async def websocket_chat(
+    ws: WebSocket,
+    session_id: str | None = None,
+    source: str | None = None,
+) -> None:
     # Optional API-key auth (off unless security.api_keys is set). When a key is
     # supplied via Sec-WebSocket-Protocol it must be echoed back on accept().
     from app.security import negotiate_ws
@@ -4449,6 +4382,10 @@ async def websocket_chat(ws: WebSocket, session_id: str | None = None) -> None:
             )
             await ws.close()
             return
+
+    from .session_source import resolve_session_source
+
+    _connect_source = (source or "").strip().lower() or None
 
     rt = get_runtime()
     db = get_db()
@@ -4705,9 +4642,9 @@ async def websocket_chat(ws: WebSocket, session_id: str | None = None) -> None:
             _m = _re.match(r"\s*(@[A-Za-z0-9_-]+)", text)
             bad_prefix = _m.group(1) if _m else "@?"
             # Build the list of valid prefixes — keep this in sync with
-            # _strip_mode_prefix / framework.intent_classifier._PREFIX_MAP.
+            # mode_routing.strip_mode_prefix / framework.intent_classifier._PREFIX_MAP.
             built_in = (
-                "@chat, @agent, @docs/@qdrant, @search/@web, @logs, "
+                "@chat, @agent, @qdrant/@docs/@find, @search/@web, @logs, "
                 "@discover, @sql, @pipeline, @scheduler, @monitor, "
                 "@review, @research, @coding/@code"
             )
@@ -5095,10 +5032,14 @@ async def websocket_chat(ws: WebSocket, session_id: str | None = None) -> None:
                     # mutated afterwards. NULL = use the global default. The
                     # frontend only sends `provider` on the very first query.
                     initial_provider = (overrides or {}).get("provider")
-                    # External clients self-identify via overrides.source so
-                    # their sessions can be kept out of the
-                    # human Agent Chat sidebar. The web UI omits it -> "web".
-                    initial_source = (overrides or {}).get("source") or "web"
+                    # External clients self-identify via overrides.source and/or
+                    # ?source= on the WebSocket URL. The Agent Chat UI omits both
+                    # -> "web".
+                    initial_source = resolve_session_source(
+                        session_id,
+                        connect_source=_connect_source,
+                        overrides=overrides,
+                    )
                     db.create_session(
                         session_id,
                         title="New chat",
@@ -10385,7 +10326,7 @@ async def _run_coding(
                         "`@coding` handles structural code transformations "
                         "(find X → replace with Y across files). For review, "
                         "analysis, or open-ended questions about a file, "
-                        "use `@chat`, `@docs`, or `@agent` instead."
+                        "use `@chat`, `@qdrant`/`@docs`, or `@agent` instead."
                     )
                     await send_and_persist(
                         protocol.agent_result(text=msg, elapsed=time.perf_counter() - total_start),
@@ -10457,7 +10398,7 @@ async def _run_coding(
                     "edits). That's almost never what you want.\n\n"
                     "Either narrow the prompt to a specific construct "
                     "(*'find every `<Card>` with a `data-*` attr and remove "
-                    "the attr'*), or use `@chat` / `@docs` / `@agent` for "
+                    "the attr'*), or use `@chat` / `@qdrant` / `@docs` / `@agent` for "
                     "review and analysis."
                 )
                 await send_and_persist(

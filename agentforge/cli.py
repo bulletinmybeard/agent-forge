@@ -54,19 +54,6 @@ def main(argv: list[str] | None = None) -> int:
 
     set_sudo_secret_provider(CliSudoProvider())
 
-    # Migration: sudo_password is no longer read; warn if it's still configured.
-    try:
-        from agentforge.config import get_config
-
-        if get_config()._raw.get("tools", {}).get("shell", {}).get("sudo_password"):
-            print(
-                "warning: tools.shell.sudo_password is no longer used — sudo now "
-                "prompts interactively. Remove it from config.yaml.",
-                file=sys.stderr,
-            )
-    except Exception:
-        pass
-
     def on_event(kind: str, data: dict) -> None:
         if args.verbose:
             print(f"[{kind}] {data}", file=sys.stderr)

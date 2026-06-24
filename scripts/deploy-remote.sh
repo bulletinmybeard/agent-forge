@@ -219,7 +219,7 @@ fi
 if [ "${CONFIG_ONLY}" = true ]; then
     echo -e "${BLUE}=== AgentForge — config sync ===${NC}"
     check_ssh
-    for f in framework-config.yaml config.yaml; do
+    for f in framework-config.yaml config.yaml custom_agents.yaml; do
         [ -f "${PROJECT_ROOT}/${f}" ] || { echo -e "${RED}[FAIL] ${f} missing (copy from ${f%.yaml}.example.yaml).${NC}"; exit 1; }
     done
     ensure_user_context

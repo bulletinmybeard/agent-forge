@@ -25,6 +25,132 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def load_yaml_file(path: Path, label: str = "") -> dict[str, Any]:
+    """Load a YAML file; return ``{}`` when missing (with a debug log)."""
+    if path.exists():
+        with open(path) as fh:
+            return yaml.safe_load(fh) or {}
+    logger.debug("%s not found at %s, using defaults", label or path.name, path)
+    return {}
+
+
+def merge_split_profiles(raw: dict[str, Any], config_dir: Path) -> None:
+    """Glob ``profiles/**/*.yaml`` under *config_dir* and merge into *raw* ``ai``."""
+    profiles_dir = config_dir / "profiles"
+    if not profiles_dir.is_dir():
+        return
+
+    ai = raw.setdefault("ai", {})
+    profiles = ai.setdefault("profiles", {})
+    override_map = ai.setdefault("provider_override_map", {})
+
+    loaded_profiles = 0
+    loaded_overrides = 0
+    for yaml_file in sorted(profiles_dir.rglob("*.yaml")):
+        if yaml_file.name.endswith(".example.yaml"):
+            continue
+        stem = yaml_file.stem
+        expected_prefix = stem + "-"
+        with open(yaml_file) as fh:
+            data = yaml.safe_load(fh) or {}
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"{yaml_file} must contain a top-level dict (with `profiles:` and/or `provider_override_map:` keys)"
+            )
+
+        unknown = set(data) - {"profiles", "provider_override_map"}
+        if unknown:
+            raise ValueError(
+                f"{yaml_file.name}: unknown top-level key(s) {sorted(unknown)}. "
+                f"Allowed: 'profiles', 'provider_override_map'."
+            )
+
+        file_profiles = data.get("profiles") or {}
+        if file_profiles:
+            if not isinstance(file_profiles, dict):
+                raise ValueError(f"{yaml_file.name}: 'profiles' must be a dict, got {type(file_profiles).__name__}")
+            mismatched = [k for k in file_profiles if not k.startswith(expected_prefix)]
+            if mismatched:
+                raise ValueError(
+                    f"{yaml_file.name}: profile keys must start with "
+                    f"{expected_prefix!r} — found violations: {mismatched}"
+                )
+            collisions = [k for k in file_profiles if k in profiles]
+            if collisions:
+                raise ValueError(f"{yaml_file.name}: profile name(s) already defined in config.yaml: {collisions}")
+            profiles.update(file_profiles)
+            loaded_profiles += len(file_profiles)
+
+        file_overrides = data.get("provider_override_map") or {}
+        if file_overrides:
+            if not isinstance(file_overrides, dict):
+                raise ValueError(
+                    f"{yaml_file.name}: 'provider_override_map' must be a dict, got {type(file_overrides).__name__}"
+                )
+            existing = override_map.get(stem) or {}
+            if not isinstance(existing, dict):
+                existing = {}
+            clashes = [k for k in file_overrides if k in existing]
+            if clashes:
+                raise ValueError(
+                    f"{yaml_file.name}: override-map key(s) already mapped for {stem!r} elsewhere: {clashes}"
+                )
+            override_map[stem] = {**existing, **file_overrides}
+            loaded_overrides += len(file_overrides)
+
+        logger.debug(
+            "Loaded %d profile(s), %d override(s) from %s",
+            len(file_profiles),
+            len(file_overrides),
+            yaml_file.relative_to(config_dir),
+        )
+
+    if loaded_profiles or loaded_overrides:
+        logger.info(
+            "Merged %d split profile(s) and %d override-map entr(ies) from %s",
+            loaded_profiles,
+            loaded_overrides,
+            profiles_dir,
+        )
+
+
+def _config_with_example_fallback(path: Path) -> Path:
+    """Use ``*.example.yaml`` when the real config file is missing (CI / fresh clone)."""
+    if path.exists():
+        return path
+    example = path.with_name(f"{path.stem}.example{path.suffix}")
+    if example.exists():
+        logger.debug("%s not found at %s, using %s", path.name, path, example)
+        return example
+    return path
+
+
+def load_merged_yaml(config_path: str | Path | None = None) -> dict[str, Any]:
+    """Load framework-config.yaml + config.yaml and merge split profiles.
+
+    Single source of truth for the YAML dict both :class:`ConfigManager` and
+    ``app.config`` build their typed settings from. Does not apply env-var
+    overrides — those are :class:`ConfigManager` / pydantic concerns.
+
+    When ``framework-config.yaml`` or ``config.yaml`` are absent (gitignored in
+    the public repo), falls back to the committed ``*.example.yaml`` templates.
+    """
+    path = Path(config_path) if config_path else Path("config.yaml")
+    base_path = _config_with_example_fallback(path.parent / "framework-config.yaml")
+    user_path = _config_with_example_fallback(path)
+
+    raw: dict[str, Any] = {}
+    if base_path.exists() and base_path.resolve() != user_path.resolve():
+        raw = load_yaml_file(base_path, base_path.name)
+    if user_path.exists():
+        raw = _deep_merge(raw, load_yaml_file(user_path, user_path.name))
+    elif not raw:
+        logger.debug("No config file found at %s / %s — using defaults", base_path, user_path)
+
+    merge_split_profiles(raw, path.parent)
+    return raw
+
+
 # Per-request provider override. Set by the WS endpoint at the top of
 # ``_process_query`` from the session row, and by the SAQ worker entry from
 # the cross-process ``overrides`` dict. ContextVars propagate through
@@ -262,24 +388,8 @@ class ConfigManager:
         self._provider_override: str | None = None
         self._provider_override_map: dict[str, str] = {}
 
-        # Load framework-config.yaml (AI/backend base) + config.yaml (overrides),
-        # mirroring app/config.py so every loader resolves the same merged set.
         path = Path(config_path) if config_path else Path("config.yaml")
-        base_path = path.parent / "framework-config.yaml"
-
-        raw: dict[str, Any] = {}
-        if base_path.exists() and base_path.resolve() != path.resolve():
-            with open(base_path) as fh:
-                raw = yaml.safe_load(fh) or {}
-        if path.exists():
-            with open(path) as fh:
-                overrides = yaml.safe_load(fh) or {}
-            raw = _deep_merge(raw, overrides)
-        elif not raw:
-            logger.debug("No config file found at %s / %s — using defaults", base_path, path)
-
-        self._raw = raw
-        self._merge_split_profiles(path.parent)
+        self._raw = load_merged_yaml(path)
 
         # Per-external-app role overrides (framework-config.yaml top-level key).
         # Shape: {app_source: {provider: {role_or_tier: concrete_profile}}}.
@@ -294,110 +404,12 @@ class ConfigManager:
     # -- file loading -------------------------------------------------------
 
     def _load_file(self, path: Path) -> None:
-        with open(path) as fh:
-            self._raw = yaml.safe_load(fh) or {}
-        self._merge_split_profiles(path.parent)
+        self._raw = load_merged_yaml(path)
 
-    def _merge_split_profiles(self, config_dir: Path) -> None:
-        """Glob ``profiles/**/*.yaml`` and merge into ``ai``.
-
-        Two layout conventions are supported under ``profiles/``:
-
-        - ``profiles/providers/<provider>.yaml`` — per-provider concrete model
-          profiles plus their slice of the override map. Each file may define
-          both ``profiles:`` and ``provider_override_map:`` top-level keys.
-        - ``profiles/features/<feature>.yaml`` — per-feature role profiles.
-          Typically only ``profiles:``.
-
-        The loader walks ``profiles/`` recursively so a new bucket is just a
-        new subdir; no code change needed. Validation is keyed on filename
-        stem only — ``deepinfra.yaml`` requires ``deepinfra-*`` keys, whether
-        it sits in ``providers/`` or anywhere else. Conflicts (a profile name
-        already in ``ai.profiles`` or an override-map key already mapped for
-        the same provider) raise.
-
-        Missing ``profiles/`` directory = no-op so legacy or pre-split
-        deployments still work.
-        """
-        profiles_dir = config_dir / "profiles"
-        if not profiles_dir.is_dir():
-            return
-
-        ai = self._raw.setdefault("ai", {})
-        profiles = ai.setdefault("profiles", {})
-        override_map = ai.setdefault("provider_override_map", {})
-
-        loaded_profiles = 0
-        loaded_overrides = 0
-        for yaml_file in sorted(profiles_dir.rglob("*.yaml")):
-            # Skip committed templates (e.g., ollama.example.yaml). They're docs
-            # for developers to copy to <provider>.yaml — not real profiles, and
-            # their stem ("ollama.example") wouldn't match the key prefix rule.
-            if yaml_file.name.endswith(".example.yaml"):
-                continue
-            stem = yaml_file.stem
-            expected_prefix = stem + "-"
-            with open(yaml_file) as fh:
-                data = yaml.safe_load(fh) or {}
-            if not isinstance(data, dict):
-                raise ValueError(
-                    f"{yaml_file} must contain a top-level dict (with `profiles:` and/or `provider_override_map:` keys)"
-                )
-
-            unknown = set(data) - {"profiles", "provider_override_map"}
-            if unknown:
-                raise ValueError(
-                    f"{yaml_file.name}: unknown top-level key(s) {sorted(unknown)}. "
-                    f"Allowed: 'profiles', 'provider_override_map'."
-                )
-
-            file_profiles = data.get("profiles") or {}
-            if file_profiles:
-                if not isinstance(file_profiles, dict):
-                    raise ValueError(f"{yaml_file.name}: 'profiles' must be a dict, got {type(file_profiles).__name__}")
-                mismatched = [k for k in file_profiles if not k.startswith(expected_prefix)]
-                if mismatched:
-                    raise ValueError(
-                        f"{yaml_file.name}: profile keys must start with "
-                        f"{expected_prefix!r} — found violations: {mismatched}"
-                    )
-                collisions = [k for k in file_profiles if k in profiles]
-                if collisions:
-                    raise ValueError(f"{yaml_file.name}: profile name(s) already defined in config.yaml: {collisions}")
-                profiles.update(file_profiles)
-                loaded_profiles += len(file_profiles)
-
-            file_overrides = data.get("provider_override_map") or {}
-            if file_overrides:
-                if not isinstance(file_overrides, dict):
-                    raise ValueError(
-                        f"{yaml_file.name}: 'provider_override_map' must be a dict, got {type(file_overrides).__name__}"
-                    )
-                existing = override_map.get(stem) or {}
-                if not isinstance(existing, dict):
-                    existing = {}
-                clashes = [k for k in file_overrides if k in existing]
-                if clashes:
-                    raise ValueError(
-                        f"{yaml_file.name}: override-map key(s) already mapped for {stem!r} elsewhere: {clashes}"
-                    )
-                override_map[stem] = {**existing, **file_overrides}
-                loaded_overrides += len(file_overrides)
-
-            logger.debug(
-                "Loaded %d profile(s), %d override(s) from %s",
-                len(file_profiles),
-                len(file_overrides),
-                yaml_file.relative_to(config_dir),
-            )
-
-        if loaded_profiles or loaded_overrides:
-            logger.info(
-                "Merged %d split profile(s) and %d override-map entr(ies) from %s",
-                loaded_profiles,
-                loaded_overrides,
-                profiles_dir,
-            )
+    @property
+    def raw(self) -> dict[str, Any]:
+        """Merged YAML dict (framework-config + config.yaml + split profiles)."""
+        return self._raw
 
     # -- env overrides ------------------------------------------------------
 

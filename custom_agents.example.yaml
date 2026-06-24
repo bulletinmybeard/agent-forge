@@ -1,8 +1,15 @@
-# custom_agents.yaml — user-defined custom agents for AgentForge
+# AgentForge — example custom agents.
+#
+# Copy to custom_agents.yaml and edit. custom_agents.yaml is gitignored (it holds
+# deployment-specific agents, tools, and prompts you do not want in the repo).
+#
+#   cp custom_agents.example.yaml custom_agents.yaml
 #
 # Each agent is a specialised mode with its own system prompt, tool subset,
-# and Ollama profile.  Agents are triggered by typing their alias at the start
+# and Ollama profile. Agents are triggered by typing their alias at the start
 # of a message, just like built-in modes (@logs, @search, etc.).
+#
+# When custom_agents.yaml is missing (CI / fresh clone), the loader uses this file.
 #
 # ─── Fields ────────────────────────────────────────────────────────────────
 #
@@ -179,9 +186,8 @@ agents:
     iter_timeout: 300
     description: "Run tests, diagnose failures, and suggest fixes"
 
-  # Private / deployment-specific agents live in custom_agents.local.yaml
-  # (gitignored), which the loader merges on top of this file. Drop your own
-  # agents there to keep them out of the published repo.
+  # Add your own agents below (or in your gitignored custom_agents.yaml after
+  # copying this file). Restart the web service to pick up changes.
 
   # ── GitLab — migrated to connector system (agentforge/connectors/gitlab/)
   # Connect via /connectors page with host URL + API token.
@@ -210,43 +216,3 @@ agents:
     max_iterations: 35
     iter_timeout: 300
     description: "API endpoint testing, validation, and exploration"
-
-  # ── Felix — diagnose. fix. verify. ──────────────────────────────────────
-  felix:
-    aliases: ["@felix"]
-    profile: agent
-    tools:
-      # diagnostics (read-only)
-      - docker_ps
-      - docker_logs
-      - docker_inspect
-      - docker_compose_status
-      - docker_df
-      - docker_images
-      - docker_networks
-      - docker_volumes
-      - docker_cleanup_preview
-      - system_overview
-      - disk_usage
-      - memory_info
-      - process_list
-      - http_check
-      - health_check
-      - dns_lookup
-      - net_probe
-      - analyze_logs
-      - read_file
-      - find_files
-      - grep_text
-      # repair (gated by the command guard / confirmations)
-      - shell
-      - ssh
-      - write_file
-      - code_edit       # config edits with diff preview + snapshot
-      - revert_file     # first-class rollback for code_edit
-      # research
-      - web_search
-      - web_fetch
-    system_prompt: markdown/custom-agents/felix.md
-    max_iterations: 40
-    description: "Autonomous diagnostic-repair agent — diagnose, fix, verify (Docker, disk/system, HTTP)"

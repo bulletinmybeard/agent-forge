@@ -12,7 +12,7 @@ Guides for running and extending AgentForge.
 - [chunking/README.md](../chunking/README.md): the chunking mappers (OpenAPI, SQL/tbls, live DB, code, CLI docs, Markdown), chunk layout, the index pipeline, the `/indexer/*` and `/search/*` endpoints, and dedup/drift QA. Served by the `agentforge-api` app on port `8100`.
 - [local-domains.md](local-domains.md): deploying the stack to a Mac/Linux box behind an existing Traefik proxy with custom domains, the `deploy.env` parameters, and the optional native (launchd) tool worker.
 - [connectors.md](connectors.md): linking external accounts. The unified Google OAuth connector (Gmail, Drive, BigQuery, YouTube) and the GitLab and GitHub token connectors, plus the OAuth client setup and the REST flow.
-- [plugin-authoring.md](plugin-authoring.md): adding private tools with `@tool`, the `AGENTFORGE_TOOL_PLUGINS` seam, tool routing, and the private overlay files (`config.yaml`, `custom_agents.local.yaml`, `tool_routing.local.yaml`, `markdown/local/`, `plugins/`).
+- [plugin-authoring.md](plugin-authoring.md): adding private tools with `@tool`, the `AGENTFORGE_TOOL_PLUGINS` seam, tool routing, and the private overlay files (`config.yaml`, `custom_agents.yaml`, `tool_routing.local.yaml`, `markdown/local/`, `plugins/`).
 - [markdown/README.md](../markdown/README.md): the service-level instruction markdown — the `skills/` instruction sets and `custom-agents/` system prompts you can edit to tune agents without touching Python.
 - [sandbox/README.md](../sandbox/README.md): the no-UI harness for driving the framework (`AIClient` / `ToolRegistry` / agent loop) directly from a Python script, without the web stack.
 

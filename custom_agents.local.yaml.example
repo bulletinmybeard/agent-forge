@@ -1,0 +1,47 @@
+# Optional legacy overlay — most deployments should use custom_agents.yaml instead
+# (copy custom_agents.example.yaml). When this file exists it is merged on top
+# of custom_agents.yaml. Kept for older setups that split base vs private agents.
+#
+#   cp custom_agents.local.yaml.example custom_agents.local.yaml
+#
+# See custom_agents.example.yaml for field documentation.
+
+agents:
+
+  # ── Felix — diagnose. fix. verify. ──────────────────────────────────────
+  # Also available as the standalone agent-forge-felix CLI project.
+  felix:
+    aliases: ["@felix"]
+    profile: agent
+    tools:
+      - docker_ps
+      - docker_logs
+      - docker_inspect
+      - docker_compose_status
+      - docker_df
+      - docker_images
+      - docker_networks
+      - docker_volumes
+      - docker_cleanup_preview
+      - system_overview
+      - disk_usage
+      - memory_info
+      - process_list
+      - http_check
+      - health_check
+      - dns_lookup
+      - net_probe
+      - analyze_logs
+      - read_file
+      - find_files
+      - grep_text
+      - shell
+      - ssh
+      - write_file
+      - code_edit
+      - revert_file
+      - web_search
+      - web_fetch
+    system_prompt: markdown/custom-agents/felix.md
+    max_iterations: 40
+    description: "Autonomous diagnostic-repair agent — diagnose, fix, verify (Docker, disk/system, HTTP)"
