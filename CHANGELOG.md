@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- `canvas.enabled` and `botty.enabled` in `config.yaml` now gate Canvas init and the `/ws/botty` route (defaults remain `true`).
+- `OllamaSettings` profile resolution always delegates to `agentforge.config.ConfigManager` (removed duplicate `_merge_profile_chain` fallback).
 - Config loading consolidated: `app/config.py` and `agentforge.config.ConfigManager` both use `load_merged_yaml()` (framework-config + config.yaml + split profiles). `ConfigManager.raw` exposes the merged dict.
 - Legacy per-product Google connector plugins (`gmail`, `google_drive`, `bigquery`, `youtube`) removed; unified `google` connector only. Unmigrated SQLite rows are skipped at startup (see `scripts/list-legacy-connections.py`).
 - Knowledge Database content types are now `note`, `reference`, `documentation`, `document`, `cheatsheet`, and `snippet` (replacing the earlier `code` / `command` / `url` / `config` / `error_solution` / `api_example` set). Update clients and any indexed entries accordingly.
@@ -23,9 +25,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `scripts/list-legacy-connections.py`: read-only audit of legacy per-product Google connector rows.
 - `tests/test_mode_routing.py`: prefix stripping for `@qdrant` / `@docs` / `@find`.
 - `tests/test_config_loader.py`: merged YAML parity between `app.config` and `agentforge.config`.
+- `tests/test_feature_flags.py`: default `canvas.enabled` / `botty.enabled` settings.
 
 ### Removed
 
+- `strip_agent_prefix()` (unused after mode-routing extraction).
+- `translate_legacy_locality()` (empty map; inlined at call sites).
 - `tools.shell.sudo_password` startup warning in the CLI (the key was already ignored; interactive sudo is the only path).
 - `AGENTFORGE_WORKER_LOCALITY` env fallback in worker role resolution (use `AGENTFORGE_WORKER_ROLE`).
 - Legacy `connectors.google.gmail.credentials_dir` config path for OAuth client secrets (use `connectors.credentials_dir` or `GMAIL_CREDENTIALS_DIR`).

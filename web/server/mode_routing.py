@@ -70,9 +70,3 @@ def strip_mode_prefix(query: str) -> tuple[str, str | None]:
             return rest, "search"
 
     return query, None
-
-
-def strip_agent_prefix(query: str) -> tuple[str, bool]:
-    """Backward-compatible wrapper around strip_mode_prefix."""
-    cleaned, mode = strip_mode_prefix(query)
-    return cleaned, mode == "agent"

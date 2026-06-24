@@ -604,14 +604,15 @@ class ToolRegistry:
         covered by the catch-all ``"*"`` rule, but the fallback keeps the
         registry usable without a YAML present (e.g., in unit tests).
         """
-        from .routing import get_role_for_tool, translate_legacy_locality
+        from .routing import _LEGACY_LOCALITY_MAP, get_role_for_tool
 
         try:
             return get_role_for_tool(name)
         except Exception:
             # Tool routing layer unavailable (e.g., import-time test) — fall
             # back to the decorator value with legacy translation.
-            return translate_legacy_locality(self._tool_locality.get(name, "local"))
+            locality = self._tool_locality.get(name, "local")
+            return _LEGACY_LOCALITY_MAP.get(locality, locality)
 
     def check_routing_drift(self) -> list[tuple[str, str, str]]:
         """Compare every registered tool's decorator value against the YAML.

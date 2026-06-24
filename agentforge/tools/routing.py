@@ -203,14 +203,6 @@ def agent_dispatch_timeout() -> float:
     return _dispatch_float("agent_timeout_seconds", "AGENTFORGE_SAQ_AGENT_TIMEOUT", 900.0)
 
 
-def translate_legacy_locality(value: str) -> str:
-    """Map a decorator locality value to a role name via ``_LEGACY_LOCALITY_MAP``.
-
-    The map is empty by default, so a value passes through as its own role name.
-    """
-    return _LEGACY_LOCALITY_MAP.get(value, value)
-
-
 def my_role() -> str:
     """Resolve this worker's role from ``AGENTFORGE_WORKER_ROLE``, else ``default_role``."""
     return os.environ.get("AGENTFORGE_WORKER_ROLE") or default_role()
@@ -225,7 +217,7 @@ def check_decorator_drift(tool_localities: dict[str, str]) -> list[tuple[str, st
 
     *tool_localities* should be the registry's
     ``{tool_name: decorator_locality_value}`` mapping. The decorator value is
-    translated through :func:`translate_legacy_locality` before comparison.
+    translated through ``_LEGACY_LOCALITY_MAP`` before comparison.
 
     Skipped on single-host deployments (<=1 role configured), where locality
     decorators have no effect.
@@ -235,7 +227,7 @@ def check_decorator_drift(tool_localities: dict[str, str]) -> list[tuple[str, st
 
     drift: list[tuple[str, str, str]] = []
     for name, decorator_value in tool_localities.items():
-        decorator_role = translate_legacy_locality(decorator_value)
+        decorator_role = _LEGACY_LOCALITY_MAP.get(decorator_value, decorator_value)
         yaml_role = get_role_for_tool(name)
         if decorator_role != yaml_role:
             drift.append((name, decorator_role, yaml_role))

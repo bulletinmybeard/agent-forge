@@ -1129,8 +1129,6 @@ async def get_providers():
     from agentforge.config import get_config as _get_fw_config
     from app.config import settings as af_settings
 
-    # Profile listing already swallows ConfigManager init failures and returns
-    # a usable shape via the legacy local merger — safe to call directly.
     profiles = af_settings.ollama.list_selectable_profiles(include_abstract=True)
     available = sorted({(info.get("declared_provider") or "ollama").lower() for info in profiles.values()})
 
