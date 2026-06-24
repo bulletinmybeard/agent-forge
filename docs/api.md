@@ -368,7 +368,7 @@ Two stores, both populated by the backend after a successful run (not by the cal
 | PUT    | `/api/memory/schemas/cache/disabled` | Toggle "always fetch fresh". Body: `{ disabled }`.                   |
 
 These are **read/manage** endpoints. They don't trigger extraction.
-Facts (SQLite `user_facts`) and conversation memory (Qdrant `conversation_memory`) are written automatically after each run **only for FULL-tier modes** (`chat`, `search`/`@docs`, `pipeline`) and never in incognito.
+Facts (SQLite `user_facts`) and conversation memory (Qdrant `conversation_memory`) are written automatically after each run **only for FULL-tier modes** (`chat`, `search`/`@qdrant`, `pipeline`) and never in incognito.
 Investigative modes (`agent`, `web_search`, `research`, `sql`, ...) keep session chat but skip cross-session memory by policy (`web/server/memory_policy.py`).
 So a deployment that has only run `@search`/`@agent` will show empty memory. That's expected.
 

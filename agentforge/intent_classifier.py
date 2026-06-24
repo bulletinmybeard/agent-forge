@@ -54,7 +54,7 @@ _PREFIX_MAP = {
     "@discover": "discover",
     "@discovery": "discover",
     "@investigate": "discover",
-    # ws_endpoint.py already knows these prefixes via _strip_mode_prefix;
+    # web/server/mode_routing.py strips these prefixes on the WS path;
     # mirroring them here lets `classify_intent_fallback` route them
     # deterministically without an LLM round-trip when the WS layer isn't on
     # the path.

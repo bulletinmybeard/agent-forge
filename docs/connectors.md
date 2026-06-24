@@ -131,6 +131,12 @@ The runtime still registers the old plugins (`listable=False`) so **existing SQL
 
 To see whether you still have legacy rows (chat DB, table `connections`):
 
+```bash
+python scripts/list-legacy-connections.py
+```
+
+Or query directly:
+
 ```sql
 SELECT id, connector_type, label, account_identifier
 FROM connections

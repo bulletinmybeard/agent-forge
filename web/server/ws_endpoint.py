@@ -49,6 +49,9 @@ from . import protocol
 from .agent_bridge import AgentBridge
 from .confirm import ConfirmationBroker
 from .database import ChatDatabase
+from .mode_routing import CONNECTOR_ALIASES as _CONNECTOR_ALIASES
+from .mode_routing import STICKY_MODES as _STICKY_MODES
+from .mode_routing import strip_mode_prefix as _strip_mode_prefix
 from .queue.models import JobStatus
 from .queue.store import job_store
 from .secret import SecretBroker
@@ -1812,29 +1815,6 @@ def _match_mode_patterns(query_lower: str) -> str | None:
     return None
 
 
-_STICKY_MODES = frozenset(("web_search", "logs", "sql", "scheduler", "monitor", "research", "coding"))
-
-
-_CHAT_ALIASES = {"@chat"}
-_AGENT_ALIASES = {"@agent"}
-# RAG over indexed data (@qdrant is canonical). @docs/@find are backward-compatible aliases.
-_RAG_SEARCH_ALIASES = frozenset({"@qdrant", "@docs", "@find"})
-_SEARCH_ALIASES = _RAG_SEARCH_ALIASES
-_WEB_SEARCH_ALIASES = {"@search"}
-_LOGS_ALIASES = {"@logs"}
-_DISCOVER_ALIASES = {"@discover"}
-_SQL_ALIASES = {"@sql"}
-_PIPELINE_ALIASES = {"@pipeline"}
-_SCHEDULER_ALIASES = {"@scheduler"}
-_MONITOR_ALIASES = {"@monitor"}
-_REVIEW_ALIASES = {"@review"}
-_RESEARCH_ALIASES = {"@research"}
-_CODING_ALIASES = {"@coding", "@code"}
-_CONNECTOR_ALIASES = {"@conn", "@connector"}
-# RAG aliases that can appear anywhere in the query (not just at the start)
-_ANYWHERE_ALIASES = _RAG_SEARCH_ALIASES
-
-
 _CANVAS_URL_RE = re.compile(r'https?://[^\s\'"<>)\]]+')
 _CANVAS_TAG_RE = re.compile(r"(?<!\w)#([a-zA-Z][\w-]*)")
 
@@ -1902,57 +1882,6 @@ async def _canvas_scan_query(
             await _emit(item)
         except Exception:
             logger.debug("Canvas file scan error for %r", filename, exc_info=True)
-
-
-def _strip_mode_prefix(query: str) -> tuple[str, str | None]:
-    """Detect mode aliases in the query and strip them.
-
-    Start-of-query aliases (@agent, @search, @logs, etc.) are checked first.
-    Anywhere aliases (@qdrant) can appear at any position in the query.
-
-    Returns (cleaned_query, forced_mode).
-    forced_mode is "chat", "agent", "search", "web_search", "logs", "discover", "review", or None.
-    """
-    stripped = query.lstrip()
-    lower = stripped.lower()
-
-    # Start-of-query detection (all non-anywhere aliases)
-    _PREFIX_GROUPS: list[tuple[set[str], str]] = [
-        (_CHAT_ALIASES, "chat"),
-        (_SQL_ALIASES, "sql"),
-        (_AGENT_ALIASES, "agent"),
-        (_WEB_SEARCH_ALIASES, "web_search"),
-        (_LOGS_ALIASES, "logs"),
-        (_SEARCH_ALIASES, "search"),
-        (_DISCOVER_ALIASES, "discover"),
-        (_PIPELINE_ALIASES, "pipeline"),
-        (_REVIEW_ALIASES, "review"),
-        (_RESEARCH_ALIASES, "research"),
-        (_SCHEDULER_ALIASES, "scheduler"),
-        (_MONITOR_ALIASES, "monitor"),
-        (_CODING_ALIASES, "coding"),
-    ]
-    for aliases, mode in _PREFIX_GROUPS:
-        for alias in aliases:
-            if lower.startswith(alias):
-                rest = stripped[len(alias) :].lstrip()
-                return rest, mode
-
-    # Anywhere-in-query detection (@qdrant / @docs / @find)
-    for alias in sorted(_ANYWHERE_ALIASES, key=len, reverse=True):
-        if alias in lower:
-            idx = lower.index(alias)
-            rest = (stripped[:idx] + stripped[idx + len(alias) :]).strip()
-            return rest, "search"
-
-    return query, None
-
-
-# Keep backward-compatible name so callers still work
-def _strip_agent_prefix(query: str) -> tuple[str, bool]:
-    """Backward-compatible wrapper around _strip_mode_prefix."""
-    cleaned, mode = _strip_mode_prefix(query)
-    return cleaned, mode == "agent"
 
 
 def _inject_user_context(prompt: str, rt: "SearchRuntime") -> str:
@@ -4714,7 +4643,7 @@ async def websocket_chat(ws: WebSocket, session_id: str | None = None) -> None:
             _m = _re.match(r"\s*(@[A-Za-z0-9_-]+)", text)
             bad_prefix = _m.group(1) if _m else "@?"
             # Build the list of valid prefixes — keep this in sync with
-            # _strip_mode_prefix / framework.intent_classifier._PREFIX_MAP.
+            # mode_routing.strip_mode_prefix / framework.intent_classifier._PREFIX_MAP.
             built_in = (
                 "@chat, @agent, @docs/@qdrant, @search/@web, @logs, "
                 "@discover, @sql, @pipeline, @scheduler, @monitor, "

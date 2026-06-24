@@ -11,7 +11,8 @@ Usage::
     count = register_all_tools(registry)
     print(f"Registered {count} tools")
 
-``register_all_tools`` registers the built-in (generic) toolset and then
+``register_all_tools`` registers the built-in (generic) toolset, optional
+credential-gated tools (see :func:`register_optional_tools`), and then
 loads any third-party tool plugins (see :func:`load_plugin_tools`). To get
 only the built-ins, call :func:`register_core_tools` directly.
 """
@@ -37,11 +38,11 @@ def register_core_tools(registry: ToolRegistry) -> int:
     from .archive_tools import register_archive_tools
     from .audio_tools import register_audio_tools
     from .cli_tools import register_cli_tools
-    from .cloud_tools import register_cloud_tools
     from .code_edit import register_code_edit_tools
     from .code_quality_tools import register_code_quality_tools
     from .data_tools import register_data_tools
     from .docker import register_docker_tools
+    from .cloud_tools import register_cloud_tools
     from .filesystem import register_filesystem_tools
     from .git_tools import register_git_tools
     from .icon_generator import register_icon_generator_tools
@@ -85,8 +86,17 @@ def register_core_tools(registry: ToolRegistry) -> int:
     count += register_qdrant_tools(registry)
     count += register_redis_tools(registry)
     count += register_tmdb_tools(registry)
-    count += register_cloud_tools(registry)
     return count
+
+
+def register_optional_tools(registry: ToolRegistry) -> int:
+    """Register built-in tools that need credentials (Put.io, Premiumize, ...).
+
+    Each submodule registers only when its env vars are set. Returns the count
+    registered.
+    """
+
+    return register_cloud_tools(registry)
 
 
 def load_plugin_tools(registry: ToolRegistry) -> int:
@@ -141,6 +151,7 @@ def register_all_tools(registry: ToolRegistry) -> int:
     Returns the total number of tools registered.
     """
     count = register_core_tools(registry)
+    count += register_optional_tools(registry)
     count += load_plugin_tools(registry)
 
     # One-shot drift report — warns when a tool's @tool(locality=...) decorator

@@ -1,6 +1,6 @@
 # Modes
 
-Every prompt runs in a mode. You pick one with an `@prefix` at the start of the message (see [api-examples.md](api-examples.md) for how to send it). Without a prefix the message goes to plain chat, or the server classifies it for you. `@docs` is the one prefix that can appear anywhere in the prompt; the rest must lead.
+Every prompt runs in a mode. You pick one with an `@prefix` at the start of the message (see [api-examples.md](api-examples.md) for how to send it). Without a prefix the message goes to plain chat, or the server classifies it for you. RAG prefixes (`@qdrant` and its aliases `@docs` / `@find`) can appear anywhere in the prompt; the rest must lead.
 
 Modes also read the in-prompt `#source` filters and `--flags` documented in [api-examples.md](api-examples.md#specify-the-mode-sources-and-flags-per-prompt).
 
@@ -10,7 +10,7 @@ Files uploaded with a prompt (via `/api/upload/{session_id}`) are injected as co
 
 | Prefix                | Mode       | What it does                                                                                             |
 | --------------------- | ---------- | -------------------------------------------------------------------------------------------------------- |
-| _(none)_              | chat       | General LLM knowledge. No vector search, no tools. For indexed data use `@docs`.                         |
+| _(none)_              | chat       | General LLM knowledge. No vector search, no tools. For indexed data use `@qdrant`.                         |
 | `@qdrant`             | search     | RAG over your indexed data in Qdrant. `#source` tags filter by source. Can appear anywhere.              |
 | `@docs`, `@find`      | search     | Aliases for `@qdrant` (same mode; kept for older prompts and docs).                                      |
 | `@search`             | web_search | Live web search (`web_search`, `web_fetch`, `web_fetch_rendered`).                                       |

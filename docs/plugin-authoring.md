@@ -31,8 +31,8 @@ Decorator parameters:
 The schema is built by introspection: the first docstring line becomes the tool description, Google-style `name: description` lines become per-argument descriptions, type hints map to JSON-schema types (`int`/`float`/`str`/`bool`/`list`/`dict`, anything else falls back to `string`), and arguments without a default are marked required.
 Keep the signature typed and the docstring accurate. That is what the model sees.
 
-`locality` is a hint about where the tool should run.
-Authoritative routing lives in `tool_routing.yaml` (below). On a multi-host setup the registry logs drift when a decorator disagrees with the YAML.
+`locality` is a hint about where the tool should run on a split deployment.
+Authoritative routing lives in `tool_routing.yaml` (below): each rule maps tool name patterns to a `role` and SAQ queue. The decorator is what new tools declare at authoring time; the YAML is what operators tune per host without editing code. On startup, `register_all_tools` calls `registry.check_routing_drift()` once — it logs (never raises) when a `@tool(locality=...)` disagrees with the matched YAML rule. Fix drift by aligning the decorator with the YAML, or adding/adjusting a rule.
 
 ## Loading a plugin
 

@@ -2101,17 +2101,15 @@ def _trace_heuristic(
     last_mode: str = "chat",
 ) -> list[dict]:
     """Replay the heuristic classifier logic and record which sub-checks fired."""
+    from .mode_routing import STICKY_MODES as _STICKY_MODES
+    from .mode_routing import strip_mode_prefix as _smp
     from .ws_endpoint import (
         _AGENT_KEYWORDS,
         _AGENT_PATTERNS,
-        _STICKY_MODES,
         _match_mode_patterns,
     )
     from .ws_endpoint import (
         _strip_custom_prefix as _scp,
-    )
-    from .ws_endpoint import (
-        _strip_mode_prefix as _smp,
     )
 
     sub: list[dict] = []
@@ -2377,6 +2375,7 @@ async def dry_run(body: DryRunRequest):
     profile routing, query refinement, dispatch decision, and conversation
     history assembly — with timing for each step.
     """
+    from .mode_routing import strip_mode_prefix as _strip_mode_prefix
     from .ws_endpoint import (
         _WORKER_MODES,
         _build_conversation_history,
@@ -2387,7 +2386,6 @@ async def dry_run(body: DryRunRequest):
         _runtime,
         _runtime_ready,
         _strip_custom_prefix,
-        _strip_mode_prefix,
     )
 
     # Wait for runtime (max 10s)
