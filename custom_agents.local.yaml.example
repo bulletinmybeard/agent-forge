@@ -1,11 +1,10 @@
-# custom_agents.local.yaml.example — copy to custom_agents.local.yaml (gitignored).
-#
-# The loader merges this file on top of custom_agents.yaml. Use it for
-# deployment-specific agents you do not want in the published repo.
+# Optional legacy overlay — most deployments should use custom_agents.yaml instead
+# (copy custom_agents.example.yaml). When this file exists it is merged on top
+# of custom_agents.yaml. Kept for older setups that split base vs private agents.
 #
 #   cp custom_agents.local.yaml.example custom_agents.local.yaml
 #
-# See custom_agents.yaml for field documentation.
+# See custom_agents.example.yaml for field documentation.
 
 agents:
 

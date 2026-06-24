@@ -45,7 +45,7 @@ The original is always kept: the lab response carries `original_prompt` + `refin
 
 ## Custom agents
 
-Custom agents are focused presets defined in `custom_agents.yaml` and loaded at startup. Each is an `@agent`-style loop restricted to a curated tool allowlist and a task-specific system prompt. Edit the file and restart to add your own.
+Custom agents are focused presets defined in `custom_agents.yaml` (copy from `custom_agents.example.yaml`) and loaded at startup. Each is an `@agent`-style loop restricted to a curated tool allowlist and a task-specific system prompt. Edit the file and restart to add your own.
 
 | Prefix      | Agent          | Purpose                                                            |
 | ----------- | -------------- | ------------------------------------------------------------------ |
@@ -57,7 +57,7 @@ Custom agents are focused presets defined in `custom_agents.yaml` and loaded at 
 | `@test`     | test-mode      | Run tests, diagnose failures, and suggest fixes                    |
 | `@api`      | api-test       | API endpoint testing, validation, and exploration                  |
 
-`@felix` (diagnostic-repair) is not in the published `custom_agents.yaml`; copy `custom_agents.local.yaml.example` to `custom_agents.local.yaml` to enable it. See [plugin-authoring.md](plugin-authoring.md).
+Add private agents such as `@felix` in your gitignored `custom_agents.yaml` after copying `custom_agents.example.yaml`. See [plugin-authoring.md](plugin-authoring.md).
 
 The chat UI lists whatever agents are currently configured (it reads `GET /api/agents`), so your set may differ from the defaults above.
 

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from agentforge.config import get_config, load_merged_yaml, reset_config
+from agentforge.config import _config_with_example_fallback, get_config, load_merged_yaml, reset_config
 
 
 def test_load_merged_yaml_includes_ai_profiles():
@@ -8,6 +8,8 @@ def test_load_merged_yaml_includes_ai_profiles():
     raw = load_merged_yaml(root / "config.yaml")
     assert "ai" in raw
     assert isinstance(raw["ai"].get("profiles"), dict)
+    # CI / fresh clones only have *.example.yaml (real configs are gitignored).
+    assert raw["ai"].get("model")
 
 
 def test_app_config_uses_same_merge_as_framework():
@@ -16,6 +18,15 @@ def test_app_config_uses_same_merge_as_framework():
 
     framework_raw = load_merged_yaml(root / "config.yaml")
     assert _yaml.get("ai", {}).get("profiles") == framework_raw.get("ai", {}).get("profiles")
+
+
+def test_custom_agents_example_fallback(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    example_src = root / "custom_agents.example.yaml"
+    assert example_src.exists()
+    (tmp_path / "custom_agents.example.yaml").write_text(example_src.read_text())
+    resolved = _config_with_example_fallback(tmp_path / "custom_agents.yaml")
+    assert resolved == tmp_path / "custom_agents.example.yaml"
 
 
 def test_config_manager_raw_matches_load_merged_yaml():

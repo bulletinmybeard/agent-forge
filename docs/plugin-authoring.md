@@ -110,20 +110,20 @@ The published repo ships generic examples. Your private copy never gets committe
 | Overlay                    | Overlays / merges into                                                                                                          |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `config.yaml`              | The live config (secrets, API keys, private sections). The published example is `config.example.yaml`.                          |
-| `custom_agents.local.yaml` | Extra custom agents. Merged over `custom_agents.yaml` (local entries win). Template: `custom_agents.local.yaml.example`.          |
+| `custom_agents.yaml`       | Live custom-agent definitions (private tools, deployment agents). Template: `custom_agents.example.yaml`.                       |
 | `tool_routing.local.yaml`  | Extra routing. Its `rules` are prepended (checked first). `roles`/`modes` are merged.                                           |
-| `markdown/local/`          | Private agent prompt files referenced from `custom_agents.local.yaml`.                                                          |
+| `markdown/local/`          | Private agent prompt files referenced from `custom_agents.yaml`.                                                                |
 | `plugins/*`                | Private tool modules. Only `plugins/__init__.py` is committed. The rest is gitignored and loaded via `AGENTFORGE_TOOL_PLUGINS`. |
 | `secrets/`                 | Connector tokens and credential files (e.g., `client_secret.json`).                                                              |
 | `deploy.env`               | Deploy settings. The published example is `deploy.example.env`.                                                                 |
 
 How the merges work in code:
 
-- `custom_agents.local.yaml`: `_load_custom_agents()` in `web/server/ws_endpoint.py` loads `custom_agents.yaml`, then `agents.update(local_agents)` so local definitions override.
+- `custom_agents.yaml`: `_load_custom_agents()` in `web/server/ws_endpoint.py` loads it, or `custom_agents.example.yaml` when absent (same pattern as `config.yaml` / `config.example.yaml`).
 - `tool_routing.local.yaml`: `_load()` in `agentforge/tools/routing.py` prepends local `rules` and dict-merges `roles`/`modes`.
 - `config.yaml` is gitignored. `config.example.yaml` is the template. Mirror any new key into both so a fresh checkout still loads.
 
-To add a private agent that uses your tools: write the prompt in `markdown/local/myagent.md`, declare the agent in `custom_agents.local.yaml` (alias, profile, tool list, prompt path), and route its tools in `tool_routing.local.yaml` if they need a specific worker.
+To add a private agent that uses your tools: write the prompt in `markdown/local/myagent.md` (or `markdown/custom-agents/`), declare the agent in `custom_agents.yaml` (alias, profile, tool list, prompt path), and route its tools in `tool_routing.local.yaml` if they need a specific worker.
 Nothing in the published tree changes.
 
 ## See also

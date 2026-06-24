@@ -876,9 +876,14 @@ class SearchRuntime:
         Builds a mapping of lowercase alias → agent config dict (augmented with
         ``id`` and ``prompt_text`` fields) so that the mode classifier and runner
         can look up agents in O(1) by their trigger alias.
+
+        Falls back to ``custom_agents.example.yaml`` when the gitignored
+        ``custom_agents.yaml`` is absent (CI / fresh clone).
         """
+        from agentforge.config import _config_with_example_fallback
+
         service_root = Path(__file__).resolve().parent.parent.parent
-        config_path = service_root / "custom_agents.yaml"
+        config_path = _config_with_example_fallback(service_root / "custom_agents.yaml")
 
         if not config_path.exists():
             logger.info("custom_agents.yaml not found — custom agents disabled")
@@ -890,8 +895,8 @@ class SearchRuntime:
 
             agents: dict = dict(cfg.get("agents", {}))
 
-            # Private overlay (gitignored) — keeps personal/deployment-specific
-            # agents (e.g., @cloud) out of the published repo. Merged on top.
+            # Optional legacy overlay (gitignored). Most deployments use
+            # custom_agents.yaml only; merged on top when present.
             local_path = service_root / "custom_agents.local.yaml"
             if local_path.exists():
                 try:

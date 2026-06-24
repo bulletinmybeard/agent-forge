@@ -146,7 +146,7 @@ The agent has no separate `mode` field. You select behaviour inline, inside `tex
 | `@scheduler`       | Create/list/delete recurring jobs                   |
 | `@monitor`         | Create/list/delete website-change monitors          |
 
-Custom agents add more aliases (`@docker`, `@security`, ...); they are defined in `custom_agents.yaml` (plus `custom_agents.local.yaml` for private overlays such as `@felix`). Connectors add their own (`@google`, `@gitlab`, `@github`, or `@conn`).
+Custom agents add more aliases (`@docker`, `@security`, ...); they are defined in `custom_agents.yaml` (copy from `custom_agents.example.yaml`). Connectors add their own (`@google`, `@gitlab`, `@github`, or `@conn`).
 Without a prefix the server classifies the prompt for you.
 
 ### `#source` (anywhere in the prompt)

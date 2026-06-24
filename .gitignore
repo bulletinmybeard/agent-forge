@@ -16,6 +16,7 @@ venv/
 # Local runtime config — NEVER commit (holds API keys / credentials)
 config.yaml
 *-config.yaml
+custom_agents.yaml
 secrets/
 deploy.env
 deploy.local.env
@@ -43,7 +44,7 @@ data/
 # Helper script (not part of the package)
 remove-nonpublic.sh
 
-# Private custom agents + their prompts (kept local, never published)
+# Optional second custom-agents overlay (legacy; most deployments use custom_agents.yaml only)
 custom_agents.local.yaml
 markdown/local/
 
