@@ -42,7 +42,6 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from agentforge.config import set_request_provider_override, set_request_role_override_map, set_request_session_id
 from agentforge.connectors._account import account_slug, label_slug
-
 from app.models.knowledge import KnowledgeSearchRequest
 from app.services.knowledge_service import knowledge_service
 
@@ -781,9 +780,7 @@ class SearchRuntime:
                 lines = [f"Found {len(results)} Knowledge Base result(s) for {query!r}:", ""]
                 for i, r in enumerate(results, 1):
                     content = (r.get("content") or "").strip()[:800]
-                    lines.append(
-                        f"{i}. [{r.get('content_type', '')}] {r.get('title', '')} (id={r.get('id', '')})"
-                    )
+                    lines.append(f"{i}. [{r.get('content_type', '')}] {r.get('title', '')} (id={r.get('id', '')})")
                     if r.get("tags"):
                         lines.append(f"   tags: {', '.join(r['tags'])}")
                     if content:
