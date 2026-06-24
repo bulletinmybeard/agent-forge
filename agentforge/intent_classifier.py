@@ -40,8 +40,8 @@ VALID_MODES = {
 _PREFIX_MAP = {
     "@chat": "chat",
     "@qdrant": "search",
-    "@docs": "search",  # deprecated — use @qdrant
-    "@find": "search",  # deprecated — use @qdrant
+    "@docs": "search",  # alias and same mode as @qdrant (docs + older clients)
+    "@find": "search",  # alias and same mode as @qdrant
     "@search": "web_search",
     "@web": "web_search",
     "@tooling": "agent",
@@ -80,7 +80,7 @@ class RouteResult:
     source: str  # "prefix", "llm", or "fallback"
 
 
-_ANYWHERE_PREFIXES = {"@qdrant"}  # detected anywhere in query, not just at start
+_ANYWHERE_PREFIXES = frozenset({"@qdrant", "@docs", "@find"})  # anywhere in query
 
 
 def _detect_prefix(query: str) -> tuple[str, str] | None:
@@ -94,8 +94,8 @@ def _detect_prefix(query: str) -> tuple[str, str] | None:
             stripped = query.strip()[len(prefix) :].strip()
             return mode, stripped
 
-    # Anywhere-in-query detection (e.g., @qdrant)
-    for prefix in _ANYWHERE_PREFIXES:
+    # Anywhere-in-query detection (@qdrant / @docs / @find)
+    for prefix in sorted(_ANYWHERE_PREFIXES, key=len, reverse=True):
         if prefix in lower:
             mode = _PREFIX_MAP[prefix]
             # Remove the prefix from wherever it appears

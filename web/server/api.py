@@ -850,15 +850,16 @@ async def list_agents():
         {
             "id": "search",
             "type": "built-in",
-            "aliases": ["@docs"],
+            "aliases": ["@qdrant", "@docs", "@find"],
             "title": "Knowledge Search (RAG)",
             "description": (
                 "Search indexed documentation, APIs, and code via Qdrant. Use #hashtags to filter "
                 "by source. DB schemas, OpenAPI specs, code, and content sources are each tagged. "
                 "Shorthands resolve to the full source name automatically; multiple hashtags create "
-                "an OR filter. @docs can appear anywhere in the prompt."
+                "an OR filter. @qdrant is canonical; @docs and @find are aliases. Any of them can "
+                "appear anywhere in the prompt."
             ),
-            "example": "@docs #sales list all user tables",
+            "example": "@qdrant #sales list all user tables",
             "profile": "cloud-light",
         },
         {

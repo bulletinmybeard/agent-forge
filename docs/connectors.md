@@ -123,6 +123,27 @@ Prefix a message with the connector or label to route there: `@conn #work-gitlab
 
 OAuth access tokens refresh automatically: each tool call decrypts the stored tokens, refreshes if expired, and re-encrypts. No manual token maintenance.
 
+## Legacy Google connections
+
+Before v0.5.0, each Google product was a separate connector type (`gmail`, `google_drive`, `bigquery`, `youtube`). They are now unified under one `google` connection where you pick products at connect time.
+
+The runtime still registers the old plugins (`listable=False`) so **existing SQLite rows** keep working. New connections should always use `connector_type: "google"`.
+
+To see whether you still have legacy rows (chat DB, table `connections`):
+
+```sql
+SELECT id, connector_type, label, account_identifier
+FROM connections
+WHERE connector_type IN ('gmail', 'google_drive', 'bigquery', 'youtube');
+```
+
+Migration path when you are ready:
+
+1. Note each legacy row's label and which product it covered.
+2. Delete the legacy connection via `DELETE /api/connectors/{id}` (or the UI).
+3. Re-connect with `POST /api/connectors/auth/start` using `connector_type: "google"` and the right `products` list.
+4. Once no legacy rows remain, the old plugin registrations can be removed from the codebase.
+
 ## See also
 
 - [modes.md](modes.md): the `@conn` / `@google` / `@gitlab` / `@github` connector modes this wires up.

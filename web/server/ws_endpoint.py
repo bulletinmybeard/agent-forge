@@ -1817,7 +1817,9 @@ _STICKY_MODES = frozenset(("web_search", "logs", "sql", "scheduler", "monitor", 
 
 _CHAT_ALIASES = {"@chat"}
 _AGENT_ALIASES = {"@agent"}
-_SEARCH_ALIASES = {"@docs"}
+# RAG over indexed data (@qdrant is canonical). @docs/@find are backward-compatible aliases.
+_RAG_SEARCH_ALIASES = frozenset({"@qdrant", "@docs", "@find"})
+_SEARCH_ALIASES = _RAG_SEARCH_ALIASES
 _WEB_SEARCH_ALIASES = {"@search"}
 _LOGS_ALIASES = {"@logs"}
 _DISCOVER_ALIASES = {"@discover"}
@@ -1829,8 +1831,8 @@ _REVIEW_ALIASES = {"@review"}
 _RESEARCH_ALIASES = {"@research"}
 _CODING_ALIASES = {"@coding", "@code"}
 _CONNECTOR_ALIASES = {"@conn", "@connector"}
-# Aliases that can appear anywhere in the query (not just at the start)
-_ANYWHERE_ALIASES = {"@docs"}
+# RAG aliases that can appear anywhere in the query (not just at the start)
+_ANYWHERE_ALIASES = _RAG_SEARCH_ALIASES
 
 
 _CANVAS_URL_RE = re.compile(r'https?://[^\s\'"<>)\]]+')
@@ -1936,8 +1938,8 @@ def _strip_mode_prefix(query: str) -> tuple[str, str | None]:
                 rest = stripped[len(alias) :].lstrip()
                 return rest, mode
 
-    # Anywhere-in-query detection (@qdrant)
-    for alias in _ANYWHERE_ALIASES:
+    # Anywhere-in-query detection (@qdrant / @docs / @find)
+    for alias in sorted(_ANYWHERE_ALIASES, key=len, reverse=True):
         if alias in lower:
             idx = lower.index(alias)
             rest = (stripped[:idx] + stripped[idx + len(alias) :]).strip()
@@ -2805,7 +2807,13 @@ def init_runtime() -> SearchRuntime:
 
 
 def _init_connectors(rt: SearchRuntime) -> None:
-    """Initialise the connector plugin system and load active connections."""
+    """Initialise the connector plugin system and load active connections.
+
+    Registers the unified ``google`` connector plus legacy per-product plugins
+    (``gmail``, ``google_drive``, ``bigquery``, ``youtube``) with
+    ``listable=False`` so existing SQLite rows keep working until migrated.
+    See docs/connectors.md (Legacy Google connections).
+    """
     try:
         from agentforge.connectors import ConnectorRegistry
         from agentforge.connectors.bigquery import BigQueryConnectorPlugin
@@ -2823,6 +2831,7 @@ def _init_connectors(rt: SearchRuntime) -> None:
         connector_registry.register(GoogleConnectorPlugin())
         connector_registry.register(GitLabConnectorPlugin())
         connector_registry.register(GitHubConnectorPlugin())
+        # Legacy Google product types (hidden from connect UI; existing DB rows only)
         connector_registry.register(GmailConnectorPlugin())
         connector_registry.register(GoogleDriveConnectorPlugin())
         connector_registry.register(BigQueryConnectorPlugin())

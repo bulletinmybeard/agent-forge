@@ -11,7 +11,8 @@ Files uploaded with a prompt (via `/api/upload/{session_id}`) are injected as co
 | Prefix                | Mode       | What it does                                                                                             |
 | --------------------- | ---------- | -------------------------------------------------------------------------------------------------------- |
 | _(none)_              | chat       | General LLM knowledge. No vector search, no tools. For indexed data use `@docs`.                         |
-| `@docs`               | search     | RAG over your indexed data in Qdrant. `#source` tags filter by source. Can appear anywhere.              |
+| `@qdrant`             | search     | RAG over your indexed data in Qdrant. `#source` tags filter by source. Can appear anywhere.              |
+| `@docs`, `@find`      | search     | Aliases for `@qdrant` (same mode; kept for older prompts and docs).                                      |
 | `@search`             | web_search | Live web search (`web_search`, `web_fetch`, `web_fetch_rendered`).                                       |
 | `@agent`              | agent      | Full tool-calling agent (files, shell, git, Docker, SSH, ...). Iterates until the task is done.          |
 | `@sql`                | sql        | Generate and run SQL from natural language. Needs the SQL plugin (see below).                            |
@@ -27,14 +28,14 @@ Files uploaded with a prompt (via `/api/upload/{session_id}`) are injected as co
 
 A few that are worth more than one line:
 
-- **`@docs`** searches the data you have indexed (see [the chunking guide](../chunking/README.md)). Filter to a source with `#name`; names resolve through `search.source_aliases` in `config.yaml`, and multiple tags combine with OR. Example: `@docs #api how do I authenticate? --brief`.
+- **`@qdrant`** (aliases: `@docs`, `@find`) searches the data you have indexed (see [the chunking guide](../chunking/README.md)). Filter to a source with `#name`; names resolve through `search.source_aliases` in `config.yaml`, and multiple tags combine with OR. Example: `@qdrant #api how do I authenticate? --brief`.
 - **`@agent`** runs tools in a think-act-observe loop until the task is done. Destructive operations (delete, edit, ...) pause for a confirmation, with a "yes to all" option to auto-approve the rest of the run.
 - **`@sql`** first calls `sql_extract_schema` (cached in Redis) to learn the tables, then generates and runs the query with `execute_sql`. A `#name` tag targets a specific database, and write queries (`INSERT`/`UPDATE`/`DELETE`) require confirmation. This mode needs the optional SQL tools (see [tools.md](tools.md#optional-sql-tools)) plus a `databases` / `sql_databases` entry in `config.yaml`.
 - **`@pipeline`** uses purpose-built tools (`read_file`, `grep_text`, `find_files`, `search_knowledge_base`, `execute_sql`, `save_result` / `load_result`, `git_log` / `git_show`) instead of raw `shell`, and keeps a per-session result cache.
 - **`@review`** spins up specialist sub-agents (error handling, type design, test coverage, code quality) that read the code independently, then merges their findings. Pass a path or it defaults to the current directory.
 - **`@coding`** (alias `@code`) is map-reduce: ripgrep discovery and regex narrowing are deterministic, only the per-file edit runs through an LLM, and those calls fan out in parallel. You get unified-diff preview cards, then a confirm, then verified writes with a snapshot. Undo a whole run with `@coding undo <id>`. A path argument is required.
 
-Some modes depend on services that a [light deployment](architecture.md#deployment-presets-light-vs-full) may not run: `@docs` needs Qdrant (off when `AGENTFORGE_QDRANT=off`), and `@search` needs a configured web-search provider key. When the backing service is absent the mode is simply unavailable, not broken.
+Some modes depend on services that a [light deployment](architecture.md#deployment-presets-light-vs-full) may not run: `@qdrant` / `@docs` needs Qdrant (off when `AGENTFORGE_QDRANT=off`), and `@search` needs a configured web-search provider key. When the backing service is absent the mode is simply unavailable, not broken.
 
 ## Prompt refinement (optional)
 

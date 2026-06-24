@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Knowledge Database content types are now `note`, `reference`, `documentation`, `document`, `cheatsheet`, and `snippet` (replacing the earlier `code` / `command` / `url` / `config` / `error_solution` / `api_example` set). Update clients and any indexed entries accordingly.
 - `@felix` moved out of tracked `custom_agents.yaml` into `custom_agents.local.yaml.example` (copy to gitignored `custom_agents.local.yaml` to enable).
+- RAG search mode: `@qdrant` is canonical; `@docs` and `@find` are documented aliases (all three route to the same mode and can appear anywhere in a prompt).
 
 ### Added
 
