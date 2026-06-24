@@ -118,6 +118,7 @@ class KnowledgeVectorService:
         language: str | None = None,
         tags: list[str] | None = None,
         project: str | None = None,
+        parent_id: str | None = None,
     ) -> list[dict]:
         client = self._get_client()
 
@@ -130,6 +131,8 @@ class KnowledgeVectorService:
             conditions.append(FieldCondition(key="tags", match=MatchAny(any=tags)))
         if project:
             conditions.append(FieldCondition(key="project", match=MatchValue(value=project)))
+        if parent_id:
+            conditions.append(FieldCondition(key="parent_id", match=MatchValue(value=parent_id)))
 
         # Exclude page chunks from top-level search results
         must_not = [FieldCondition(key="is_chunk", match=MatchValue(value=True))]

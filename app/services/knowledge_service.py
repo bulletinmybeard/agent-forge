@@ -275,6 +275,7 @@ class KnowledgeService:
             language=request.language,
             tags=request.tags,
             project=request.project,
+            parent_id=request.parent_id,
         )
         return {
             "query": request.query,

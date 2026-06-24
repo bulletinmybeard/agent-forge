@@ -75,6 +75,7 @@ class KnowledgeSearchRequest(BaseModel):
     content_type: str | None = None
     language: str | None = None
     project: str | None = None
+    parent_id: str | None = None
     limit: int = Field(default=10, ge=1)  # clamped to 50 by cap_limit validator
     score_threshold: float | None = None
 
