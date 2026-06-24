@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-24
+
 ### Changed
 
 - RAG `@` aliases centralized in `agentforge/mode_prefixes.py` (shared by `mode_routing` and `intent_classifier`).
@@ -13,10 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `canvas.enabled` and `botty.enabled` in `config.yaml` now gate Canvas init and the `/ws/botty` route (defaults remain `true`).
 - `prompt_lab.enabled` gates Prompt Lab DB init and `/api/prompt-lab/*` endpoints; `canvas.enabled` also gates the `/api/canvas/*` router (not just init).
 - Chat sessions are namespaced by `chat_sessions.source` (`web`, `kb`, …): clients pass `overrides.source` and/or `?source=` on `/ws/chat`; worker auto-create reads the active job's overrides. Agent Chat lists `source=web` only.
-- `web/server/api.py` imports hoisted to module top (lazy imports kept for optional `indexer_service` / `pdfplumber` only).
+- `web/server/api.py` imports hoisted to module top; `sql_schema_tool` stays lazy (private/gitignored module).
 - In-code RAG comments in `ws_endpoint.py` now treat `@qdrant` as canonical (`@docs` / `@find` as aliases).
 - `OllamaSettings` profile resolution always delegates to `agentforge.config.ConfigManager` (removed duplicate `_merge_profile_chain` fallback).
-- Config loading consolidated: `app/config.py` and `agentforge.config.ConfigManager` both use `load_merged_yaml()` (framework-config + config.yaml + split profiles). `ConfigManager.raw` exposes the merged dict.
+- Config loading consolidated: `app/config.py` and `agentforge.config.ConfigManager` both use `load_merged_yaml()` (framework-config + config.yaml + split profiles). `ConfigManager.raw` exposes the merged dict. When gitignored config files are absent, `load_merged_yaml()` falls back to the committed `*.example.yaml` templates (CI / fresh clone).
 - Legacy per-product Google connector plugins (`gmail`, `google_drive`, `bigquery`, `youtube`) removed; unified `google` connector only. Unmigrated SQLite rows are skipped at startup (see `scripts/list-legacy-connections.py`).
 - Knowledge Database content types are now `note`, `reference`, `documentation`, `document`, `cheatsheet`, and `snippet` (replacing the earlier `code` / `command` / `url` / `config` / `error_solution` / `api_example` set). Update clients and any indexed entries accordingly.
 - `@felix` moved out of tracked `custom_agents.yaml` into `custom_agents.local.yaml.example` (copy to gitignored `custom_agents.local.yaml` to enable).
@@ -43,6 +45,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `tools.shell.sudo_password` startup warning in the CLI (the key was already ignored; interactive sudo is the only path).
 - `AGENTFORGE_WORKER_LOCALITY` env fallback in worker role resolution (use `AGENTFORGE_WORKER_ROLE`).
 - Legacy `connectors.google.gmail.credentials_dir` config path for OAuth client secrets (use `connectors.credentials_dir` or `GMAIL_CREDENTIALS_DIR`).
+
+### Breaking
+
+- Knowledge Database content type rename (see Changed above).
+- Legacy per-product Google connector plugins removed (see Changed above).
+- Chat session listing is scoped by `source`; clients must pass `overrides.source` / `?source=` where appropriate.
 
 ## [0.8.0] - 2026-06-21
 

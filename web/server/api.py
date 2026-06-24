@@ -28,15 +28,6 @@ from pydantic import BaseModel
 from agentforge.client import AIClient
 from agentforge.config import get_config as get_fw_config
 from agentforge.router import ProfileRouter
-from agentforge.tools.sql_schema_tool import (
-    _cache_key,
-    _compact_schema,
-    _get_redis,
-    get_all_cached_schemas,
-)
-from agentforge.tools.sql_schema_tool import (
-    get_cached_schema as fetch_cached_schema,
-)
 from app.config import settings as af_settings
 
 from . import state
@@ -1659,6 +1650,8 @@ async def list_cached_schemas():
 
     These are global (not session-scoped) — any chat session can use them.
     """
+    from agentforge.tools.sql_schema_tool import get_all_cached_schemas
+
     schemas = get_all_cached_schemas()
     summary = []
     for db_name, schema in schemas.items():
@@ -1677,6 +1670,13 @@ async def list_cached_schemas():
 @router.get("/schemas/{database}")
 async def get_cached_schema(database: str, format: str = "json"):
     """Retrieve a cached database schema."""
+    from agentforge.tools.sql_schema_tool import (
+        _compact_schema,
+    )
+    from agentforge.tools.sql_schema_tool import (
+        get_cached_schema as fetch_cached_schema,
+    )
+
     schema = fetch_cached_schema(database)
     if not schema:
         raise HTTPException(status_code=404, detail=f"No cached schema for '{database}'")
@@ -1688,6 +1688,8 @@ async def get_cached_schema(database: str, format: str = "json"):
 @router.delete("/schemas/{database}")
 async def invalidate_cached_schema(database: str):
     """Invalidate (delete) the cached schema for a database."""
+    from agentforge.tools.sql_schema_tool import _cache_key, _get_redis
+
     r = _get_redis()
     if not r:
         raise HTTPException(status_code=503, detail="Redis not available")

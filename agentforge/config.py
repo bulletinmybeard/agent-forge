@@ -114,23 +114,38 @@ def merge_split_profiles(raw: dict[str, Any], config_dir: Path) -> None:
         )
 
 
+def _config_with_example_fallback(path: Path) -> Path:
+    """Use ``*.example.yaml`` when the real config file is missing (CI / fresh clone)."""
+    if path.exists():
+        return path
+    example = path.with_name(f"{path.stem}.example{path.suffix}")
+    if example.exists():
+        logger.debug("%s not found at %s, using %s", path.name, path, example)
+        return example
+    return path
+
+
 def load_merged_yaml(config_path: str | Path | None = None) -> dict[str, Any]:
     """Load framework-config.yaml + config.yaml and merge split profiles.
 
     Single source of truth for the YAML dict both :class:`ConfigManager` and
     ``app.config`` build their typed settings from. Does not apply env-var
     overrides — those are :class:`ConfigManager` / pydantic concerns.
+
+    When ``framework-config.yaml`` or ``config.yaml`` are absent (gitignored in
+    the public repo), falls back to the committed ``*.example.yaml`` templates.
     """
     path = Path(config_path) if config_path else Path("config.yaml")
-    base_path = path.parent / "framework-config.yaml"
+    base_path = _config_with_example_fallback(path.parent / "framework-config.yaml")
+    user_path = _config_with_example_fallback(path)
 
     raw: dict[str, Any] = {}
-    if base_path.exists() and base_path.resolve() != path.resolve():
-        raw = load_yaml_file(base_path, "framework-config.yaml")
-    if path.exists():
-        raw = _deep_merge(raw, load_yaml_file(path, "config.yaml"))
+    if base_path.exists() and base_path.resolve() != user_path.resolve():
+        raw = load_yaml_file(base_path, base_path.name)
+    if user_path.exists():
+        raw = _deep_merge(raw, load_yaml_file(user_path, user_path.name))
     elif not raw:
-        logger.debug("No config file found at %s / %s — using defaults", base_path, path)
+        logger.debug("No config file found at %s / %s — using defaults", base_path, user_path)
 
     merge_split_profiles(raw, path.parent)
     return raw
