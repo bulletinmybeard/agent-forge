@@ -17,10 +17,10 @@ from app.models.knowledge import (
 
 class TestCreateEntryRequest:
     def test_valid_minimal(self):
-        req = CreateEntryRequest(title="Test", content="echo hello", content_type="command")
+        req = CreateEntryRequest(title="Test", content="echo hello", content_type="cheatsheet")
         assert req.title == "Test"
         assert req.content == "echo hello"
-        assert req.content_type == "command"
+        assert req.content_type == "cheatsheet"
         assert req.tags == []
         assert req.language is None
         assert req.source_url is None
@@ -30,7 +30,7 @@ class TestCreateEntryRequest:
         req = CreateEntryRequest(
             title="Docker prune",
             content="docker volume prune -f",
-            content_type="command",
+            content_type="cheatsheet",
             language="bash",
             tags=["Docker", "  PROJ-123  "],
             source_url="https://docs.docker.com",
@@ -43,14 +43,14 @@ class TestCreateEntryRequest:
         req = CreateEntryRequest(
             title="Test",
             content="x",
-            content_type="code",
+            content_type="snippet",
             tags=["  FOO  ", "Bar", "baz"],
         )
         assert req.tags == ["foo", "bar", "baz"]
 
     def test_title_too_long(self):
         with pytest.raises(ValidationError):
-            CreateEntryRequest(title="x" * 201, content="y", content_type="code")
+            CreateEntryRequest(title="x" * 201, content="y", content_type="snippet")
 
     def test_invalid_content_type(self):
         with pytest.raises(ValidationError):
@@ -93,14 +93,14 @@ class TestKnowledgeSearchRequest:
 class TestBatchCreateRequest:
     def test_valid(self):
         entries = [
-            CreateEntryRequest(title="A", content="a", content_type="code"),
-            CreateEntryRequest(title="B", content="b", content_type="command"),
+            CreateEntryRequest(title="A", content="a", content_type="snippet"),
+            CreateEntryRequest(title="B", content="b", content_type="cheatsheet"),
         ]
         req = BatchCreateRequest(entries=entries)
         assert len(req.entries) == 2
 
     def test_too_many_entries(self):
-        entries = [CreateEntryRequest(title=f"E{i}", content=f"c{i}", content_type="code") for i in range(101)]
+        entries = [CreateEntryRequest(title=f"E{i}", content=f"c{i}", content_type="snippet") for i in range(101)]
         with pytest.raises(ValidationError):
             BatchCreateRequest(entries=entries)
 
@@ -125,5 +125,33 @@ class TestBulkDeleteRequest:
 
 class TestValidContentTypes:
     def test_expected_types(self):
-        expected = {"code", "command", "url", "config", "error_solution", "note", "api_example"}
+        expected = {"note", "reference", "documentation", "document", "cheatsheet", "snippet"}
         assert VALID_CONTENT_TYPES == expected
+
+    @pytest.mark.parametrize("content_type", sorted(VALID_CONTENT_TYPES))
+    def test_each_type_accepted(self, content_type: str):
+        req = CreateEntryRequest(title="T", content="c", content_type=content_type)
+        assert req.content_type == content_type
+
+    @pytest.mark.parametrize(
+        "content_type",
+        ["code", "command", "url", "config", "error_solution", "api_example"],
+    )
+    def test_legacy_types_rejected(self, content_type: str):
+        with pytest.raises(ValidationError):
+            CreateEntryRequest(title="T", content="c", content_type=content_type)
+
+    def test_metadata_and_parent_id_on_create(self):
+        req = CreateEntryRequest(
+            title="Attachment",
+            content="page 1",
+            content_type="document",
+            metadata={"filename": "doc.pdf", "pages": 3},
+            parent_id="parent-uuid-123",
+        )
+        assert req.metadata == {"filename": "doc.pdf", "pages": 3}
+        assert req.parent_id == "parent-uuid-123"
+
+    def test_parent_id_on_update(self):
+        req = UpdateEntryRequest(parent_id="new-parent-uuid")
+        assert req.parent_id == "new-parent-uuid"

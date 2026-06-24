@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Knowledge Database content types are now `note`, `reference`, `documentation`, `document`, `cheatsheet`, and `snippet` (replacing the earlier `code` / `command` / `url` / `config` / `error_solution` / `api_example` set). Update clients and any indexed entries accordingly.
+
+### Added
+
+- `GET /knowledge/list`: slim metadata listing for the browse view (no content body; optional `limit`, default 2000).
+
 ## [0.8.0] - 2026-06-21
 
 ### Added

@@ -42,6 +42,8 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from agentforge.config import set_request_provider_override, set_request_role_override_map, set_request_session_id
 from agentforge.connectors._account import account_slug, label_slug
+from app.models.knowledge import KnowledgeSearchRequest
+from app.services.knowledge_service import knowledge_service
 
 from . import protocol
 from .agent_bridge import AgentBridge
@@ -757,6 +759,38 @@ class SearchRuntime:
             )
             self.tool_count += 1
 
+            # Register kb_search (the KnowledgeBase app's own collection)
+            # Separate from search_knowledge_base, which hits the main RAG
+            # collection. This one queries knowledge_entries via knowledge_service
+            # and supports parent_id scoping (one document + its attachments).
+            async def kb_search(query: str, parent_id: str = "") -> str:
+                """Search the user's personal Knowledge Base -- their saved notes, documentation, code snippets, man pages, and reference docs."""
+
+                req = KnowledgeSearchRequest(query=query, limit=8, parent_id=parent_id or None)
+                try:
+                    data = await asyncio.to_thread(knowledge_service.search, req)
+                except Exception as exc:  # noqa: BLE001
+                    return f"kb_search failed: {exc}"
+
+                results = data.get("results", [])
+                if not results:
+                    scope = f" within document {parent_id}" if parent_id else ""
+                    return f"No Knowledge Base results for {query!r}{scope}."
+
+                lines = [f"Found {len(results)} Knowledge Base result(s) for {query!r}:", ""]
+                for i, r in enumerate(results, 1):
+                    content = (r.get("content") or "").strip()[:800]
+                    lines.append(f"{i}. [{r.get('content_type', '')}] {r.get('title', '')} (id={r.get('id', '')})")
+                    if r.get("tags"):
+                        lines.append(f"   tags: {', '.join(r['tags'])}")
+                    if content:
+                        lines.append(f"   {content}")
+                    lines.append("")
+                return "\n".join(lines).rstrip()
+
+            self.registry.register(kb_search, name="kb_search", category="Knowledge")
+            self.tool_count += 1
+
             self.agent_available = True
             logger.info(
                 "Agent tools initialised — %d tools registered",
@@ -1145,7 +1179,7 @@ def _parse_query(
 ) -> tuple[str, dict[str, str], bool]:
     """Parse @source prefixes and --flags from the query, apply sticky filters.
 
-    Returns (clean_query, filters, is_sticky) matching agentforge_chat.py behaviour.
+    Returns (clean_query, filters, is_sticky) for @docs / RAG query parsing.
     """
     sticky = _session_sticky.get(session_id, {})
     parts = raw_query.split()

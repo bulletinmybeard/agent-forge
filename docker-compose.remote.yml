@@ -1,7 +1,7 @@
 # Reverse-proxy + host-Redis overlay for a deployed stack. Use WITH the base:
 #
 #   set -a; . ./deploy.env; set +a
-#   docker compose -f docker-compose.yml -f docker-compose.remote.yml up -d --scale redis=0
+#   docker compose -f docker-compose.yml -f docker-compose.remote.yml up -d
 #
 # (The deploy script does this for you.) Interpolation vars come from deploy.env:
 #   PUBLIC_DOMAIN     — Host rule for the web service (:8200, agent WS + REST)
@@ -10,9 +10,16 @@
 #   REMOTE_REDIS_URL  — Redis the containers use (host-native Redis on the target)
 #
 # Requires the external ${PROXY_NETWORK} network + a running Traefik on the
-# target. `--scale redis=0` skips the bundled Redis container (host Redis is used).
+# target. The bundled Redis is profile-gated; set AGENTFORGE_REDIS=host in
+# deploy.env to omit it and use host-native Redis (REMOTE_REDIS_URL).
 services:
   agentforge-web:
+    healthcheck:
+      test: ["CMD", "curl", "-sS", "-o", "/dev/null", "http://localhost:8200/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
     environment:
       REDIS_URL: "${REMOTE_REDIS_URL:-redis://host.docker.internal:6379}"
       # Multi-host deploy: route tools per tool_routing.yaml (a native "local"
@@ -59,6 +66,12 @@ services:
     # so web + api read the same keys. Only REQUIRE_AUTH is api-specific here.
     environment:
       AGENTFORGE_REQUIRE_AUTH: "${AGENTFORGE_REQUIRE_AUTH:-true}"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8100/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
     networks:
       - default       # reach qdrant / web / sidecar / workers
       - proxy         # reachable by Traefik

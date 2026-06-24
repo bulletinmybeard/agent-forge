@@ -1391,7 +1391,7 @@ async def get_knowledge():
 
     unique_doc_names = sorted({d.get("document_name", "") for d in documents if d.get("document_name")})
 
-    # Build the name→info lookup the same way agentforge_chat.py does
+    # Build the name-to-info lookup for the SPA knowledge panel
     source_list = []
     for src in sources:
         name = src.get("source_name", src.get("api_name", ""))

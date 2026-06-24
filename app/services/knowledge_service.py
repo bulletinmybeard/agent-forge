@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 REEMBED_FIELDS = {"content", "title", "notes"}
 PAGE_MARKER_RE = re.compile(r"---\s*Page\s+(\d+)\s*---")
 
+_CHUNK_LOCK = threading.Lock()
+
 
 class KnowledgeService:
     def __init__(
@@ -239,7 +241,11 @@ class KnowledgeService:
             self._vector.upsert_batch([point])
 
             if "content" in updates and payload.get("has_chunks"):
-                self._create_page_chunks(new_point_id, self._split_pages(payload["content"]), payload, now)
+                threading.Thread(
+                    target=self._create_page_chunks,
+                    args=(new_point_id, pages, payload, now),
+                    daemon=True,
+                ).start()
 
             return self._payload_to_response(new_point_id, payload)
 
@@ -269,6 +275,7 @@ class KnowledgeService:
             language=request.language,
             tags=request.tags,
             project=request.project,
+            parent_id=request.parent_id,
         )
         return {
             "query": request.query,
@@ -418,12 +425,36 @@ class KnowledgeService:
 
     _MIN_PAGE_CHARS = 50
     _MERGE_THRESHOLD = 200
+    _SIZE_CHUNK_CHARS = 2000
+    _SIZE_CHUNK_OVERLAP = 200
+
+    @staticmethod
+    def _split_by_size(content: str) -> list[dict]:
+        """Window marker-less content into overlapping fixed-size pages for retrieval."""
+        size = KnowledgeService._SIZE_CHUNK_CHARS
+        step = max(size - KnowledgeService._SIZE_CHUNK_OVERLAP, 1)
+        pages = []
+        page_num = 1
+        for start in range(0, len(content), step):
+            text = content[start : start + size]
+            if text.strip():
+                pages.append({"page_number": page_num, "text": text})
+                page_num += 1
+            if start + size >= len(content):
+                break
+        return pages
 
     @staticmethod
     def _split_pages(content: str) -> list[dict]:
-        """Split content on page markers, merging short pages into neighbors."""
+        """Split content on page markers, merging short pages into neighbors.
+
+        Marker-less content (JSON/code/single-line text) falls back to size-based windowing so
+        large documents are still chunked and individually retrievable.
+        """
         parts = PAGE_MARKER_RE.split(content)
         if len(parts) <= 1:
+            if len(content) > KnowledgeService._SIZE_CHUNK_CHARS:
+                return KnowledgeService._split_by_size(content)
             return []
 
         raw_pages = []
@@ -457,6 +488,17 @@ class KnowledgeService:
     _EMBED_BATCH_SIZE = 20
 
     def _create_page_chunks(
+        self,
+        parent_id: str,
+        pages: list[dict],
+        parent_payload: dict,
+        now: str,
+    ) -> None:
+        """Serialize chunk creation so concurrent entry writes don't flood the embedder."""
+        with _CHUNK_LOCK:
+            self._create_page_chunks_locked(parent_id, pages, parent_payload, now)
+
+    def _create_page_chunks_locked(
         self,
         parent_id: str,
         pages: list[dict],
@@ -625,6 +667,26 @@ class KnowledgeService:
         )
         return {
             "results": [self._payload_to_response(r["id"], r["payload"]) for r in results],
+            "count": len(results),
+        }
+
+    def list_overview(self, limit: int = 2000) -> dict:
+        """Slim listing for the browse view: metadata only, no content body."""
+        results = self._vector.list_slim(limit=limit)
+        return {
+            "results": [
+                {
+                    "id": r["id"],
+                    "title": r["payload"].get("title", ""),
+                    "content_type": r["payload"].get("content_type", ""),
+                    "language": r["payload"].get("language"),
+                    "tags": r["payload"].get("tags", []),
+                    "parent_id": r["payload"].get("parent_id"),
+                    "created_at": r["payload"].get("created_at", ""),
+                    "metadata": r["payload"].get("metadata"),
+                }
+                for r in results
+            ],
             "count": len(results),
         }
 

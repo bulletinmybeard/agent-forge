@@ -72,7 +72,7 @@ class TestGetById:
     def test_returns_entry_when_found(self, svc, mock_client):
         point = types.SimpleNamespace(
             id="abc-123",
-            payload={"title": "Test", "content": "hello", "content_type": "code"},
+            payload={"title": "Test", "content": "hello", "content_type": "snippet"},
         )
         mock_client.retrieve.return_value = [point]
         result = svc.get_by_id("abc-123")

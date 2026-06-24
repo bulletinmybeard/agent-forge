@@ -1,7 +1,7 @@
 """Qdrant operations for the knowledge_entries collection.
 
 Sibling of VectorService — same patterns, dedicated to user-created
-knowledge entries (snippets, commands, URLs, configs, etc.).
+knowledge entries (notes, references, documentation, documents, cheatsheets, snippets).
 """
 
 import hashlib
@@ -118,6 +118,7 @@ class KnowledgeVectorService:
         language: str | None = None,
         tags: list[str] | None = None,
         project: str | None = None,
+        parent_id: str | None = None,
     ) -> list[dict]:
         client = self._get_client()
 
@@ -130,6 +131,8 @@ class KnowledgeVectorService:
             conditions.append(FieldCondition(key="tags", match=MatchAny(any=tags)))
         if project:
             conditions.append(FieldCondition(key="project", match=MatchValue(value=project)))
+        if parent_id:
+            conditions.append(FieldCondition(key="parent_id", match=MatchValue(value=parent_id)))
 
         # Exclude page chunks from top-level search results
         must_not = [FieldCondition(key="is_chunk", match=MatchValue(value=True))]
@@ -240,6 +243,30 @@ class KnowledgeVectorService:
             scroll_filter=query_filter,
             limit=limit,
             with_payload=True,
+            with_vectors=False,
+        )
+        return [{"id": str(p.id), "payload": dict(p.payload) if p.payload else {}} for p in points]
+
+    def list_slim(self, limit: int = 2000) -> list[dict]:
+        """Lightweight listing: entry metadata only (no content body), chunks excluded.
+
+        A payload selector keeps the heavy content field from ever leaving Qdrant.
+        """
+        client = self._get_client()
+        must_not = [FieldCondition(key="is_chunk", match=MatchValue(value=True))]
+        points, _ = client.scroll(
+            collection_name=self._collection,
+            scroll_filter=Filter(must_not=must_not),
+            limit=limit,
+            with_payload=[
+                "title",
+                "content_type",
+                "language",
+                "tags",
+                "parent_id",
+                "created_at",
+                "metadata",
+            ],
             with_vectors=False,
         )
         return [{"id": str(p.id), "payload": dict(p.payload) if p.payload else {}} for p in points]

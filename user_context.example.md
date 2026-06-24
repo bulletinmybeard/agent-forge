@@ -12,7 +12,6 @@ Keep it concise and factual — everything here is sent on every run!
 ## Identity
 
 - Name: Your Name
-- Location: City, Country
 - Role: e.g., Full-Stack Engineer
 
 ## Preferences

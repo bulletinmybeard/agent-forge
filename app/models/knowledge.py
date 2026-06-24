@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-VALID_CONTENT_TYPES = {"code", "command", "url", "config", "error_solution", "note", "api_example"}
+VALID_CONTENT_TYPES = {
+    "note",
+    "reference",
+    "documentation",
+    "document",
+    "cheatsheet",
+    "snippet",
+}
 
 
 def _normalize_tags(tags: list[str] | None) -> list[str] | None:
@@ -47,6 +54,7 @@ class UpdateEntryRequest(BaseModel):
     source_url: str | None = None
     notes: str | None = None
     project: str | None = None
+    parent_id: str | None = None
 
     @field_validator("content_type")
     @classmethod
@@ -67,6 +75,7 @@ class KnowledgeSearchRequest(BaseModel):
     content_type: str | None = None
     language: str | None = None
     project: str | None = None
+    parent_id: str | None = None
     limit: int = Field(default=10, ge=1)  # clamped to 50 by cap_limit validator
     score_threshold: float | None = None
 

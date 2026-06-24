@@ -22,7 +22,6 @@ import asyncio
 import json
 import logging
 import threading
-import warnings
 from typing import Any
 
 from agentforge.tools.routing import agent_dispatch_timeout, tool_dispatch_timeout
@@ -204,23 +203,6 @@ def _mode_queue_name(mode: str) -> str | None:
     return get_queue_for_role(role)
 
 
-# Deprecated — kept so existing tests keep checking that ``coding`` is pinned.
-# Builds the set lazily from the YAML on each access via __contains__.
-class _ModePinnedSet:
-    def __contains__(self, mode: str) -> bool:
-        from agentforge.tools.routing import get_role_for_mode
-
-        return get_role_for_mode(mode) is not None
-
-    def __iter__(self):
-        from agentforge.tools.routing import _load
-
-        return iter(_load()["modes"].keys())
-
-
-_MAC_ONLY_MODES = _ModePinnedSet()
-
-
 def enqueue_agent_job(
     job_id: str,
     session_id: str,
@@ -296,31 +278,14 @@ async def _saq_tool_apply(
 def saq_dispatch_tool(
     tool_name: str,
     args: dict,
-    target_role: str | None = None,
+    target_role: str,
     *,
     timeout: float = _SAQ_TOOL_TIMEOUT,
-    target_locality: str | None = None,
 ) -> str:
     """Sync cross-role tool dispatch. Called from framework/agent.py and
     registry.execute_with_role when the tool's role doesn't match the
     current worker's role.
-
-    *target_locality* is accepted as a deprecated alias and translated through
-    the legacy locality->role translation.
     """
-    from agentforge.tools.routing import translate_legacy_locality
-
-    if target_role is None and target_locality is None:
-        raise TypeError("saq_dispatch_tool() requires target_role")
-    if target_locality is not None:
-        warnings.warn(
-            "saq_dispatch_tool(target_locality=...) is deprecated; use target_role=",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if target_role is None:
-            target_role = translate_legacy_locality(target_locality)
-
     args_json = json.dumps(args, default=str)
     from agentforge.config import get_request_session_id
 
