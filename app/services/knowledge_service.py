@@ -21,6 +21,7 @@ from app.models.knowledge import (
 )
 from app.services.dedup_service import DedupService
 from app.services.dedup_service import dedup_service as _default_dedup
+from app.services.embedding_service import EmbeddingService
 from app.services.embedding_service import embedding_service as _default_embed
 from app.services.knowledge_file_service import knowledge_file_service
 from app.services.knowledge_vector_service import (
@@ -110,9 +111,7 @@ class KnowledgeService:
 
         return self._payload_to_response(point_id, payload)
 
-    def _relink_existing_entry(
-        self, point_id: str, payload: dict, request: CreateEntryRequest, now: str
-    ) -> dict:
+    def _relink_existing_entry(self, point_id: str, payload: dict, request: CreateEntryRequest, now: str) -> dict:
         """Re-attach an existing content-addressed entry under a new parent."""
         merged = dict(payload)
         merged["parent_id"] = request.parent_id
@@ -277,7 +276,6 @@ class KnowledgeService:
         return self._payload_to_response(point_id, payload)
 
     def delete_entry(self, point_id: str) -> None:
-
         knowledge_file_service.delete(point_id)
         self._vector.delete_by_parent(point_id)
         self._vector.delete_point(point_id)
