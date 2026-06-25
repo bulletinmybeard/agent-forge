@@ -98,6 +98,41 @@ class TestCreateEntry:
         result = service.create_entry(req)
         assert result.get("_conflict") is True
 
+    def test_duplicate_with_parent_id_relinks(self, service, mock_vector_svc):
+        import hashlib
+
+        content = "man page body"
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+        point_id = f"pt-{content_hash[:8]}"
+
+        mock_vector_svc.get_content_hashes.return_value = {point_id: content_hash}
+        mock_vector_svc.get_by_id.return_value = {
+            "id": point_id,
+            "payload": {
+                "title": "Old",
+                "content": content,
+                "content_type": "reference",
+                "tags": [],
+                "parent_id": "",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            },
+        }
+        req = CreateEntryRequest(
+            title="Man Page",
+            content=content,
+            content_type="reference",
+            parent_id="new-parent-uuid",
+            metadata={"filename": "ls.1.txt"},
+        )
+        result = service.create_entry(req)
+        assert result.get("_conflict") is None
+        assert result.get("_reattached") is True
+        assert result["parent_id"] == "new-parent-uuid"
+        assert result["metadata"]["filename"] == "ls.1.txt"
+        mock_vector_svc.set_payload.assert_called_once()
+        mock_vector_svc.upsert_batch.assert_not_called()
+
     def test_tags_preserved(self, service):
         req = CreateEntryRequest(title="T", content="c", content_type="snippet", tags=["python", "utils"])
         result = service.create_entry(req)

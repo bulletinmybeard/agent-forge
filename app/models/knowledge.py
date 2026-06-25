@@ -55,6 +55,7 @@ class UpdateEntryRequest(BaseModel):
     notes: str | None = None
     project: str | None = None
     parent_id: str | None = None
+    metadata: dict | None = None
 
     @field_validator("content_type")
     @classmethod

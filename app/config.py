@@ -580,6 +580,10 @@ class KnowledgeSettings(BaseSettings):
     composite_template: str = Field(
         default=_yaml.get("knowledge", {}).get("composite_template", "{title}\n{notes}\n{content}")
     )
+    files_dir: str = Field(default=_yaml.get("knowledge", {}).get("files_dir", "data/knowledge_files"))
+    max_attachment_bytes: int = Field(
+        default=int(_yaml.get("knowledge", {}).get("max_attachment_bytes", 50 * 1024 * 1024))
+    )
 
 
 class Settings(BaseSettings):

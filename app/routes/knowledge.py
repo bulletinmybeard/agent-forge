@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Response, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.models.knowledge import (
@@ -21,6 +22,7 @@ from app.models.knowledge import (
     StatsResponse,
     UpdateEntryRequest,
 )
+from app.services.knowledge_file_service import knowledge_file_service
 from app.services.knowledge_service import knowledge_service
 
 
@@ -150,6 +152,33 @@ def rechunk_entry(entry_id: str) -> dict:
     if result is None:
         raise HTTPException(status_code=404, detail="Entry not found")
     return result
+
+
+@router.head("/entries/{entry_id}/file")
+def head_entry_file(entry_id: str) -> Response:
+    """Return 200 when the original attachment file is stored, else 404."""
+    if not knowledge_file_service.exists(entry_id):
+        raise HTTPException(status_code=404, detail="Original file not stored")
+    return Response(status_code=200)
+
+
+@router.get("/entries/{entry_id}/file")
+def get_entry_file(entry_id: str) -> FileResponse:
+    """Download the original attachment file when it was stored at index time."""
+    path, filename, mime = knowledge_file_service.resolve_download(entry_id)
+    return FileResponse(path, filename=filename, media_type=mime or "application/octet-stream")
+
+
+@router.post("/entries/{entry_id}/file", status_code=201)
+async def upload_entry_file(entry_id: str, file: UploadFile) -> dict:
+    """Store the original binary for an existing entry."""
+    entry = knowledge_service.get_entry(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    file_meta = await knowledge_file_service.save(entry_id, file)
+    merged_meta = {**(entry.get("metadata") or {}), **file_meta}
+    knowledge_service.update_entry(entry_id, UpdateEntryRequest(metadata=merged_meta))
+    return {"stored": True, "metadata": file_meta}
 
 
 @router.post("/extract")
