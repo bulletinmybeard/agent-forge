@@ -192,7 +192,7 @@ async def extract_file(file: UploadFile) -> dict:
     pages = None
 
     if ext == ".pdf":
-        text, pages = await _extract_pdf_upload(file)
+        text, pages, size_bytes = await _extract_pdf_upload(file)
     else:
         raw = await file.read()
         size_bytes = len(raw)
@@ -204,13 +204,15 @@ async def extract_file(file: UploadFile) -> dict:
     if not text or not text.strip():
         raise HTTPException(422, f"No extractable text in {file.filename}")
 
+    extracted_bytes = len(text.encode("utf-8"))
     if not size_bytes:
-        size_bytes = len(text.encode("utf-8"))
+        size_bytes = extracted_bytes
 
     metadata = {
         "filename": file.filename,
         "extension": ext,
         "size_bytes": size_bytes,
+        "extracted_bytes": extracted_bytes,
         "mime_type": file.content_type or None,
     }
     if pages is not None:
@@ -219,21 +221,73 @@ async def extract_file(file: UploadFile) -> dict:
     return {"text": text, "metadata": metadata}
 
 
-async def _extract_pdf_upload(file: UploadFile) -> tuple[str, int]:
-    """Extract text from a PDF upload using pdfplumber, fallback to pdftotext CLI."""
+_LARGE_PDF_BYTES = 5 * 1024 * 1024
+_PDFTOTEXT_TIMEOUT_BASE = 120
+_PDFTOTEXT_TIMEOUT_MAX = 600
+
+
+def _pdftotext_timeout(file_bytes: int) -> int:
+    """Scale CLI timeout with upload size."""
+    return min(_PDFTOTEXT_TIMEOUT_MAX, max(_PDFTOTEXT_TIMEOUT_BASE, file_bytes // (512 * 1024)))
+
+
+def _format_pdftotext_pages(raw: str) -> tuple[str, int]:
+    """Turn pdftotext stdout into page-marked text for downstream chunking."""
+    pages = [p.strip() for p in raw.split("\f") if p.strip()]
+    if not pages:
+        return "", 0
+    if len(pages) == 1:
+        return pages[0], 1
+    marked = [f"--- Page {i} ---\n{text}" for i, text in enumerate(pages, 1)]
+    return "\n\n".join(marked), len(pages)
+
+
+def _run_pdftotext(tmp_path: Path, timeout: int) -> tuple[str, int] | None:
     import subprocess
 
+    try:
+        proc = subprocess.run(
+            ["pdftotext", str(tmp_path), "-"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        logger.warning("CLI pdftotext failed for %s: %s", tmp_path.name, exc)
+        return None
+
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    return _format_pdftotext_pages(proc.stdout)
+
+
+async def _extract_pdf_upload(file: UploadFile) -> tuple[str, int, int]:
+    """Extract text from a PDF upload (pdftotext for large files, pdfplumber otherwise)."""
     try:
         import pdfplumber
     except ImportError:
         pdfplumber = None
 
     content = await file.read()
+    upload_bytes = len(content)
+    pdftotext_timeout = _pdftotext_timeout(upload_bytes)
 
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=True) as tmp:
         tmp.write(content)
         tmp.flush()
         tmp_path = Path(tmp.name)
+
+        # Large manuals: pdftotext is ~30–50× faster than per-page pdfplumber.
+        if upload_bytes >= _LARGE_PDF_BYTES:
+            fast = _run_pdftotext(tmp_path, pdftotext_timeout)
+            if fast and fast[0].strip():
+                logger.info(
+                    "pdftotext extracted %s (%d bytes, %d pages)",
+                    file.filename,
+                    upload_bytes,
+                    fast[1],
+                )
+                return fast[0], fast[1], upload_bytes
 
         if pdfplumber:
             try:
@@ -258,21 +312,12 @@ async def _extract_pdf_upload(file: UploadFile) -> tuple[str, int]:
                     num_pages = len(pdf.pages)
 
                 if page_texts:
-                    return "\n\n".join(page_texts), num_pages
+                    return "\n\n".join(page_texts), num_pages, upload_bytes
             except Exception as exc:
                 logger.warning("pdfplumber extraction failed for %s: %s", file.filename, exc)
 
-        # Fallback: CLI pdftotext
-        try:
-            proc = subprocess.run(
-                ["pdftotext", str(tmp_path), "-"],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            if proc.returncode == 0 and proc.stdout.strip():
-                return proc.stdout, None
-        except Exception as exc:
-            logger.warning("CLI pdftotext fallback failed for %s: %s", file.filename, exc)
+        fallback = _run_pdftotext(tmp_path, pdftotext_timeout)
+        if fallback and fallback[0].strip():
+            return fallback[0], fallback[1], upload_bytes
 
     raise HTTPException(422, f"Could not extract text from {file.filename}")

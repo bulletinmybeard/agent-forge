@@ -247,3 +247,22 @@ class TestCreateWithMetadata:
         call_args = mock_knowledge_service.create_entry.call_args[0][0]
         assert call_args.metadata == {"filename": "doc.pdf"}
         assert call_args.parent_id == "parent-uuid"
+
+
+class TestPdfExtractHelpers:
+    def test_format_pdftotext_pages_splits_form_feeds(self):
+        from app.routes.knowledge import _format_pdftotext_pages
+
+        raw = "Page one\fPage two\fPage three"
+        text, pages = _format_pdftotext_pages(raw)
+        assert pages == 3
+        assert "--- Page 1 ---" in text
+        assert "--- Page 3 ---" in text
+        assert "Page two" in text
+
+    def test_pdftotext_timeout_scales_with_size(self):
+        from app.routes.knowledge import _pdftotext_timeout
+
+        assert _pdftotext_timeout(1 * 1024 * 1024) == 120
+        assert _pdftotext_timeout(62 * 1024 * 1024) == 124
+        assert _pdftotext_timeout(500 * 1024 * 1024) == 600
