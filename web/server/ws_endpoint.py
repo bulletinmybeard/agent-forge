@@ -5753,7 +5753,7 @@ async def _run_scheduler(
                 "\n\n# AgentForge Notes (macOS client)\n\n"
                 "Commands run on the user's Mac via the host worker when available. "
                 "For desktop reminders, prefer `osascript -e 'display notification "
-                "\\\"MESSAGE\\\" with title \\\"TITLE\\\"'` (built into macOS). "
+                '\\"MESSAGE\\" with title \\"TITLE\\"\'` (built into macOS). '
                 "Use `terminal-notifier` only when you are certain it is installed. "
                 "For a one-shot delay ('in N minutes'), pick a single future "
                 "minute in the cron expression — do NOT use `*/N` unless the user "

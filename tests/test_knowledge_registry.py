@@ -51,8 +51,8 @@ class TestGetKnowledgeService:
             patch("app.services.knowledge_registry.KnowledgeVectorService") as vector_cls,
             patch("app.services.knowledge_registry.KnowledgeService") as service_cls,
         ):
-            vector_cls.return_value = MagicMock()
-            service_cls.return_value = MagicMock()
+            vector_cls.side_effect = lambda **kw: MagicMock()
+            service_cls.side_effect = lambda **kw: MagicMock()
             a = reg.get_knowledge_service("knowledge_entries")
             b = reg.get_knowledge_service("knowledge_entries")
             c = reg.get_knowledge_service("kb_note_entries")

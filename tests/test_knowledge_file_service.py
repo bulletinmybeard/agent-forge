@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from io import BytesIO
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI, UploadFile
@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from app.routes.knowledge import router as knowledge_router
 from app.services.knowledge_file_service import KnowledgeFileService
+from app.services.knowledge_registry import knowledge_service_dependency
 
 
 @pytest.fixture()
@@ -21,17 +22,18 @@ def files_tmp(tmp_path):
 
 
 @pytest.fixture()
-def client(files_tmp, mock_knowledge_service):
-    app = FastAPI()
-    app.include_router(knowledge_router)
-    with TestClient(app) as c:
-        yield c
+def mock_knowledge_service():
+    return MagicMock()
 
 
 @pytest.fixture()
-def mock_knowledge_service():
-    with patch("app.routes.knowledge.knowledge_service") as mock:
-        yield mock
+def client(files_tmp, mock_knowledge_service):
+    app = FastAPI()
+    app.include_router(knowledge_router)
+    app.dependency_overrides[knowledge_service_dependency] = lambda: mock_knowledge_service
+    with TestClient(app) as c:
+        yield c
+    app.dependency_overrides.clear()
 
 
 class TestKnowledgeFileRoutes:
