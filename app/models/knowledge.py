@@ -31,6 +31,7 @@ class CreateEntryRequest(BaseModel):
     project: str = "Uncategorized"
     metadata: dict | None = None
     parent_id: str | None = None
+    force_unique: bool = False
 
     @field_validator("content_type")
     @classmethod
