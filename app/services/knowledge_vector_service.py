@@ -34,12 +34,13 @@ PAYLOAD_INDEXES_DATETIME = ["created_at", "updated_at"]
 
 
 class KnowledgeVectorService:
-    def __init__(self) -> None:
+    def __init__(self, collection_name: str | None = None) -> None:
+        self._collection_name = collection_name
         self._client: QdrantClient | None = None
 
     @property
     def _collection(self) -> str:
-        return settings.knowledge.collection_name
+        return self._collection_name or settings.knowledge.collection_name
 
     def _get_client(self) -> QdrantClient:
         if self._client is None:

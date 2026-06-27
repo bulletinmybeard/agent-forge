@@ -51,7 +51,8 @@ class KnowledgeService:
         self._embed = embedding_service or _default_embed
         self._dedup = dedup_service or _default_dedup
 
-    def _build_composite_text(self, title: str, notes: str | None, content: str) -> str:
+    @staticmethod
+    def _build_composite_text(title: str, notes: str | None, content: str) -> str:
         template = settings.knowledge.composite_template
         return template.format(title=title, notes=notes or "", content=content).strip()
 

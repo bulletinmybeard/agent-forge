@@ -108,7 +108,8 @@ dedup:
 # Dedicated Qdrant collection for user-created knowledge entries (notes, snippets, etc.).
 # Used by the /knowledge API endpoints. Env prefix: KNOWLEDGE_
 knowledge:
-  collection_name: "knowledge_entries"
+  collection_name: "knowledge_entries"               # Knowledge Base SPA (default /knowledge/*)
+  notes_collection_name: "kb_note_entries"             # AgentForge Notes macOS app
   dedup_threshold: 0.92                              # cosine; higher = stricter near-dup gate
   composite_template: "{title}\n{notes}\n{content}"  # text that gets embedded
   files_dir: "data/knowledge_files"                    # original attachments

@@ -7,7 +7,7 @@ import logging
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -23,7 +23,8 @@ from app.models.knowledge import (
     UpdateEntryRequest,
 )
 from app.services.knowledge_file_service import knowledge_file_service
-from app.services.knowledge_service import knowledge_service
+from app.services.knowledge_registry import knowledge_service_dependency
+from app.services.knowledge_service import KnowledgeService
 
 
 class ContextRequest(BaseModel):
@@ -37,7 +38,10 @@ router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
 
 @router.post("/entries", status_code=201)
-def create_entry(request: CreateEntryRequest) -> EntryResponse:
+def create_entry(
+    request: CreateEntryRequest,
+    knowledge_service: KnowledgeService = Depends(knowledge_service_dependency),
+) -> EntryResponse:
     result = knowledge_service.create_entry(request)
     if result.get("_conflict"):
         result.pop("_conflict", None)
@@ -49,7 +53,10 @@ def create_entry(request: CreateEntryRequest) -> EntryResponse:
 
 
 @router.post("/entries/batch", status_code=202)
-def create_batch(request: BatchCreateRequest) -> BatchResponse:
+def create_batch(
+    request: BatchCreateRequest,
+    knowledge_service: KnowledgeService = Depends(knowledge_service_dependency),
+) -> BatchResponse:
     knowledge_service.process_batch(request.entries)
     return BatchResponse(
         job_id="sync",
@@ -59,7 +66,10 @@ def create_batch(request: BatchCreateRequest) -> BatchResponse:
 
 
 @router.get("/entries/{entry_id}")
-def get_entry(entry_id: str) -> EntryResponse:
+def get_entry(
+    entry_id: str,
+    knowledge_service: KnowledgeService = Depends(knowledge_service_dependency),
+) -> EntryResponse:
     result = knowledge_service.get_entry(entry_id)
     if not result:
         raise HTTPException(status_code=404, detail="Entry not found")
@@ -67,7 +77,11 @@ def get_entry(entry_id: str) -> EntryResponse:
 
 
 @router.put("/entries/{entry_id}")
-def update_entry(entry_id: str, request: UpdateEntryRequest) -> EntryResponse:
+def update_entry(
+    entry_id: str,
+    request: UpdateEntryRequest,
+    knowledge_service: KnowledgeService = Depends(knowledge_service_dependency),
+) -> EntryResponse:
     result = knowledge_service.update_entry(entry_id, request)
     if not result:
         raise HTTPException(status_code=404, detail="Entry not found")
@@ -75,24 +89,35 @@ def update_entry(entry_id: str, request: UpdateEntryRequest) -> EntryResponse:
 
 
 @router.delete("/entries/{entry_id}", status_code=204)
-def delete_entry(entry_id: str) -> Response:
+def delete_entry(
+    entry_id: str,
+    knowledge_service: KnowledgeService = Depends(knowledge_service_dependency),
+) -> Response:
     knowledge_service.delete_entry(entry_id)
     return Response(status_code=204)
 
 
 @router.delete("/entries")
-def bulk_delete(request: BulkDeleteRequest) -> dict:
+def bulk_delete(
+    request: BulkDeleteRequest,
+    knowledge_service: KnowledgeService = Depends(knowledge_service_dependency),
+) -> dict:
     return knowledge_service.delete_by_filter(request)
 
 
 @router.post("/search")
-def search(request: KnowledgeSearchRequest) -> SearchResponse:
+def search(
+    request: KnowledgeSearchRequest,
+    knowledge_service: KnowledgeService = Depends(knowledge_service_dependency),
+) -> SearchResponse:
     result = knowledge_service.search(request)
     return SearchResponse(**result)
 
 
 @router.get("/tags")
-def get_tags() -> dict:
+def get_tags(
+    knowledge_service: KnowledgeService = Depends(knowledge_service_dependency),
+) -> dict:
     tags = knowledge_service.get_tags()
     return {"tags": tags}
 
@@ -106,7 +131,10 @@ class FilterRequest(BaseModel):
 
 
 @router.post("/filter")
-def filter_entries(request: FilterRequest) -> dict:
+def filter_entries(
+    request: FilterRequest,
+    knowledge_service: KnowledgeService = Depends(knowledge_service_dependency),
+) -> dict:
     """Return entries matching filters without vector search."""
     return knowledge_service.filter_entries(
         limit=request.limit,
@@ -118,26 +146,38 @@ def filter_entries(request: FilterRequest) -> dict:
 
 
 @router.get("/list")
-def list_entries(limit: int = 2000) -> dict:
+def list_entries(
+    limit: int = 2000,
+    knowledge_service: KnowledgeService = Depends(knowledge_service_dependency),
+) -> dict:
     """Slim listing for the browse view: entry metadata only, no content body."""
     return knowledge_service.list_overview(limit=limit)
 
 
 @router.post("/search/smart")
-def search_smart(request: KnowledgeSearchRequest) -> dict:
+def search_smart(
+    request: KnowledgeSearchRequest,
+    knowledge_service: KnowledgeService = Depends(knowledge_service_dependency),
+) -> dict:
     result = knowledge_service.search(request)
     result["intent"] = {"refined_query": None, "was_refined": False}
     return result
 
 
 @router.get("/stats")
-def get_stats() -> StatsResponse:
+def get_stats(
+    knowledge_service: KnowledgeService = Depends(knowledge_service_dependency),
+) -> StatsResponse:
     result = knowledge_service.get_stats()
     return StatsResponse(**result)
 
 
 @router.post("/entries/{entry_id}/context")
-def get_entry_context(entry_id: str, request: ContextRequest) -> dict:
+def get_entry_context(
+    entry_id: str,
+    request: ContextRequest,
+    knowledge_service: KnowledgeService = Depends(knowledge_service_dependency),
+) -> dict:
     """Retrieve the most relevant passages from an entry for a given query."""
     result = knowledge_service.get_context(entry_id, request.query, top_k=request.top_k)
     if result is None:
@@ -146,7 +186,10 @@ def get_entry_context(entry_id: str, request: ContextRequest) -> dict:
 
 
 @router.post("/entries/{entry_id}/rechunk")
-def rechunk_entry(entry_id: str) -> dict:
+def rechunk_entry(
+    entry_id: str,
+    knowledge_service: KnowledgeService = Depends(knowledge_service_dependency),
+) -> dict:
     """Re-create page chunks for an existing entry (for entries indexed before chunking was added)."""
     result = knowledge_service.rechunk_entry(entry_id)
     if result is None:
@@ -170,7 +213,11 @@ def get_entry_file(entry_id: str) -> FileResponse:
 
 
 @router.post("/entries/{entry_id}/file", status_code=201)
-async def upload_entry_file(entry_id: str, file: UploadFile) -> dict:
+async def upload_entry_file(
+    entry_id: str,
+    file: UploadFile,
+    knowledge_service: KnowledgeService = Depends(knowledge_service_dependency),
+) -> dict:
     """Store the original binary for an existing entry."""
     entry = knowledge_service.get_entry(entry_id)
     if not entry:
