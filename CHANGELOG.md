@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-06-27
+
+### Added
+
+- Attachment file storage: `HEAD/GET/POST /knowledge/entries/{id}/file` for checking, downloading, and uploading original attachment files (e.g., PDFs stored alongside their extracted text)
+- `KnowledgeFileService`: filesystem-backed store for original attachments with configurable size limit
+- Multi-collection routing via `X-Knowledge-Collection` header: the KB SPA uses `knowledge_entries` (default), AgentForge Notes uses `kb_note_entries`
+- `knowledge_registry` module: collection-scoped service caching, FastAPI dependency injection, and `ensure_all_collections()` startup hook
+- `force_unique` flag on `CreateEntryRequest`. Bypasses content-hash dedup so the same text can be stored under multiple parents
+- Auto-relink: creating a duplicate entry with a `parent_id` reattaches the existing entry under the new parent instead of returning 409
+- `metadata` field on `UpdateEntryRequest` (was already on create and now on updatable)
+- Config keys: `knowledge.notes_collection_name`, `knowledge.files_dir`, `knowledge.max_attachment_bytes`
+- `@kb` and `@notes` custom agent examples in `custom_agents.example.yaml`
+- `markdown/custom-agents/notes.md` system prompt for the Notes agent
+- Notes-aware WebSocket session routing: `source=notes` sessions auto-scope `kb_search` to the notes collection
+- `extracted_bytes` in `/knowledge/extract` response metadata
+- pdftotext page-marker formatting (`--- Page N ---`) and scaled timeouts for large PDFs
+
+### Changed
+
+- Knowledge API routes use FastAPI `Depends()` injection instead of a module-level singleton. Each request resolves the correct collection-scoped service
+- `KnowledgeVectorService` accepts an optional `collection_name` parameter (defaults to `settings.knowledge.collection_name`)
+- PDF extraction prefers `pdftotext` for large files (>5 MiB) and `pdfplumber` for smaller ones (was pdfplumber-first with pdftotext fallback)
+- `delete_entry` also removes stored attachment files for the entry (*optionally)
+
 ## [0.9.0] - 2026-06-24
 
 ### Changed

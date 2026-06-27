@@ -576,9 +576,16 @@ class KnowledgeSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="KNOWLEDGE_")
 
     collection_name: str = Field(default=_yaml.get("knowledge", {}).get("collection_name", "knowledge_entries"))
+    notes_collection_name: str = Field(
+        default=_yaml.get("knowledge", {}).get("notes_collection_name", "kb_note_entries")
+    )
     dedup_threshold: float = Field(default=_yaml.get("knowledge", {}).get("dedup_threshold", 0.92))
     composite_template: str = Field(
         default=_yaml.get("knowledge", {}).get("composite_template", "{title}\n{notes}\n{content}")
+    )
+    files_dir: str = Field(default=_yaml.get("knowledge", {}).get("files_dir", "data/knowledge_files"))
+    max_attachment_bytes: int = Field(
+        default=int(_yaml.get("knowledge", {}).get("max_attachment_bytes", 50 * 1024 * 1024))
     )
 
 

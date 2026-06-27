@@ -33,7 +33,7 @@ These projects use AgentForge as their backend and don't run without it:
 - **Agent loop**: think -> act -> observe with tool calling, error recovery, and optional web-search escalation.
 - **Tools**: filesystem, shell, system info, Docker, Git, SSH, archives, network diagnostics, web search/fetch/render, media, code editing, and more.
 - **RAG**: index OpenAPI/SQL schemas, source code, docs, and transcripts into Qdrant. Query with refinement, reranking, and dedup.
-- **Knowledge Database**: personal store for notes, references, documentation, attached documents, cheatsheets, and snippets — one-call ingest, semantic search, tag faceting, and smart updates (re-embeds only when content changes). Dedicated Qdrant collection, same embedding pipeline.
+- **Knowledge Database**: personal store for notes, references, documentation, attached documents, cheatsheets, and snippets. One-call ingest, semantic search, tag faceting, and smart updates (re-embeds only when content changes). Multi-collection routing (`X-Knowledge-Collection` header) separates the KB SPA and AgentForge Notes into independent Qdrant collections. Original attachment files (PDFs, etc.) are stored alongside extracted text and downloadable via the API.
 - **Connectors**: link external accounts as agent tools. Gmail, Drive, BigQuery, and YouTube through one Google OAuth client, plus GitLab and GitHub via personal access tokens. Multi-account, in-process, read-only by default.
 - **Pluggable**: add your own tools via a `register(registry)` entry point. No fork needed.
 - **Pipelines**: typed multi-step runner, parallel fan-out, and discovery.

@@ -16,7 +16,8 @@ from app.routes.knowledge import router as knowledge_router
 
 @pytest.fixture()
 def mock_knowledge_service():
-    with patch("app.routes.knowledge.knowledge_service") as mock:
+    with patch("app.services.knowledge_registry.get_knowledge_service") as get_svc:
+        mock = get_svc.return_value
         yield mock
 
 
@@ -158,6 +159,22 @@ class TestStats:
         assert response.status_code == 200
         assert response.json()["total_entries"] == 100
 
+    def test_collection_header_selects_notes_store(self, client, mock_knowledge_service):
+        mock_knowledge_service.get_stats.return_value = {
+            "total_entries": 3,
+            "by_content_type": {"note": 3},
+            "recent_entries": 1,
+            "tag_count": 0,
+        }
+        with patch("app.services.knowledge_registry.get_knowledge_service") as get_svc:
+            get_svc.return_value = mock_knowledge_service
+            response = client.get(
+                "/knowledge/stats",
+                headers={"X-Knowledge-Collection": "kb_note_entries"},
+            )
+        assert response.status_code == 200
+        get_svc.assert_called_once_with("kb_note_entries")
+
 
 class TestListEntries:
     def test_returns_slim_overview(self, client, mock_knowledge_service):
@@ -247,3 +264,22 @@ class TestCreateWithMetadata:
         call_args = mock_knowledge_service.create_entry.call_args[0][0]
         assert call_args.metadata == {"filename": "doc.pdf"}
         assert call_args.parent_id == "parent-uuid"
+
+
+class TestPdfExtractHelpers:
+    def test_format_pdftotext_pages_splits_form_feeds(self):
+        from app.routes.knowledge import _format_pdftotext_pages
+
+        raw = "Page one\fPage two\fPage three"
+        text, pages = _format_pdftotext_pages(raw)
+        assert pages == 3
+        assert "--- Page 1 ---" in text
+        assert "--- Page 3 ---" in text
+        assert "Page two" in text
+
+    def test_pdftotext_timeout_scales_with_size(self):
+        from app.routes.knowledge import _pdftotext_timeout
+
+        assert _pdftotext_timeout(1 * 1024 * 1024) == 120
+        assert _pdftotext_timeout(62 * 1024 * 1024) == 124
+        assert _pdftotext_timeout(500 * 1024 * 1024) == 600

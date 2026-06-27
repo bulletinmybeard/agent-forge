@@ -8,6 +8,7 @@ import logging
 import math
 import re
 import threading
+import uuid
 from datetime import datetime, timezone
 
 from qdrant_client.models import PointStruct
@@ -23,6 +24,7 @@ from app.services.dedup_service import DedupService
 from app.services.dedup_service import dedup_service as _default_dedup
 from app.services.embedding_service import EmbeddingService
 from app.services.embedding_service import embedding_service as _default_embed
+from app.services.knowledge_file_service import knowledge_file_service
 from app.services.knowledge_vector_service import (
     KnowledgeVectorService,
 )
@@ -49,7 +51,8 @@ class KnowledgeService:
         self._embed = embedding_service or _default_embed
         self._dedup = dedup_service or _default_dedup
 
-    def _build_composite_text(self, title: str, notes: str | None, content: str) -> str:
+    @staticmethod
+    def _build_composite_text(title: str, notes: str | None, content: str) -> str:
         template = settings.knowledge.composite_template
         return template.format(title=title, notes=notes or "", content=content).strip()
 
@@ -60,13 +63,18 @@ class KnowledgeService:
     def create_entry(self, request: CreateEntryRequest) -> dict:
         now = datetime.now(timezone.utc).isoformat()
         content_hash = self._compute_content_hash(request.content)
-        point_id = self._vector.generate_point_id(content_hash)
 
-        existing_hashes = self._vector.get_content_hashes([point_id])
-        if existing_hashes.get(point_id) == content_hash:
-            existing = self._vector.get_by_id(point_id)
-            if existing:
-                return {**self._payload_to_response(point_id, existing["payload"]), "_conflict": True}
+        if request.force_unique:
+            point_id = str(uuid.uuid4())
+        else:
+            point_id = self._vector.generate_point_id(content_hash)
+            existing_hashes = self._vector.get_content_hashes([point_id])
+            if existing_hashes.get(point_id) == content_hash:
+                existing = self._vector.get_by_id(point_id)
+                if existing:
+                    if request.parent_id:
+                        return self._relink_existing_entry(point_id, existing["payload"], request, now)
+                    return {**self._payload_to_response(point_id, existing["payload"]), "_conflict": True}
 
         composite_text = self._build_composite_text(request.title, request.notes, request.content)
         vector = self._embed.embed(composite_text)
@@ -107,6 +115,26 @@ class KnowledgeService:
             ).start()
 
         return self._payload_to_response(point_id, payload)
+
+    def _relink_existing_entry(self, point_id: str, payload: dict, request: CreateEntryRequest, now: str) -> dict:
+        """Re-attach an existing content-addressed entry under a new parent."""
+        merged = dict(payload)
+        merged["parent_id"] = request.parent_id
+        if request.title:
+            merged["title"] = request.title
+        if request.content_type:
+            merged["content_type"] = request.content_type
+        if request.language is not None:
+            merged["language"] = request.language
+        if request.metadata:
+            merged["metadata"] = {**(merged.get("metadata") or {}), **request.metadata}
+        if request.tags:
+            merged["tags"] = list({*(merged.get("tags") or []), *request.tags})
+        merged["updated_at"] = now
+        self._vector.set_payload(point_id, merged)
+        result = self._payload_to_response(point_id, merged)
+        result["_reattached"] = True
+        return result
 
     def process_batch(self, entries: list[CreateEntryRequest]) -> dict:
         indexed = 0
@@ -253,6 +281,7 @@ class KnowledgeService:
         return self._payload_to_response(point_id, payload)
 
     def delete_entry(self, point_id: str) -> None:
+        knowledge_file_service.delete(point_id)
         self._vector.delete_by_parent(point_id)
         self._vector.delete_point(point_id)
 

@@ -43,7 +43,13 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from agentforge.config import set_request_provider_override, set_request_role_override_map, set_request_session_id
 from agentforge.connectors._account import account_slug, label_slug
 from app.models.knowledge import KnowledgeSearchRequest
-from app.services.knowledge_service import knowledge_service
+from app.services.knowledge_registry import (
+    collection_for_session_source,
+    get_knowledge_service,
+    notes_collection,
+    resolve_collection,
+    set_request_knowledge_collection,
+)
 
 from . import protocol
 from .agent_bridge import AgentBridge
@@ -771,7 +777,8 @@ class SearchRuntime:
 
                 req = KnowledgeSearchRequest(query=query, limit=8, parent_id=parent_id or None)
                 try:
-                    data = await asyncio.to_thread(knowledge_service.search, req)
+                    svc = get_knowledge_service(resolve_collection())
+                    data = await asyncio.to_thread(svc.search, req)
                 except Exception as exc:  # noqa: BLE001
                     return f"kb_search failed: {exc}"
 
@@ -4590,6 +4597,11 @@ async def websocket_chat(
             except Exception as exc:
                 logger.debug("Could not read session provider_override: %s", exc)
         set_request_provider_override(_session_provider)
+        # Notes app sessions search kb_note_entries; KB SPA sessions use the default collection.
+        _knowledge_collection = collection_for_session_source(_session_source)
+        if _knowledge_collection is None and (overrides or {}).get("source") == "notes":
+            _knowledge_collection = notes_collection()
+        set_request_knowledge_collection(_knowledge_collection)
         # Carry the session id so a tool dispatched to a worker can prompt the
         # user (e.g., for a sudo password) back through this session's WS.
         set_request_session_id(session_id)
@@ -5734,6 +5746,18 @@ async def _run_scheduler(
                 "reference any jobs, names, or IDs. If asked what is scheduled, "
                 "say there are none. If asked to delete jobs, say there is "
                 "nothing to delete.\n"
+            )
+
+        if (overrides or {}).get("source") == "notes":
+            scheduler_prompt += (
+                "\n\n# AgentForge Notes (macOS client)\n\n"
+                "Commands run on the user's Mac via the host worker when available. "
+                "For desktop reminders, prefer `osascript -e 'display notification "
+                '\\"MESSAGE\\" with title \\"TITLE\\"\'` (built into macOS). '
+                "Use `terminal-notifier` only when you are certain it is installed. "
+                "For a one-shot delay ('in N minutes'), pick a single future "
+                "minute in the cron expression — do NOT use `*/N` unless the user "
+                "asked for a repeating interval.\n"
             )
 
         # --- LLM call -----------------------------------------------------

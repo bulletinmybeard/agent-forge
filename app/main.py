@@ -9,7 +9,7 @@ from app.routes.health import router as health_router
 from app.routes.indexer import router as indexer_router
 from app.routes.knowledge import router as knowledge_router
 from app.routes.search import router as search_router
-from app.services.knowledge_vector_service import knowledge_vector_service
+from app.services.knowledge_registry import ensure_all_collections
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
@@ -54,9 +54,9 @@ async def lifespan(app: FastAPI):
         logger.warning("Could not ensure KB collection on startup: %s", e)
 
     try:
-        knowledge_vector_service.ensure_collection()
+        ensure_all_collections()
     except Exception as e:
-        logger.warning("Could not ensure knowledge collection on startup: %s", e)
+        logger.warning("Could not ensure knowledge collections on startup: %s", e)
 
     # Start the Slack bot if enabled
     if settings.slack.enabled:

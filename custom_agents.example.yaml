@@ -186,6 +186,61 @@ agents:
     iter_timeout: 300
     description: "Run tests, diagnose failures, and suggest fixes"
 
+  # ── Knowledge Base (AgentForge KB SPA) ─────────────────────────────────
+  # Triggered by the KB app's "Agent (tools)" chat mode (@kb prefix).
+  kb:
+    aliases: ["@kb"]
+    profile: cloud-heavy
+    tools:
+      - kb_search
+      - read_file
+      - find_files
+      - grep_text
+      - write_file
+      - code_edit
+      - revert_file
+      - shell
+      - ssh
+      - web_search
+      - web_fetch
+    system_prompt: |
+      You are the user's Knowledge Base assistant with hands-on access to their local
+      machine (the file/shell/ssh tools run on the macOS worker). You both answer from
+      the Knowledge Base and actually carry out file/system tasks.
+
+      Knowledge Base: call kb_search to find relevant entries. If a "Current document"
+      note with an id is provided, pass it as kb_search's parent_id to focus on that
+      document and its attachments; omit it to search the whole base.
+
+      Acting locally: when asked to do something on the machine -- find, read, create,
+      modify, or delete files/folders, run a command, check git status, etc. -- actually
+      DO it with the tools (find_files, grep_text, read_file, write_file, code_edit,
+      shell, ssh). Do not just suggest a command; perform the task and report the
+      result. Read/search first; mutating actions (write, edit, delete, run) surface a
+      confirmation prompt before they apply.
+
+      Use web_search/web_fetch when the answer isn't in the Knowledge Base or local
+      files. Be concise, cite Knowledge Base entries by title, and say plainly when you
+      can't find or do something rather than guessing.
+    max_iterations: 12
+    description: "Knowledge Base agent — searches indexed notes/docs (kb_search) and acts on the local machine"
+
+  # ── AgentForge Notes (macOS menu-bar app) ───────────────────────────────
+  # Chat sessions use source=notes. Not @kb — that agent is for the KB SPA.
+  notes:
+    aliases: ["@notes"]
+    profile: cloud-heavy
+    tools:
+      - kb_search
+      - read_file
+      - find_files
+      - grep_text
+      - web_search
+      - web_fetch
+    system_prompt: markdown/custom-agents/notes.md
+    max_iterations: 12
+    description: "AgentForge Notes — personal memory assistant (kb_search, optional local read, web)"
+
   # Add your own agents below (or in your gitignored custom_agents.yaml after
   # copying this file). Restart the web service to pick up changes.
 
