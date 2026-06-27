@@ -82,7 +82,18 @@ See [the chunking guide](../chunking/README.md) for the mappers, the chunk forma
 ## Knowledge Database
 
 Personal knowledge entries (notes, references, documentation, attached documents, cheatsheets, and code snippets).
-Stored in a dedicated Qdrant collection (`knowledge_entries`), separate from the RAG collection.
+Stored in dedicated Qdrant collections, separate from the RAG collection.
+
+### Multi-collection routing
+
+Two collections are maintained by default:
+
+| Collection             | Config key                           | Default              | Used by              |
+| ---------------------- | ------------------------------------ | -------------------- | -------------------- |
+| Knowledge Base (SPA)   | `knowledge.collection_name`          | `knowledge_entries`  | KB SPA (default)     |
+| AgentForge Notes       | `knowledge.notes_collection_name`    | `kb_note_entries`    | Notes macOS app      |
+
+Clients select a collection by sending the `X-Knowledge-Collection` header with the collection name. When omitted, the default collection (`knowledge_entries`) is used. WebSocket sessions with `source=notes` auto-scope `kb_search` to the notes collection.
 
 ### Content types
 
@@ -121,11 +132,14 @@ Stored in a dedicated Qdrant collection (`knowledge_entries`), separate from the
   "notes": "Safe to run -- only removes unattached volumes", // optional
   "project": "AgentForge",                   // optional, default "Uncategorized"
   "metadata": { "filename": "cleanup.md" },  // optional, free-form object stored on the point
-  "parent_id": "a1b2c3d4-..."                // optional, link this entry as a child of another (attachments)
+  "parent_id": "a1b2c3d4-...",               // optional, link this entry as a child of another (attachments)
+  "force_unique": false                      // optional, default false; when true, skip content-hash dedup (always create a new point)
 }
 ```
 
-`PUT /knowledge/entries/{id}` body (`UpdateEntryRequest`): same fields, all optional.
+When a `POST /knowledge/entries` hits a content-hash duplicate and the request includes a `parent_id`, the existing entry is reattached under the new parent instead of returning `409`. The response includes `"_reattached": true`.
+
+`PUT /knowledge/entries/{id}` body (`UpdateEntryRequest`): same fields (including `metadata`), all optional.
 
 `DELETE /knowledge/entries` body (`BulkDeleteRequest`):
 
@@ -232,7 +246,17 @@ Response (`SearchResponse`):
 }
 ```
 
-### Filter, passages & attachments
+### Attachment files
+
+Original attachment files (e.g., the PDF that was extracted) can be stored alongside the indexed text. Stored under `knowledge.files_dir` (default `data/knowledge_files`), max size set by `knowledge.max_attachment_bytes` (default 200 MB). Deleting an entry also removes its stored file (*optional).
+
+| Method | Path                                  | Purpose                                                                 |
+| ------ | ------------------------------------- | ---------------------------------------------------------------------- |
+| HEAD   | `/knowledge/entries/{id}/file`        | Check whether the original file is stored. `200` if yes, `404` if not. |
+| GET    | `/knowledge/entries/{id}/file`        | Download the original file. `Content-Disposition` carries the filename. |
+| POST   | `/knowledge/entries/{id}/file`        | Upload the original binary for an existing entry. `201`. Merges file metadata into the entry's `metadata` field. |
+
+### Filter, passages & extraction
 
 | Method | Path                                  | Purpose                                                                 |
 | ------ | ------------------------------------- | ---------------------------------------------------------------------- |
@@ -273,7 +297,7 @@ Response: `{ "results": [ ...EntryResponse ], "count": N }`.
 }
 ```
 
-`POST /knowledge/extract` takes a `multipart/form-data` upload (`file`). PDFs go through pdfplumber (falling back to the `pdftotext` CLI); everything else is decoded as UTF-8. Returns the extracted text plus file metadata:
+`POST /knowledge/extract` takes a `multipart/form-data` upload (`file`). Large PDFs (>5 MiB) use `pdftotext` first (faster); smaller PDFs go through pdfplumber with `pdftotext` as fallback. Non-PDF files are decoded as UTF-8. Returns the extracted text plus file metadata:
 
 ```jsonc
 {
@@ -281,9 +305,10 @@ Response: `{ "results": [ ...EntryResponse ], "count": N }`.
   "metadata": {
     "filename": "report.pdf",
     "extension": ".pdf",
-    "size_bytes": 20480,
+    "size_bytes": 20480,          // original upload size
+    "extracted_bytes": 18200,     // UTF-8 size of extracted text
     "mime_type": "application/pdf",
-    "pages": 4               // PDFs only
+    "pages": 4                    // PDFs only
   }
 }
 ```
