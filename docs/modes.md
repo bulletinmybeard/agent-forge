@@ -14,7 +14,7 @@ Files uploaded with a prompt (via `/api/upload/{session_id}`) are injected as co
 | `@qdrant`             | search     | RAG over your indexed data in Qdrant. `#source` tags filter by source. Can appear anywhere.              |
 | `@docs`, `@find`      | search     | Aliases for `@qdrant` (same mode; kept for older prompts and docs).                                      |
 | `@search`             | web_search | Live web search (`web_search`, `web_fetch`, `web_fetch_rendered`).                                       |
-| `@agent`              | agent      | Full tool-calling agent (files, shell, git, Docker, SSH, ...). Iterates until the task is done.          |
+| `@agent`              | agent      | Full tool-calling agent (files, shell, git, Docker, SSH, Apple Reminders on macOS, ...). Iterates until the task is done. |
 | `@sql`                | sql        | Generate and run SQL from natural language. Needs the SQL plugin (see below).                            |
 | `@logs`               | logs       | Log analysis: read logs, run shell/SSH, cross-reference with the web.                                    |
 | `@discover`           | discover   | Multi-phase investigation: scope the system, probe areas concurrently, synthesize, optionally fix.       |
@@ -56,8 +56,11 @@ Custom agents are focused presets defined in `custom_agents.yaml` (copy from `cu
 | `@health`   | infra-health   | Full-stack infrastructure health check                             |
 | `@test`     | test-mode      | Run tests, diagnose failures, and suggest fixes                    |
 | `@api`      | api-test       | API endpoint testing, validation, and exploration                  |
+| `@notes`    | notes          | Personal memory assistant: `kb_search` + Apple Reminders + optional local read/web |
 
 Add private agents such as `@felix` in your gitignored `custom_agents.yaml` after copying `custom_agents.example.yaml`. See [plugin-authoring.md](plugin-authoring.md).
+
+The `@notes` agent targets AgentForge Notes sessions (`source=notes`) and prefers `reminders_*` tools for system Reminders (due dates, lists, completion) while using `kb_search` for indexed note text. Requires a Mac worker when using split dispatch.
 
 The chat UI lists whatever agents are currently configured (it reads `GET /api/agents`), so your set may differ from the defaults above.
 

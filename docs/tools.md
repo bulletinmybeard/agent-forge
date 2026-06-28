@@ -179,6 +179,26 @@ These run in the sidecar (locality `remote`). See [Plugins and availability](#pl
 
 `notify`'s click-to-`-execute` action is gated behind `tools.notify.allow_execute` (default off), so a notification can't run an arbitrary command unless you opt in.
 
+## Apple Reminders (macOS)
+
+Manage macOS/iCloud Reminders from agent modes. Available in `@agent`, `@pipeline`, and custom agents that allowlist the tools (e.g., `@notes`). Requires a Mac with Reminders access. In **split**: dispatch the tools cross-dispatch to the native `local` worker (`agentforge:tools:local`).
+
+| Tool                 | Description                                                             |
+| -------------------- |-------------------------------------------------------------------------|
+| `reminders_status`   | Check Reminders authorization                                           |
+| `reminders_lists`    | List all lists, or open reminders in one list                           |
+| `reminders_show`     | Filtered view: `today`, `tomorrow`, `overdue`, `open`, `all`, or a date |
+| `reminders_add`      | Create a reminder (title, list, due date, notes, priority, repeat)      |
+| `reminders_edit`     | Update title, list, due date, notes, priority, completion               |
+| `reminders_complete` | Mark one or more reminders done (IDs or exact titles)                   |
+| `reminders_delete`   | Delete reminders (IDs or exact titles; asks for confirmation)           |
+
+**Backend:** prefers [`remindctl`](https://github.com/steipete/remindctl) (`brew install steipete/tap/remindctl`) for EventKit APIs, date filters, and richer fields. Falls back to `osascript` when `remindctl` is not on `PATH` (basic CRUD only).
+**Due dates:** pass `tomorrow`, `today`, or `tomorrow 09:00` — the tool resolves relative dates server-side. Past absolute ISO dates are rejected.
+**Delete/complete:** pass reminder IDs from `reminders_show` output, or exact titles (resolved automatically against open reminders).
+**Permissions:** grant the terminal app running the Mac worker access in **System Settings → Privacy & Security → Reminders**. Run `remindctl status` on the Mac to verify.
+**Split deploy:** register the tools on every worker (including Linux remotes) so the agent loop can route calls to the Mac worker. Pin `reminders_*` to role `local` in `tool_routing.local.yaml` if you customize routing. See [local-domains.md](local-domains.md#native-local-worker-optional).
+
 ## Infrastructure
 
 Inspect the stack's own datastores. They reach Qdrant via `QDRANT_HOST`/`QDRANT_PORT` and Redis via `REDIS_URL`.
@@ -243,7 +263,7 @@ Loaded as a plugin (not part of the core set), these back `@sql`. They need the 
 - **Locality.** Most tools run on the host (locality `local`). The web tools (`web_search`, `web_fetch`, `web_fetch_rendered`, `web_screengrab`) run `remote`, in the scraper sidecar. Routing is set in `tool_routing.yaml`.
 - **Confirmation.** Destructive tools pause for approval: `delete_file`, `code_edit`, `revert_file`, `revert_lines`, SQL writes, and the Put.io/Premiumize delete + cancel tools. The chat UI shows a dialog with a "yes to all" option for the rest of a run.
 - **Credentials.** Some tools only register (or only work) once their secret is set: TMDB (`TMDB_API_KEY`), Put.io (`PUTIO_TOKEN`), Premiumize (`PREMIUMIZE_API_KEY`), and the SQL plugin (`databases` in `config.yaml`). The infra tools (`qdrant_admin`, `redis_inspect`) talk to the stack's own Qdrant/Redis, no extra secret.
-- **External binaries.** Some tools shell out and only work if the binary is present: `ffmpeg` (video), ImageMagick (images, icons), `yt-dlp`, `jq`/`yq`, `ncdu`, `tree`, `gh`, `k6`, `ripgrep`. Missing binaries fail that one tool, not the run.
+- **External binaries.** Some tools shell out and only work if the binary is present: `ffmpeg` (video), ImageMagick (images, icons), `yt-dlp`, `jq`/`yq`, `ncdu`, `tree`, `gh`, `k6`, `ripgrep`, `remindctl` (Apple Reminders, macOS), `terminal-notifier` (desktop notifications, macOS). Missing binaries fail that one tool, not the run.
 - **Adding tools.** Third-party packages register their own via a `register(registry)` entry point under the `agentforge.tools` group, or the `AGENTFORGE_TOOL_PLUGINS` env var. See [plugin-authoring.md](plugin-authoring.md).
 
 ## See also
