@@ -51,7 +51,10 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
-      - name: Install ty
+      - name: Install package (production + dev)
+        run: pip install -e ".[dev]"
+
+      - name: Pin ty (match local/CI TY_VERSION)
         run: pip install "ty==${{ env.TY_VERSION }}"
 
       - name: ty check
