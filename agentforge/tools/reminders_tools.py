@@ -215,11 +215,8 @@ def _resolve_reminder_ids(
         if not matches:
             return [], f'Error: Reminder not found by title: "{title}". Call reminders_show first and use the id field.'
         if len(matches) > 1:
-            options = ", ".join(f'{m.get("title")} ({m.get("id", "")[:8]})' for m in matches[:5])
-            return [], (
-                f'Error: Multiple reminders titled "{title}". '
-                f"Pass a specific id instead: {options}"
-            )
+            options = ", ".join(f"{m.get('title')} ({m.get('id', '')[:8]})" for m in matches[:5])
+            return [], (f'Error: Multiple reminders titled "{title}". Pass a specific id instead: {options}')
         resolved.append(str(matches[0]["id"]))
 
     return resolved, None
@@ -231,10 +228,7 @@ def _format_json(data: Any, *, limit: int | None = None) -> str:
         total = len(data)
         if total > limit:
             data = data[:limit]
-            suffix = (
-                f"\n(showing {limit} of {total} items — "
-                "use reminders_find with title_query to search by name)"
-            )
+            suffix = f"\n(showing {limit} of {total} items — use reminders_find with title_query to search by name)"
     return json.dumps(data, indent=2, ensure_ascii=False) + suffix
 
 
@@ -301,9 +295,7 @@ def _require_macos() -> str | None:
 def _install_hint() -> str:
     if _has_remindctl():
         return ""
-    return (
-        " Install remindctl for richer support: brew install steipete/tap/remindctl"
-    )
+    return " Install remindctl for richer support: brew install steipete/tap/remindctl"
 
 
 def _local_today() -> date:
@@ -557,17 +549,14 @@ def _osascript_show(
     elif filter_name in {"open", "all"}:
         status_clause = "whose completed is false" if filter_name == "open" else ""
     else:
-        return (
-            f"Error: filter '{filter_name}' requires remindctl for date-based queries."
-            f"{_install_hint()}"
-        )
+        return f"Error: filter '{filter_name}' requires remindctl for date-based queries.{_install_hint()}"
 
     if status_clause:
         selector = f"(reminders{list_clause} {status_clause})"
     else:
         selector = f"(reminders{list_clause})"
 
-    script = f'''
+    script = f"""
 tell application "Reminders"
     set out to ""
     repeat with R in {selector}
@@ -575,7 +564,7 @@ tell application "Reminders"
     end repeat
     return out
 end tell
-'''
+"""
     raw = _run_osascript(script)
     if raw.startswith("Error:"):
         return raw
@@ -611,10 +600,7 @@ def _osascript_add(
     if notes:
         props.append(f'body:"{_applescript_quote(notes)}"')
     if due_date:
-        return (
-            "Error: due dates require remindctl."
-            f"{_install_hint()}"
-        )
+        return f"Error: due dates require remindctl.{_install_hint()}"
     props_text = ", ".join(props)
     script = f'tell application "Reminders" to make new reminder in {target} with properties {{{props_text}}}'
     raw = _run_osascript(script)
@@ -632,13 +618,14 @@ def _osascript_edit(
     complete: bool = False,
     incomplete: bool = False,
 ) -> str:
-    rid = reminder_id if reminder_id.startswith("x-apple-reminder://") else f"x-apple-reminder://{_normalize_id(reminder_id)}"
+    rid = (
+        reminder_id
+        if reminder_id.startswith("x-apple-reminder://")
+        else f"x-apple-reminder://{_normalize_id(reminder_id)}"
+    )
 
     if list_name:
-        return (
-            "Error: moving reminders between lists requires remindctl."
-            f"{_install_hint()}"
-        )
+        return f"Error: moving reminders between lists requires remindctl.{_install_hint()}"
 
     actions: list[str] = []
     if title:
@@ -776,11 +763,7 @@ def reminders_find(
     if isinstance(reminders, str):
         return reminders
 
-    matches = [
-        r
-        for r in reminders
-        if _match_title_query(str(r.get("title", "")), query)
-    ]
+    matches = [r for r in reminders if _match_title_query(str(r.get("title", "")), query)]
     if not matches:
         scope = f' in list "{list_name}"' if list_name else " across all lists"
         completed = " (including completed)" if include_completed else ""
@@ -811,9 +794,7 @@ def reminders_show(
             include_completed=filter_name == "completed",
             limit=limit or 30,
         )
-    if reject := _reject_browse_limit(
-        limit, title_query=title_query, tool_name="reminders_show", list_name=list_name
-    ):
+    if reject := _reject_browse_limit(limit, title_query=title_query, tool_name="reminders_show", list_name=list_name):
         return reject
     if _has_remindctl():
         args = ["show", filter_name, "--json"]
@@ -854,10 +835,7 @@ def reminders_add(
         return f"Error: priority must be one of: {', '.join(sorted(_PRIORITY_VALUES))}"
     base_repeat = repeat_rule.split()[0] if repeat_rule else ""
     if repeat_rule and base_repeat not in _REPEAT_VALUES and not repeat_rule.startswith("every "):
-        return (
-            "Error: repeat_rule must be daily/weekly/biweekly/monthly/yearly "
-            "or 'every N days/weeks/months/years'."
-        )
+        return "Error: repeat_rule must be daily/weekly/biweekly/monthly/yearly or 'every N days/weeks/months/years'."
     if due_in_minutes and due_date:
         return "Error: pass due_date or due_in_minutes, not both."
     if due_err := _validate_due_date(due_date):
@@ -1009,7 +987,11 @@ def register_reminders_tools(registry: ToolRegistry) -> int:
     backend = _backend() if _is_macos() else "unavailable"
     hint_extra = (
         f" Backend: {backend}."
-        + (" Install remindctl for full feature support: brew install steipete/tap/remindctl." if backend == "osascript" else "")
+        + (
+            " Install remindctl for full feature support: brew install steipete/tap/remindctl."
+            if backend == "osascript"
+            else ""
+        )
         + (" Runs on the Mac local worker in split deploy." if not _is_macos() else "")
     )
 
@@ -1024,8 +1006,7 @@ def register_reminders_tools(registry: ToolRegistry) -> int:
         "For 'in 30 minutes' / 'half an hour' use due_in_minutes=30 — NEVER due_date='15:30'. "
         "When creating calendar due dates pass tomorrow/today — never invent past ISO dates. "
         "Never say you lack reminder or calendar access. "
-        "Changes sync via iCloud. Check reminders_status before mutating data."
-        + hint_extra,
+        "Changes sync via iCloud. Check reminders_status before mutating data." + hint_extra,
     )
 
     tools = [

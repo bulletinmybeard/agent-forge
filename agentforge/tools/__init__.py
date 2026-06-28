@@ -50,9 +50,9 @@ def register_core_tools(registry: ToolRegistry) -> int:
     from .netdiag_tools import register_netdiag_tools
     from .network_tools import register_network_tools
     from .notify import register_notify_tools
-    from .reminders_tools import register_reminders_tools
     from .qdrant_tools import register_qdrant_tools
     from .redis_tools import register_redis_tools
+    from .reminders_tools import register_reminders_tools
     from .shell import register_shell_tools
     from .ssh_tools import register_ssh_tools
     from .system import register_system_tools
