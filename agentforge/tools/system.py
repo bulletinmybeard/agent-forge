@@ -78,7 +78,7 @@ def _is_macos() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def get_system_context() -> dict[str, str]:
+def get_system_context() -> dict[str, str | list[str]]:
     """Return a dict of system environment facts for injecting into prompts.
 
     This is **not** a tool — it's a helper meant to be called at setup time so

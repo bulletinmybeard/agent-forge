@@ -286,7 +286,7 @@ def _diff_csv(path_a: Path, path_b: Path) -> str:
             delimiter = "\t" if path.suffix.lower() == ".tsv" else ","
 
         reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
-        headers = reader.fieldnames or []
+        headers = list(reader.fieldnames or [])
         rows = list(reader)
         return headers, rows
 
@@ -537,13 +537,7 @@ def _diff_yaml(path_a: Path, path_b: Path) -> str:
 
 def _diff_toml(path_a: Path, path_b: Path) -> str:
     """Semantic TOML diff via deepdiff."""
-    try:
-        import tomllib
-    except ImportError:
-        try:
-            import tomli as tomllib  # type: ignore[no-redef]
-        except ImportError:
-            return "(tomllib/tomli not available — falling back to text diff)"
+    import tomllib
 
     try:
         with open(path_a, "rb") as f:

@@ -14,9 +14,12 @@ import asyncio
 import inspect
 import typing
 from collections.abc import Callable
+from types import FunctionType
 from typing import Any
 
 from chalkbox.logging.bridge import get_logger
+
+from agentforge.typing_utils import ToolCallable, callable_name
 
 logger = get_logger(__name__)
 
@@ -27,7 +30,7 @@ logger = get_logger(__name__)
 
 # Module-level list that collects functions decorated with @tool.
 # A ToolRegistry can sweep this up with ``registry.register_decorated()``.
-_decorated_tools: list[Callable] = []
+_decorated_tools: list[ToolCallable] = []
 
 
 def tool(
@@ -76,21 +79,23 @@ def tool(
         registry.register_decorated()   # picks up all @tool functions
     """
 
-    def _wrap(fn: Callable) -> Callable:
+    def _wrap(fn: ToolCallable) -> ToolCallable:
         _decorated_tools.append(fn)
-        fn._is_tool = True  # type: ignore[attr-defined]
-        fn._locality = locality  # type: ignore[attr-defined]
+        setattr(fn, "_is_tool", True)
+        setattr(fn, "_locality", locality)
         if hint:
-            fn._model_hint = hint  # type: ignore[attr-defined]
+            setattr(fn, "_model_hint", hint)
         if confirm:
-            fn._confirm_template = confirm  # type: ignore[attr-defined]
+            setattr(fn, "_confirm_template", confirm)
         if confirm_condition:
-            fn._confirm_condition = confirm_condition  # type: ignore[attr-defined]
+            setattr(fn, "_confirm_condition", confirm_condition)
         return fn
 
     # Support both @tool and @tool(hint="...", confirm="...")
     if func is not None:
         # Called as bare @tool (no parentheses)
+        if not isinstance(func, FunctionType):
+            raise TypeError("@tool can only decorate plain functions")
         return _wrap(func)
     # Called as @tool(hint="...", confirm="...") — return the inner wrapper
     return _wrap
@@ -134,11 +139,11 @@ class ToolRegistry:
     }
 
     def __init__(self) -> None:
-        self._tools: dict[str, Callable] = {}
+        self._tools: dict[str, ToolCallable] = {}
         self._tool_locality: dict[str, str] = {}  # tool_name → "local" | "remote"
         self._category_hints: dict[str, str] = {}  # category → hint text
         self._tool_categories: dict[str, str] = {}  # tool_name → category
-        self._on_tool_call: Callable[[str, dict], None] | None = None  # per-call callback
+        self._on_tool_call: Callable[..., None] | None = None  # per-call callback
         self._on_tools_complete: Callable[[], None] | None = None  # batch-flush callback
         self._on_confirm: Callable[[str], bool] | None = None  # confirm callback
         self._on_file_diff: Callable[[dict], None] | None = None  # preview-diff callback
@@ -148,7 +153,7 @@ class ToolRegistry:
         # worker whose registry never had them. See agent._dispatch_tool.
         self._in_process_tools: set[str] = set()
 
-    def set_tool_call_handler(self, handler: Callable[[str, dict], None]) -> None:
+    def set_tool_call_handler(self, handler: Callable[..., None]) -> None:
         """Set an optional callback invoked before each tool execution.
 
         The handler receives ``(tool_name, arguments)`` and is intended for
@@ -224,7 +229,7 @@ class ToolRegistry:
 
     def register(
         self,
-        func: Callable,
+        func: ToolCallable,
         *,
         name: str | None = None,
         category: str | None = None,
@@ -237,7 +242,7 @@ class ToolRegistry:
         the role map. Use for runtime closures bound to live state (connector
         tools holding a connection's credentials).
         """
-        tool_name = name or func.__name__
+        tool_name = name or callable_name(func)
         self._tools[tool_name] = func
         self._tool_locality[tool_name] = getattr(func, "_locality", "local")
         if category:
@@ -268,7 +273,7 @@ class ToolRegistry:
         """
         count = 0
         for func in _decorated_tools:
-            name = func.__name__
+            name = callable_name(func)
             if name not in self._tools:
                 self.register(func)
                 count += 1
@@ -379,7 +384,7 @@ class ToolRegistry:
             }
         or None if the guard doesn't apply (tool has no command to classify).
         """
-        if func.__name__ not in ("shell", "ssh") or not args.get("command"):
+        if callable_name(func) not in ("shell", "ssh") or not args.get("command"):
             return None
 
         try:
@@ -519,7 +524,7 @@ class ToolRegistry:
                 except Exception:
                     return None  # fail-open
                 if not confirmed:
-                    logger.info("Tool '%s' cancelled by user (condition)", func.__name__)
+                    logger.info("Tool '%s' cancelled by user (condition)", callable_name(func))
                     return "Operation cancelled by user."
 
         # --- Path 1b: static @tool(confirm=...) template ---
@@ -534,7 +539,7 @@ class ToolRegistry:
             except Exception:
                 return None  # fail-open
             if not confirmed:
-                logger.info("Tool '%s' cancelled by user", func.__name__)
+                logger.info("Tool '%s' cancelled by user", callable_name(func))
                 return "Operation cancelled by user."
 
         # --- Path 2: dynamic CommandGuard for the shell tool ---

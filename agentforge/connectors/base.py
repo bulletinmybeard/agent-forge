@@ -28,8 +28,21 @@ class ConnectorPlugin(Protocol):
         """Return ``{"client_id": ..., "client_secret": ...}`` from env vars or config."""
         ...
 
-    def create_tools(self, connection_id: str, token_accessor: Callable[[], str]) -> list[Callable[..., Any]]:
+    def create_tools(
+        self,
+        connection_id: str,
+        token_accessor: Callable[[], str],
+        stored_tokens: dict[str, Any] | None = None,
+    ) -> list[Callable[..., Any]]:
         """Return tool callables parameterized with this connection's credentials."""
+        ...
+
+    def available_products(self) -> list[dict[str, str]]:
+        """Optional product picker entries for the connect UI."""
+        ...
+
+    def product_display_names(self, stored_tokens: dict[str, Any] | None) -> list[str]:
+        """Human-readable product labels for this connection."""
         ...
 
     def system_prompt(self, account_email: str) -> str:

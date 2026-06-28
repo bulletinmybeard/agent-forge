@@ -97,7 +97,8 @@ def _action_collections() -> str:
             elif isinstance(vec_cfg, dict):
                 first = next(iter(vec_cfg.values()), None)
                 dim = first.size if first and hasattr(first, "size") else "?"
-                dist = first.distance.name if first and hasattr(first, "distance") else "?"
+                dist_obj = getattr(first, "distance", None) if first else None
+                dist = getattr(dist_obj, "name", "?") if dist_obj else "?"
             else:
                 dim = "?"
                 dist = "?"
@@ -135,7 +136,8 @@ def _action_info(collection: str) -> str:
     elif isinstance(vec_cfg, dict):
         first = next(iter(vec_cfg.values()), None)
         dim = first.size if first and hasattr(first, "size") else "?"
-        dist = first.distance.name if first and hasattr(first, "distance") else "?"
+        dist_obj = getattr(first, "distance", None) if first else None
+        dist = getattr(dist_obj, "name", "?") if dist_obj else "?"
     else:
         dim = "?"
         dist = "?"
@@ -475,7 +477,7 @@ def _action_delete(collection: str, filter_json: str, point_ids: str) -> str:
 
         client.delete(
             collection_name=collection,
-            points_selector=PointIdsList(points=ids),
+            points_selector=PointIdsList(points=[str(pid) for pid in ids]),
         )
 
         try:

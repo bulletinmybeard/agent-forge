@@ -66,12 +66,15 @@ def _safe_eval(node: ast.AST, names: dict) -> object:
             # Guard against resource exhaustion (e.g., 9**9**9).
             if isinstance(right, (int, float)) and right > _MAX_EXPONENT:
                 raise ValueError(f"exponent too large (max {_MAX_EXPONENT})")
-        return op(left, right)
+        return op(left, right)  # ty: ignore[no-matching-overload]
     if isinstance(node, ast.UnaryOp):
         op = _UNARY_OPS.get(type(node.op))
         if op is None:
             raise ValueError(f"disallowed operator: {type(node.op).__name__}")
-        return op(_safe_eval(node.operand, names))
+        operand = _safe_eval(node.operand, names)
+        if not isinstance(operand, (int, float)):
+            raise ValueError(f"disallowed unary operand: {operand!r}")
+        return op(operand)
     if isinstance(node, ast.Name):
         if node.id in names:
             return names[node.id]

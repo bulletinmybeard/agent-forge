@@ -54,8 +54,8 @@ jobs:
       - name: Install ty
         run: pip install "ty==${{ env.TY_VERSION }}"
 
-      - name: ty check (phased scope)
-        run: ty check chunking sidecar sandbox tests
+      - name: ty check
+        run: ty check agentforge chunking sidecar sandbox tests
 
   build:
     name: Build & Smoke Test

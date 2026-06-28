@@ -40,7 +40,7 @@ from chalkbox.logging.bridge import get_logger
 from agentforge.tools._file_snapshots import save_snapshot
 from agentforge.tools.routing import dispatch_mode, my_role
 
-from .client import AIClient
+from .client import AIClient, ChatResponse
 from .config import get_config
 from .context import PipelineContext
 from .tools import ToolRegistry
@@ -760,7 +760,10 @@ class AgentLoop:
                             continue  # still running — loop back and check cancel
                     if _model_call_failed:
                         break
-                    response = future.result()  # already done — instant
+                    _raw = future.result()  # already done — instant
+                    if not isinstance(_raw, ChatResponse):
+                        raise TypeError(f"Expected ChatResponse, got {type(_raw).__name__}")
+                    response = _raw
                     break  # success
                 except concurrent.futures.TimeoutError:
                     logger.warning(
@@ -877,7 +880,7 @@ class AgentLoop:
                         "[Agent] Empty response with no tool calls at iteration %d — nudging model to summarise",
                         i,
                     )
-                    ctx._empty_nudge_sent = True  # type: ignore[attr-defined]
+                    ctx._empty_nudge_sent = True
                     ctx.messages.append(
                         {
                             "role": "user",
@@ -921,7 +924,7 @@ class AgentLoop:
                         "(iteration %d) — nudging model to act or retract",
                         i,
                     )
-                    ctx._fabrication_nudge_sent = True  # type: ignore[attr-defined]
+                    ctx._fabrication_nudge_sent = True
                     ctx.messages.append(
                         {
                             "role": "user",

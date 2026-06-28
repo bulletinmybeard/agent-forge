@@ -13,7 +13,7 @@ import time
 from collections.abc import AsyncGenerator, Callable, Generator
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, overload
 
 from chalkbox.logging.bridge import get_logger
 
@@ -277,6 +277,38 @@ class AIClient:
 
     # -- chat (sync) --------------------------------------------------------
 
+    @overload
+    def chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        attachments: list[Attachment] | None = None,
+        stream: Literal[False] = False,
+        tools: list[Callable] | None = None,
+        temperature: float | None = None,
+        deep_think: bool = False,
+        keep_alive: bool | None = None,
+        enable_fallbacks: bool = True,
+        retries_per_profile: int = 0,
+        on_fallback: FallbackHook | None = None,
+    ) -> ChatResponse: ...
+
+    @overload
+    def chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        attachments: list[Attachment] | None = None,
+        stream: Literal[True],
+        tools: list[Callable] | None = None,
+        temperature: float | None = None,
+        deep_think: bool = False,
+        keep_alive: bool | None = None,
+        enable_fallbacks: bool = True,
+        retries_per_profile: int = 0,
+        on_fallback: FallbackHook | None = None,
+    ) -> Generator[dict, None, None]: ...
+
     def chat(
         self,
         messages: list[dict[str, Any]],
@@ -335,6 +367,38 @@ class AIClient:
         )
 
     # -- chat (async) -------------------------------------------------------
+
+    @overload
+    async def achat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        attachments: list[Attachment] | None = None,
+        stream: Literal[False] = False,
+        tools: list[Callable] | None = None,
+        temperature: float | None = None,
+        deep_think: bool = False,
+        keep_alive: bool | None = None,
+        enable_fallbacks: bool = True,
+        retries_per_profile: int = 0,
+        on_fallback: FallbackHook | None = None,
+    ) -> ChatResponse: ...
+
+    @overload
+    async def achat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        attachments: list[Attachment] | None = None,
+        stream: Literal[True],
+        tools: list[Callable] | None = None,
+        temperature: float | None = None,
+        deep_think: bool = False,
+        keep_alive: bool | None = None,
+        enable_fallbacks: bool = True,
+        retries_per_profile: int = 0,
+        on_fallback: FallbackHook | None = None,
+    ) -> AsyncGenerator[dict, None]: ...
 
     async def achat(
         self,

@@ -89,8 +89,8 @@ class Attachment:
     The ``type`` is auto-detected from the file extension but can be overridden.
     """
 
-    # Identity
-    path: str | Path | None = None
+    # Identity (normalized to Path in __post_init__)
+    path: Path | None = None
     name: str = ""
 
     # Inline content (alternative to path)
@@ -124,6 +124,7 @@ class Attachment:
             else:
                 self.type = AttachmentType.UNKNOWN
 
+        assert self.type is not None
         logger.debug("Attachment: name=%s type=%s", self.name, self.type.value)
 
     # -- properties ---------------------------------------------------------
@@ -199,4 +200,5 @@ class Attachment:
 
     def __repr__(self) -> str:
         src = str(self.path) if self.path else "(inline)"
-        return f"<Attachment name={self.name!r} type={self.type.value} src={src}>"
+        kind = self.type.value if self.type is not None else "unknown"
+        return f"<Attachment name={self.name!r} type={kind} src={src}>"

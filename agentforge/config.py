@@ -235,6 +235,38 @@ def get_request_session_id() -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    return bool(value)
+
+
+def _optional_str_list(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return [str(value)]
+
+
+def _coerce_extra_body(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    return {}
+
+
 def _coerce_fallbacks(profile_name: str, value: Any) -> list[str]:
     """Validate the optional ``fallbacks:`` list on a profile."""
     if value is None:
@@ -346,20 +378,20 @@ class AIProfile:
             abstract=bool(merged.get("abstract", False)),
             api_key=api_key,
             headers=headers,
-            top_p=merged.get("top_p"),
-            top_k=merged.get("top_k"),
-            repeat_penalty=merged.get("repeat_penalty"),
-            stop=merged.get("stop"),
-            keep_alive=merged.get("keep_alive"),
+            top_p=_optional_float(merged.get("top_p")),
+            top_k=_optional_int(merged.get("top_k")),
+            repeat_penalty=_optional_float(merged.get("repeat_penalty")),
+            stop=_optional_str_list(merged.get("stop")),
+            keep_alive=_optional_bool(merged.get("keep_alive")),
             prompt_caching=bool(merged.get("prompt_caching", False)),
-            thinking_budget=merged.get("thinking_budget"),
+            thinking_budget=_optional_int(merged.get("thinking_budget")),
             aws_access_key_id=merged.get("aws_access_key_id"),
             aws_secret_access_key=merged.get("aws_secret_access_key"),
             aws_session_token=merged.get("aws_session_token"),
             aws_region=merged.get("aws_region"),
             base_url=merged.get("base_url"),
             fallbacks=_coerce_fallbacks(name, merged.get("fallbacks")),
-            extra_body=dict(merged.get("extra_body") or {}),
+            extra_body=_coerce_extra_body(merged.get("extra_body")),
         )
 
 
@@ -767,7 +799,8 @@ class ConfigManager:
         request_role_map = _request_role_override_map.get()
         if (request_override and request_override != self._provider_override) or request_role_map:
             # Rebuild on the fly under the request's provider + app role overrides.
-            return self._build_profile_for_override(name, request_override or self._provider_override, request_role_map)
+            override = request_override or self._provider_override or "ollama"
+            return self._build_profile_for_override(name, override, request_role_map)
         if name not in self._profiles:
             available = ", ".join(self._profiles)
             raise ValueError(f"Profile '{name}' not found. Available: {available}")

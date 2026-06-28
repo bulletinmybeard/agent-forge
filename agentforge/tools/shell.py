@@ -832,7 +832,7 @@ def shell(command: str, cwd: str = "", timeout: int = 0) -> str:
         )
 
         # Send sudo password if needed, then close stdin
-        if sudo_pw:
+        if sudo_pw and proc.stdin is not None:
             try:
                 proc.stdin.write(f"{sudo_pw}\n")
                 proc.stdin.flush()
@@ -867,8 +867,8 @@ def shell(command: str, cwd: str = "", timeout: int = 0) -> str:
 
             time.sleep(_POLL_INTERVAL)
 
-        output = (proc.stdout.read() or "").strip()
-        stderr_out = (proc.stderr.read() or "").strip()
+        output = ((proc.stdout.read() if proc.stdout is not None else "") or "").strip()
+        stderr_out = ((proc.stderr.read() if proc.stderr is not None else "") or "").strip()
 
         # Strip the sudo password prompt from output if present
         if sudo_pw and output.startswith("[sudo]"):

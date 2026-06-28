@@ -124,15 +124,29 @@ known-first-party = ["agentforge", "app", "web", "sidecar", "sandbox", "plugins"
 # before any agentforge/app import — an ordering isort can't be allowed to touch.
 "sandbox/scripts/*" = ["E402", "I001"]
 
-# Astral ty — Rust-based type checker (pairs with Ruff). CI checks a phased
-# scope first; expand include as diagnostics are cleared.
+# Astral ty — Rust-based type checker (pairs with Ruff). `app/` and `web/`
+# remain excluded until their diagnostics are cleared.
 [tool.ty.environment]
 python-version = "3.12"
 extra-paths = ["sandbox/scripts"]
 
 [tool.ty.src]
 include = ["agentforge", "chunking", "sidecar", "sandbox", "tests"]
-exclude = ["app", "web"]
+exclude = [
+    "app",
+    "web",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "build",
+    "dist",
+    "**/.venv",
+    "**/venv",
+    "**/venv",
+    "**/.tox",
+    "**/.nox",
+    "**/__pycache__",
+]
 
 [tool.ty.rules]
 deprecated = "ignore"

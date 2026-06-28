@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from chalkbox.logging.bridge import get_logger
 from ollama import AsyncClient, Client
 
+from ..typing_utils import callable_name
 from .base import Backend
 
 if TYPE_CHECKING:
@@ -208,7 +209,7 @@ class OllamaBackend(Backend):
         """Convert a Python function to an Ollama tool specification."""
         sig = inspect.signature(func)
         doc = inspect.getdoc(func) or ""
-        description = doc.split("\n")[0] if doc else func.__name__
+        description = doc.split("\n")[0] if doc else callable_name(func)
 
         type_map = {int: "integer", float: "number", str: "string", bool: "boolean", list: "array", dict: "object"}
 
@@ -233,7 +234,7 @@ class OllamaBackend(Backend):
         return {
             "type": "function",
             "function": {
-                "name": func.__name__,
+                "name": callable_name(func),
                 "description": description,
                 "parameters": {"type": "object", "properties": properties, "required": required},
             },

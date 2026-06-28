@@ -148,7 +148,7 @@ class RemoveJsxAttr:
         "instances of `<component>`. AST-aware, handles single-line, "
         "self-closing, and multi-line reflowed JSX equivalently."
     )
-    param_schema = RemoveJsxAttrParams
+    param_schema: type[NamedOpParams] = RemoveJsxAttrParams
 
     def run(
         self,

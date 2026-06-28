@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING, Any
 
 from chalkbox.logging.bridge import get_logger
 
+from ..typing_utils import callable_name
 from .base import Backend
 
 if TYPE_CHECKING:
@@ -645,7 +646,7 @@ class BedrockBackend(Backend):
         """Convert a Python function to a Bedrock Converse ``toolSpec``."""
         sig = inspect.signature(func)
         doc = inspect.getdoc(func) or ""
-        description = doc.split("\n\n")[0] if doc else func.__name__
+        description = doc.split("\n\n")[0] if doc else callable_name(func)
 
         type_map = {
             int: "integer",
@@ -674,7 +675,7 @@ class BedrockBackend(Backend):
 
         return {
             "toolSpec": {
-                "name": func.__name__,
+                "name": callable_name(func),
                 "description": description,
                 "inputSchema": {
                     "json": {
