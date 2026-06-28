@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-28
+
+### Added
+
+- Apple Reminders agent tools (`reminders_status`, `reminders_lists`, `reminders_show`, `reminders_add`, `reminders_edit`, `reminders_complete`, `reminders_delete`) in `agentforge/tools/reminders_tools.py`
+- `remindctl` backend (`brew install steipete/tap/remindctl`) with `osascript` / AppleScript fallback when `remindctl` is absent
+- Split-deploy support: reminders tools register on every worker so remote agents pass `has_tool()` and cross-dispatch to the Mac `local` worker. Execution uses EventKit on Darwin only
+- Server-side due-date normalization (`tomorrow`, `today`, `tomorrow 09:00`) and rejection of past absolute ISO dates
+- Title-to-ID resolution for `reminders_delete` and `reminders_complete` (exact title match against open reminders)
+- Agent prompt rule and per-turn reminder-query suffix in `_run_agent` to steer models toward `reminders_*` tools
+- `tests/test_reminders_tools.py`: registration, remindctl arg building, date validation, title resolution
+- `@notes` custom agent example documents Apple Reminders alongside `kb_search` (`markdown/custom-agents/notes.md`)
+
+### Changed
+
+- `@agent` and `@pipeline` base tool sets include all `reminders_*` tools (macOS execution and omitted from tool specs on non-Darwin workers)
+- `custom_agents.example.yaml` and `markdown/custom-agents/notes.md` expanded with Reminders tool guidance and scheduler/monitor boundaries
+
 ## [0.10.0] - 2026-06-27
 
 ### Added
