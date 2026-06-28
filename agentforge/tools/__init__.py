@@ -52,6 +52,7 @@ def register_core_tools(registry: ToolRegistry) -> int:
     from .notify import register_notify_tools
     from .qdrant_tools import register_qdrant_tools
     from .redis_tools import register_redis_tools
+    from .reminders_tools import register_reminders_tools
     from .shell import register_shell_tools
     from .ssh_tools import register_ssh_tools
     from .system import register_system_tools
@@ -79,6 +80,7 @@ def register_core_tools(registry: ToolRegistry) -> int:
     count += register_audio_tools(registry)
     count += register_icon_generator_tools(registry)
     count += register_notify_tools(registry)
+    count += register_reminders_tools(registry)
     count += register_code_quality_tools(registry)
     count += register_data_tools(registry)
     count += register_testing_tools(registry)

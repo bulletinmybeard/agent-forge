@@ -699,6 +699,15 @@ class SearchRuntime:
                 "notify",  # macOS system notification via terminal-notifier
                 "notify_list",  # list delivered notifications by group
                 "notify_remove",  # dismiss/clear notifications by group
+                # reminders (macOS only / registered on Darwin, otherwise skipped)
+                "reminders_status",
+                "reminders_lists",
+                "reminders_show",
+                "reminders_find",
+                "reminders_add",
+                "reminders_edit",
+                "reminders_complete",
+                "reminders_delete",
             ]
             # Extended — agent/thinker get these on top
             _extended_tools = [
@@ -8043,6 +8052,27 @@ with `write_file`.
 """.strip()
 
 
+_REMINDER_QUERY_RE = re.compile(
+    r"\b(reminders?|to-?dos?|due\s+(?:today|tomorrow|this\s+week)|overdue|my\s+tasks?)\b",
+    re.IGNORECASE,
+)
+
+_REMINDER_QUERY_SUFFIX = (
+    "## Apple Reminders (this turn)\n\n"
+    "The user is asking about Apple Reminders on this Mac. You MUST call "
+    "`reminders_show` (e.g. filter_name='today') or `reminders_lists` in this turn "
+    "before answering. Do NOT claim you lack reminder or calendar access."
+)
+
+
+def _reminder_query_suffix(query: str, tool_subset: list[str] | None) -> str:
+    if not tool_subset or "reminders_show" not in tool_subset:
+        return ""
+    if not _REMINDER_QUERY_RE.search(query):
+        return ""
+    return _REMINDER_QUERY_SUFFIX
+
+
 # ---------------------------------------------------------------------------
 # Agent execution (ported from py-mini-ai-framework for tool-based queries)
 # ---------------------------------------------------------------------------
@@ -8225,6 +8255,9 @@ async def _run_agent(
         system_prompt = rt.agent_system_prompt
         if _system_prompt_suffix:
             system_prompt = system_prompt + "\n\n" + _system_prompt_suffix
+        _rem_suffix = _reminder_query_suffix(query, tool_subset)
+        if _rem_suffix:
+            system_prompt = system_prompt + "\n\n" + _rem_suffix
 
         # Inject skill instructions (full on first turn)
         system_prompt = _inject_skills(system_prompt, overrides, condensed=False)
@@ -8235,6 +8268,8 @@ async def _run_agent(
             _condensed_prompt = rt.agent_system_prompt_condensed
             if _system_prompt_suffix:
                 _condensed_prompt = _condensed_prompt + "\n\n" + _system_prompt_suffix
+            if _rem_suffix:
+                _condensed_prompt = _condensed_prompt + "\n\n" + _rem_suffix
             _condensed_prompt = _inject_skills(_condensed_prompt, overrides, condensed=True)
 
         # --- Agent event callback: streams progress to WS ---

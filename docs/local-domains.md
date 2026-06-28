@@ -117,8 +117,8 @@ Direct (LAN): http://192.168.1.100:8100  (API)
 
 ## Native local worker (optional)
 
-Only needed when `AGENTFORGE_DISPATCH_MODE=split`: tools that need host access (SSH keys, the Docker socket, `gh`) run in a worker on the host instead of in a container.
-With `in_process`, everything runs on the remote box and you can skip this.
+Only needed when `AGENTFORGE_DISPATCH_MODE=split`: tools that need host access (SSH keys, the Docker socket, `gh`, **Apple Reminders**) run in a worker on the host instead of in a container.
+With `in_process`, everything runs on the remote box and you can skip this — but **Apple Reminders still require macOS** (`remindctl` or `osascript`), so split deploy with a Mac `local` worker is the supported path for `reminders_*` tools.
 
 On macOS the worker runs under launchd.
 `scripts/setup-local-worker.sh install` renders `worker/com.agentforge.worker-local-tools.plist.template` into `~/Library/LaunchAgents/`, creates a venv, installs `.[service]`, and bootstraps the agent.

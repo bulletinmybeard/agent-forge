@@ -237,9 +237,17 @@ agents:
       - grep_text
       - web_search
       - web_fetch
+      - reminders_status
+      - reminders_lists
+      - reminders_show
+      - reminders_find
+      - reminders_add
+      - reminders_edit
+      - reminders_complete
+      - reminders_delete
     system_prompt: markdown/custom-agents/notes.md
     max_iterations: 12
-    description: "AgentForge Notes — personal memory assistant (kb_search, optional local read, web)"
+    description: "AgentForge Notes — personal memory assistant (kb_search, Apple Reminders, optional local read, web)"
 
   # Add your own agents below (or in your gitignored custom_agents.yaml after
   # copying this file). Restart the web service to pick up changes.

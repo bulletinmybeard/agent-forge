@@ -95,6 +95,14 @@ rules:
     role: remote
 ```
 
+For **Apple Reminders** in split deploy, route `reminders_*` to the Mac `local` worker (add to your gitignored `tool_routing.local.yaml` if the catch-all `*` > `local` rule is not enough in your overlay):
+```yaml
+rules:
+  - tools: ["reminders_*"]
+
+    role: local
+```
+
 Dispatch modes:
 
 - `in_process`: every tool runs in the current worker. The single-host/dev default. No separate native worker needed.
