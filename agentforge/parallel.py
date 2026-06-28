@@ -297,7 +297,7 @@ class ParallelAgentRunner:
             return ctx
 
         total_start = time.perf_counter()
-        results: list[GroupResult] = [None] * len(groups)  # type: ignore[list-item]
+        results: list[GroupResult | None] = [None] * len(groups)
 
         def _run_group(idx: int, group: TaskGroup) -> GroupResult:
             """Execute a single group's commands sequentially."""
@@ -418,6 +418,8 @@ class ParallelAgentRunner:
         parts: list[str] = []
         all_ok = True
         for gr in results:
+            if gr is None:
+                continue
             status = "✓" if not gr.errors else "✗"
             if gr.errors:
                 all_ok = False

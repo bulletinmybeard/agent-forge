@@ -58,7 +58,7 @@ class TestCreateEntryRequest:
 
     def test_missing_required_fields(self):
         with pytest.raises(ValidationError):
-            CreateEntryRequest(title="Test")
+            CreateEntryRequest(title="Test")  # ty: ignore[missing-argument]
 
 
 class TestUpdateEntryRequest:

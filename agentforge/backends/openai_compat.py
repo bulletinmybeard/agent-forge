@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from chalkbox.logging.bridge import get_logger
 
+from ..typing_utils import callable_name
 from .base import Backend
 
 if TYPE_CHECKING:
@@ -110,7 +111,7 @@ def _func_to_openai_tool(func: Callable) -> dict:
     """
     sig = inspect.signature(func)
     doc = inspect.getdoc(func) or ""
-    description = doc.split("\n")[0] if doc else func.__name__
+    description = doc.split("\n")[0] if doc else callable_name(func)
     try:
         hints = typing.get_type_hints(func)
     except Exception:  # forward-refs can raise — degrade gracefully
@@ -133,7 +134,7 @@ def _func_to_openai_tool(func: Callable) -> dict:
     return {
         "type": "function",
         "function": {
-            "name": func.__name__,
+            "name": callable_name(func),
             "description": description,
             "parameters": {
                 "type": "object",

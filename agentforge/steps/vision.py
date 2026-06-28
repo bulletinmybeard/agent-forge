@@ -68,7 +68,7 @@ class VisionStep(BaseStep):
             if isinstance(item, Attachment):
                 result.append(item)
             else:
-                result.append(Attachment(item))
+                result.append(Attachment(Path(item) if isinstance(item, str) else item))
         return result
 
     def _collect_images(self, ctx: PipelineContext) -> list[Attachment]:

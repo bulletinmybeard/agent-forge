@@ -115,11 +115,12 @@ def _fmt_size(size_bytes: int) -> str:
     """Format bytes to human-readable size string."""
     if size_bytes == 0:
         return "0 B"
+    size: float = float(size_bytes)
     for unit in ("B", "KB", "MB", "GB", "TB"):
-        if size_bytes < 1024:
-            return f"{size_bytes:.1f} {unit}" if unit != "B" else f"{size_bytes} B"
-        size_bytes /= 1024
-    return f"{size_bytes:.1f} PB"
+        if size < 1024:
+            return f"{size:.1f} {unit}" if unit != "B" else f"{size:.0f} B"
+        size /= 1024
+    return f"{size:.1f} PB"
 
 
 def _fmt_putio_file(f: dict) -> dict:
@@ -172,10 +173,12 @@ def _pm_get(path: str, params: dict | None = None) -> dict:
         # HTTPError.url / URLError.filename carry the key-bearing request URL.
         # Scrub it so it can't leak through callers that stringify the error.
         try:
-            if getattr(exc, "url", None):
-                exc.url = _redact_key_in_url(exc.url)  # type: ignore[attr-defined]
-            if getattr(exc, "filename", None):
-                exc.filename = _redact_key_in_url(exc.filename)  # type: ignore[attr-defined]
+            url = getattr(exc, "url", None)
+            if isinstance(url, str):
+                setattr(exc, "url", _redact_key_in_url(url))
+            filename = getattr(exc, "filename", None)
+            if isinstance(filename, str):
+                setattr(exc, "filename", _redact_key_in_url(filename))
         except Exception:  # noqa: BLE001 - never let scrubbing mask the real error
             pass
         raise

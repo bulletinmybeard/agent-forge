@@ -48,6 +48,10 @@ class PipelineContext:
     metadata: dict[str, Any] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
+    # Agent-loop nudge flags (one-shot retries for empty / fabricated answers).
+    _empty_nudge_sent: bool = False
+    _fabrication_nudge_sent: bool = False
+
     # -- convenience helpers ------------------------------------------------
 
     def add_user_message(self, content: str) -> None:

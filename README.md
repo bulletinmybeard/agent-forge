@@ -153,13 +153,16 @@ Full guide: [docs/plugin-authoring.md](docs/plugin-authoring.md).
 ## Development
 
 ```bash
-pip install -e ".[dev]"     # ruff + pytest
+pip install -e .            # production (framework + full service stack)
+pip install -e ".[dev]"     # production + ruff, ty, pytest
+
 ruff check .                # lint
 ruff format --check .       # formatting
+ty check                    # type check (phased scope; see pyproject.toml)
 pytest                      # tests
 ```
 
-CI runs lint, format, and a build + smoke check on every push and pull request (`.github/workflows/ci.yml`).
+CI runs lint, format, type check, and build + smoke on pull requests (`.github/workflows/ci.yml`).
 
 To exercise the framework directly without the Docker/web stack, see the [sandbox harness](sandbox/README.md): a short Python script driving `AIClient` / `ToolRegistry` / the agent loop against your Ollama.
 

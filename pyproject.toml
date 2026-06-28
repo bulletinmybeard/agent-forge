@@ -13,70 +13,47 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.12",
 ]
+# Production-like: framework, chunking CLIs, and the full headless service stack
+# (FastAPI RAG API, web/server workers, tools, connectors). No optional extras.
 dependencies = [
+    "aiohttp>=3.14.0",
+    "apscheduler>=3.10.0,<4",
+    "beautifulsoup4>=4.12.0",
+    "boto3>=1.35.0",
     "chalkbox>=2.3.5",
-    "pydantic>=2.0",
-    "pyyaml>=6.0",
+    "cryptography>=42.0",
+    "curl_cffi>=0.7.0",
+    "deepdiff>=7.0.0",
+    "detect-secrets>=1.5.0",
+    "docker>=7.1.0",
+    "fastapi>=0.115.0",
+    "google-auth>=2.0.0",
     "httpx>=0.27.0",
+    "lxml>=5.0.0",
+    "maxminddb>=2.6.0",
+    "numpy>=1.26.0",
     "ollama>=0.4.0",
+    "pdfplumber>=0.10.0",
+    "playwright>=1.40.0",
+    "playwright-stealth>=2.0.0",
+    "psycopg2-binary>=2.9.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.6.0",
+    "pymupdf>=1.24.0",
+    "pymysql>=1.1.0",
+    "python-multipart>=0.0.32",
+    "pyyaml>=6.0",
+    "qdrant-client>=1.12.0",
+    "redis[hiredis]>=5.0.0",
+    "saq[hiredis]>=0.12.0",
+    "slack-bolt>=1.18.0",
+    "sqlalchemy>=2.0.0",
+    "timezonefinder>=6.5.0",
+    "uvicorn[standard]>=0.49.0",
 ]
 
 [project.optional-dependencies]
-bedrock = ["boto3>=1.35.0"]
-browser = ["playwright>=1.40.0", "playwright-stealth>=2.0.0", "curl_cffi>=0.7.0"]
-pdf = ["pymupdf>=1.24.0", "pdfplumber>=0.10.0"]
-data = ["deepdiff>=7.0.0"]
-web = ["beautifulsoup4>=4.12.0", "lxml>=5.0.0"]
-connectors = ["cryptography>=42.0", "google-auth>=2.0.0"]
-redaction = ["detect-secrets>=1.5.0"]
-docker = ["docker>=7.1.0"]
-# Live database schema extraction for the `agentforge-chunk-db` mapper.
-db = ["sqlalchemy>=2.0.0", "pymysql>=1.1.0", "psycopg2-binary>=2.9.0"]
-# Full headless service: the FastAPI RAG/agent API (app/) + web/server backend
-# (queue, workers, SQLite, botty/canvas/scheduler/monitor). Docker installs this.
-service = [
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.49.0",
-    "qdrant-client>=1.12.0",
-    "numpy>=1.26.0",
-    "pydantic-settings>=2.6.0",
-    "python-multipart>=0.0.32",
-    "sqlalchemy>=2.0.0",
-    "pymysql>=1.1.0",
-    "psycopg2-binary>=2.9.0",
-    "saq[hiredis]>=0.12.0",
-    "redis[hiredis]>=5.0.0",
-    "slack-bolt>=1.18.0",
-    "aiohttp>=3.14.0",
-    "timezonefinder>=6.5.0",
-    "maxminddb>=2.6.0",
-    "apscheduler>=3.10.0,<4",
-    # framework optional deps the service exercises at runtime
-    "beautifulsoup4>=4.12.0",
-    "lxml>=5.0.0",
-    "playwright>=1.40.0",
-    "playwright-stealth>=2.0.0",
-    "curl_cffi>=0.7.0",
-    "deepdiff>=7.0.0",
-    "pymupdf>=1.24.0",
-    "pdfplumber>=0.10.0",
-    "boto3>=1.35.0",
-    "detect-secrets>=1.5.0",
-    "cryptography>=42.0",
-    "google-auth>=2.0.0",
-    "docker>=7.1.0",
-]
-dev = ["ruff>=0.8.0", "pytest>=8.0.0", "pytest-asyncio>=0.24.0"]
-all = [
-    "boto3>=1.35.0",
-    "playwright>=1.40.0", "playwright-stealth>=2.0.0", "curl_cffi>=0.7.0",
-    "pymupdf>=1.24.0", "pdfplumber>=0.10.0",
-    "deepdiff>=7.0.0",
-    "beautifulsoup4>=4.12.0", "lxml>=5.0.0",
-    "cryptography>=42.0", "google-auth>=2.0.0",
-    "detect-secrets>=1.5.0",
-    "docker>=7.1.0",
-]
+dev = ["ruff>=0.8.0", "pytest>=8.0.0", "pytest-asyncio>=0.24.0", "ty>=0.0.55,<0.1"]
 
 [project.scripts]
 agentforge = "agentforge.cli:main"
@@ -109,6 +86,12 @@ packages = ["agentforge", "chunking"]
 # For an editable install of the framework + CLI, run: pip install -e .
 package-mode = false
 
+[tool.poetry.group.dev.dependencies]
+ruff = ">=0.8.0"
+pytest = ">=8.0.0"
+pytest-asyncio = ">=0.24.0"
+ty = ">=0.0.55,<0.1"
+
 [tool.ruff]
 line-length = 120
 target-version = "py312"
@@ -140,3 +123,30 @@ known-first-party = ["agentforge", "app", "web", "sidecar", "sandbox", "plugins"
 # Sandbox scripts MUST `import sandbox` first (it patches sys.path + sets env)
 # before any agentforge/app import — an ordering isort can't be allowed to touch.
 "sandbox/scripts/*" = ["E402", "I001"]
+
+# Astral ty — Rust-based type checker (pairs with Ruff). `app/` and `web/`
+# remain excluded until their diagnostics are cleared.
+[tool.ty.environment]
+python-version = "3.12"
+extra-paths = ["sandbox/scripts"]
+
+[tool.ty.src]
+include = ["agentforge", "chunking", "sidecar", "sandbox", "tests"]
+exclude = [
+    "app",
+    "web",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "build",
+    "dist",
+    "**/.venv",
+    "**/venv",
+    "**/venv",
+    "**/.tox",
+    "**/.nox",
+    "**/__pycache__",
+]
+
+[tool.ty.rules]
+deprecated = "ignore"

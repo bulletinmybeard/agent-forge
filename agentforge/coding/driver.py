@@ -116,7 +116,7 @@ def parse_plan(raw: dict[str, Any]) -> Plan:
         assign = s.get("assign")
         if assign is not None and not isinstance(assign, str):
             raise PlanError(f"step {i} 'assign' must be a string, got {type(assign).__name__}")
-        steps.append(PlanStep(tool=tool, args=args, assign=assign))
+        steps.append(PlanStep(tool=tool, args={str(k): v for k, v in args.items()}, assign=assign))
 
     return Plan(steps=steps)
 

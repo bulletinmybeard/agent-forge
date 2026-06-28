@@ -29,7 +29,7 @@ import shlex
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from chalkbox.logging.bridge import get_logger
 
@@ -344,15 +344,16 @@ def _read_pdf(path: Path, max_chars: int = 50_000) -> str:
     work_path = path
 
     # Try pdfplumber first (best quality, table support)
+    pdfplumber_mod: Any = None
     try:
-        import pdfplumber
+        import pdfplumber as pdfplumber_mod
     except ImportError:
-        pdfplumber = None
+        pass
 
-    if pdfplumber:
+    if pdfplumber_mod:
         try:
             pages: list[str] = []
-            with pdfplumber.open(work_path) as pdf:
+            with pdfplumber_mod.open(work_path) as pdf:
                 for i, page in enumerate(pdf.pages, 1):
                     # Extract tables as structured text
                     tables = page.extract_tables()
@@ -1043,11 +1044,12 @@ def grep_text(path: str, pattern: str, recursive: bool = True, max_results: int 
 
 def _human_size(size_bytes: int) -> str:
     """Convert bytes to a human-readable string."""
+    size: float = float(size_bytes)
     for unit in ("B", "KB", "MB", "GB", "TB"):
-        if abs(size_bytes) < 1024:
-            return f"{size_bytes:.1f} {unit}" if unit != "B" else f"{size_bytes} B"
-        size_bytes /= 1024  # type: ignore[assignment]
-    return f"{size_bytes:.1f} PB"
+        if abs(size) < 1024:
+            return f"{size:.1f} {unit}" if unit != "B" else f"{size:.0f} B"
+        size /= 1024
+    return f"{size:.1f} PB"
 
 
 def _format_timestamp(ts: float) -> str:

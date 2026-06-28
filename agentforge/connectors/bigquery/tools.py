@@ -6,6 +6,7 @@ import json
 import time
 from collections.abc import Callable
 from http.client import IncompleteRead
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
@@ -60,7 +61,7 @@ def create_bigquery_tools(
 
         data = json.dumps(body).encode() if body else None
 
-        def _do_request(hdrs: dict) -> dict:
+        def _do_request(hdrs: dict) -> dict[str, Any]:
             rq = Request(url, data=data, headers=dict(hdrs), method=method)
             for attempt in range(2):
                 with urlopen(rq, timeout=_REQUEST_TIMEOUT) as resp:
@@ -74,6 +75,7 @@ def create_bigquery_tools(
                         rq = Request(url, data=data, headers=dict(hdrs), method=method)
                         continue
                     raise
+            raise RuntimeError("bigquery request exhausted retries without a response")
 
         try:
             return _do_request(headers)
@@ -145,11 +147,12 @@ def create_bigquery_tools(
         }
 
     def _fmt_bytes(n: int) -> str:
+        size: float = float(n)
         for unit in ("B", "KB", "MB", "GB", "TB"):
-            if abs(n) < 1024:
-                return f"{n:.1f} {unit}"
-            n /= 1024
-        return f"{n:.1f} PB"
+            if abs(size) < 1024:
+                return f"{size:.1f} {unit}"
+            size /= 1024
+        return f"{size:.1f} PB"
 
     _project_cache: dict[str, str] = {"id": default_project_id}
 

@@ -462,7 +462,7 @@ def _install_token_patch() -> None:
             pass  # never let tracking break a real chat call
         return resp
 
-    _instrumented_chat._sandbox_token_tracked = True  # type: ignore[attr-defined]
+    setattr(_instrumented_chat, "_sandbox_token_tracked", True)
     AIClient.chat = _instrumented_chat
 
 

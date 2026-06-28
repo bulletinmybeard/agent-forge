@@ -82,7 +82,7 @@ dedup:
 
 # Live database schema extraction for the `agentforge-chunk-db` mapper:
 # introspect a running DB and write sql-schema chunks (the live-DB alternative
-# to a tbls JSON dump). Needs the `db` extra: pip install -e ".[db]"
+# to a tbls JSON dump). SQLAlchemy + drivers ship with the production install.
 # Uncomment and add one entry per database: a SQLAlchemy URL, a source_name
 # slug, and an optional PG schema.
 # databases:

@@ -39,6 +39,8 @@ from urllib.request import Request, urlopen
 
 from chalkbox.logging.bridge import get_logger
 
+from agentforge.typing_utils import PlaywrightWaitUntil, as_playwright_wait
+
 from .registry import tool
 
 if TYPE_CHECKING:
@@ -237,7 +239,7 @@ def _detect_technologies(html: str, script_srcs: list[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-async def _render(url: str, wait_for: str, timeout_ms: int) -> dict:
+async def _render(url: str, wait_for: PlaywrightWaitUntil, timeout_ms: int) -> dict:
     """Launch headless Firefox, navigate to *url*, and extract content."""
     from playwright.async_api import TimeoutError as PWTimeout
     from playwright.async_api import async_playwright
@@ -420,7 +422,7 @@ def _fetch_rendered_via_sidecar(
         return None
 
 
-def _save_sidecar_screenshot(url: str, screenshot_b64: str) -> str | None:
+def _save_sidecar_screenshot(url: str, screenshot_b64: str | None) -> str | None:
     """Decode + persist a sidecar screenshot. Returns the web-accessible path."""
     if not screenshot_b64:
         return None
@@ -451,7 +453,8 @@ def _format_sidecar_response(url: str, sidecar: dict, max_chars: int) -> str:
     if truncated:
         parts.append(f"\n... (truncated at {max_chars:,} chars — use a larger max_chars if needed)")
 
-    ss_path = _save_sidecar_screenshot(url, sidecar.get("screenshot_b64"))
+    screenshot_b64 = sidecar.get("screenshot_b64")
+    ss_path = _save_sidecar_screenshot(url, screenshot_b64 if isinstance(screenshot_b64, str) else None)
     if ss_path:
         parts.append(f"<!-- SCREENSHOT:{ss_path} -->")
     return "\n".join(parts)
@@ -546,21 +549,18 @@ def web_fetch_rendered(
             "  pip install playwright && playwright install firefox"
         )
 
-    valid_states = {"load", "domcontentloaded", "networkidle"}
-    if wait_for not in valid_states:
-        wait_for = "networkidle"
-
+    wait_state = as_playwright_wait(wait_for)
     timeout_ms = max(5, timeout) * 1000
 
     logger.info(
         "[web_render] Rendering %s via local Playwright (wait_for=%s, timeout=%ds)",
         url,
-        wait_for,
+        wait_state,
         timeout,
     )
 
     try:
-        result = asyncio.run(_render(url, wait_for, timeout_ms))
+        result = asyncio.run(_render(url, wait_state, timeout_ms))
     except Exception as exc:
         logger.error("[web_render] Failed to render %s: %s", url, exc)
         return f"Error rendering page: {exc}"
@@ -643,7 +643,7 @@ def web_fetch_rendered(
 # ---------------------------------------------------------------------------
 
 
-async def _screengrab(url: str, wait_for: str, timeout_ms: int, output_path: str | None) -> dict:
+async def _screengrab(url: str, wait_for: PlaywrightWaitUntil, timeout_ms: int, output_path: str | None) -> dict:
     """Launch headless Firefox, navigate to *url*, and capture a screenshot."""
     from playwright.async_api import TimeoutError as PWTimeout
     from playwright.async_api import async_playwright
@@ -760,16 +760,13 @@ def web_screengrab(
     if err:
         return err
 
-    valid_states = {"load", "domcontentloaded", "networkidle"}
-    if wait_for not in valid_states:
-        wait_for = "networkidle"
-
+    wait_state = as_playwright_wait(wait_for)
     timeout_ms = max(5, timeout) * 1000
 
-    logger.info("[web_screengrab] Capturing %s (wait_for=%s, timeout=%ds)", url, wait_for, timeout)
+    logger.info("[web_screengrab] Capturing %s (wait_for=%s, timeout=%ds)", url, wait_state, timeout)
 
     try:
-        result = asyncio.run(_screengrab(url, wait_for, timeout_ms, output_path or None))
+        result = asyncio.run(_screengrab(url, wait_state, timeout_ms, output_path or None))
     except Exception as exc:
         logger.error("[web_screengrab] Failed to capture %s: %s", url, exc)
         return f"Error capturing screenshot: {exc}"

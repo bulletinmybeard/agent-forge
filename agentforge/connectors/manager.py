@@ -369,6 +369,10 @@ class ConnectionManager:
         tool_names = []
         for fn in tools:
             # Scope tool names per connection to avoid collisions
+            from types import FunctionType
+
+            if not isinstance(fn, FunctionType):
+                continue
             scoped_name = f"{fn.__name__}_{connection_id[:8]}"
             fn.__name__ = scoped_name
             fn.__qualname__ = scoped_name

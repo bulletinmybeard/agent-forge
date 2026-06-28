@@ -92,9 +92,9 @@ except Exception as _import_err:
     # installed but fail to import due to dependency conflicts, wrong Python
     # version, or a broken transitive import.  Log the real cause so it's
     # diagnosable instead of silently falling back.
-    scan_line = None  # type: ignore[assignment]
-    default_settings = None  # type: ignore[assignment]
-    transient_settings = None  # type: ignore[assignment]
+    scan_line: Any = None
+    default_settings: Any = None
+    transient_settings: Any = None
     # This runs at module-load time before the logger may be configured, but
     # the message will be visible in any log output that captures WARNING+.
     logger.warning(

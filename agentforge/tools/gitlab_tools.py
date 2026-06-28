@@ -170,13 +170,16 @@ def _encode_project(project: str) -> str:
 
 def _fmt_size(size_bytes: int | None) -> str:
     """Format byte count as human-readable string."""
-    if not size_bytes:
+    if size_bytes is None:
+        return "—"
+    size: float = float(size_bytes)
+    if size == 0:
         return "—"
     for unit in ("B", "KB", "MB", "GB", "TB"):
-        if abs(size_bytes) < 1024:
-            return f"{size_bytes:.1f} {unit}"
-        size_bytes /= 1024  # type: ignore[assignment]
-    return f"{size_bytes:.1f} PB"
+        if abs(size) < 1024:
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} PB"
 
 
 def _error(msg: str) -> str:

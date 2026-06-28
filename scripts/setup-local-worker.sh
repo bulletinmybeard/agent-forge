@@ -64,9 +64,9 @@ REMOTE_HOST="${REMOTE_HOST:?set REMOTE_HOST in deploy.env to the deployed-stack 
 
 # 1) venv with the service deps (saq + web/server modules).
 if [ ! -x "${VENV}/bin/saq" ]; then
-    echo -e "${GREEN}Creating venv + installing .[service] (this takes a minute)...${NC}"
+    echo -e "${GREEN}Creating venv + installing production deps (this takes a minute)...${NC}"
     [ -d "${VENV}" ] || python3 -m venv "${VENV}"
-    "${VENV}/bin/pip" install -q -e "${PROJECT_ROOT}[service]"
+    "${VENV}/bin/pip" install -q -e "${PROJECT_ROOT}"
 fi
 
 # 2) Generate the plist from the template.

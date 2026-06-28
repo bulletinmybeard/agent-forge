@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- CI **Type Check (ty)** job: [Astral `ty`](https://docs.astral.sh/ty/) (Rust-based, pairs with Ruff) on `agentforge`, `chunking`, `sidecar`, `sandbox`, `tests`
+- `[tool.ty]` configuration in `pyproject.toml` with `app/` and `web/` excluded until diagnostics are cleared; `ty` added to the `dev` extra
+
+### Changed
+
+- **Dependencies simplified to production + dev only**: all runtime packages (framework, tools, service stack, SQLAlchemy drivers) live in `[project.dependencies]`; `[project.optional-dependencies]` now has only `dev` (ruff, ty, pytest). Removed granular extras (`bedrock`, `browser`, `service`, `all`, …)
+- CI runs on **pull requests only** (removed `push` to `master`) so merge does not duplicate the same lint/build/typecheck pass and added `concurrency` to cancel stale PR runs
+- Cleared all `ty` diagnostics in `agentforge/` (138 → 0): `chat()` overloads, tool registry typing, Playwright wait literals, config coercion helpers, and assorted narrowings
+
 ## [0.11.0] - 2026-06-28
 
 ### Added

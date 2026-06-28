@@ -120,7 +120,7 @@ def load_plugin_tools(registry: ToolRegistry) -> int:
     try:
         eps = _metadata.entry_points(group=PLUGIN_ENTRY_POINT_GROUP)
     except TypeError:  # Python <3.10 select-by-group signature
-        eps = _metadata.entry_points().get(PLUGIN_ENTRY_POINT_GROUP, [])  # type: ignore[attr-defined]
+        eps = _metadata.entry_points().get(PLUGIN_ENTRY_POINT_GROUP, [])  # ty: ignore[unresolved-attribute]
     for ep in eps:
         try:
             registrars.append(ep.load())
