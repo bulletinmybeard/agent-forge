@@ -11,8 +11,7 @@ The flow is two steps:
 ## Mappers
 
 Each mapper is installed as a console script (and also runnable as `python -m chunking.<name>.cli`).
-The first five share no service dependencies, only `pydantic` + `pyyaml`, which the package already pulls in.
-The `db` mapper is the exception: it needs SQLAlchemy + a driver, installed via the `db` extra (see below).
+All mappers ship with the production install (`pip install -e .`); live DB extraction uses SQLAlchemy + drivers from the same dependency set.
 
 | Command                     | Input                                               | `source_type` | Chunk dirs                           |
 | --------------------------- | --------------------------------------------------- | ------------- | ------------------------------------ |
@@ -57,12 +56,6 @@ agentforge-chunk-document --input ./docs --source-name agentforge-docs
 ### Live database extraction (`agentforge-chunk-db`)
 
 This one connects to a running database, introspects its schema via SQLAlchemy, and writes the same `sql-schema` chunks as the tbls path. It replaces the manual tbls step.
-
-Install the extra and its driver:
-
-```bash
-pip install -e ".[db]"   # sqlalchemy + pymysql + psycopg2
-```
 
 Connections are read from the `databases:` block in `config.yaml` (the same file the service uses, so credentials live in one place). Point at a different file with `AGENTFORGE_CHUNKING_CONFIG`.
 

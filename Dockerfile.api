@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
 
 COPY pyproject.toml README.md ./
 COPY agentforge/ agentforge/
-RUN pip install --no-cache-dir ".[service]"
+RUN pip install --no-cache-dir .
 
 # Application code + non-secret config (real config.yaml / framework-config.yaml
 # and profiles are bind-mounted at runtime by docker-compose).

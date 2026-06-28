@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 from sqlalchemy import create_engine, inspect, text
@@ -77,7 +78,7 @@ def _get_database_name(engine: Engine) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _extract_column(col: dict[str, Any]) -> ColumnInfo:
+def _extract_column(col: Mapping[str, Any]) -> ColumnInfo:
     """Convert an SQLAlchemy column dict to ColumnInfo."""
     col_type = str(col.get("type", ""))
     nullable = col.get("nullable", True)
@@ -115,7 +116,7 @@ def _extract_indexes(inspector: Inspector, table_name: str, schema: str | None) 
             definition = f"{'UNIQUE ' if unique else ''}INDEX on ({', '.join(columns)})"
             indexes.append(
                 IndexInfo(
-                    name=idx.get("name", ""),
+                    name=str(idx.get("name") or ""),
                     definition=definition,
                     table=table_name,
                     columns=columns,
@@ -146,7 +147,7 @@ def _extract_constraints(
             cols = pk["constrained_columns"]
             constraints.append(
                 ConstraintInfo(
-                    name=pk.get("name", "PRIMARY"),
+                    name=str(pk.get("name") or "PRIMARY"),
                     constraint_type="PRIMARY KEY",
                     definition=f"PRIMARY KEY ({', '.join(cols)})",
                     table=table_name,
@@ -162,7 +163,7 @@ def _extract_constraints(
             cols = uc.get("column_names", [])
             constraints.append(
                 ConstraintInfo(
-                    name=uc.get("name", ""),
+                    name=str(uc.get("name") or ""),
                     constraint_type="UNIQUE",
                     definition=f"UNIQUE ({', '.join(cols)})",
                     table=table_name,
@@ -177,7 +178,7 @@ def _extract_constraints(
         for cc in inspector.get_check_constraints(table_name, schema=schema):
             constraints.append(
                 ConstraintInfo(
-                    name=cc.get("name", ""),
+                    name=str(cc.get("name") or ""),
                     constraint_type="CHECK",
                     definition=cc.get("sqltext", ""),
                     table=table_name,
@@ -238,13 +239,15 @@ def _extract_pg_enums(engine: Engine, schema: str | None) -> list[EnumInfo]:
     enums: list[EnumInfo] = []
     try:
         inspector = inspect(engine)
-        for enum in inspector.get_enums(schema=schema or "public"):
-            enums.append(
-                EnumInfo(
-                    name=enum.get("name", ""),
-                    values=enum.get("labels", []),
+        get_enums = getattr(inspector, "get_enums", None)
+        if get_enums is not None:
+            for enum in get_enums(schema=schema or "public"):
+                enums.append(
+                    EnumInfo(
+                        name=str(enum.get("name") or ""),
+                        values=enum.get("labels", []),
+                    )
                 )
-            )
     except Exception as e:
         logger.debug("Could not get enums: %s", e)
     return enums

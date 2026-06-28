@@ -19,7 +19,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 
 COPY pyproject.toml README.md ./
 COPY agentforge/ agentforge/
-RUN pip install --no-cache-dir ".[service]"
+RUN pip install --no-cache-dir .
 
 # Headless Firefox for web_fetch_rendered (Firefox = better TLS fingerprint)
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright

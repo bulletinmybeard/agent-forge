@@ -121,7 +121,7 @@ Only needed when `AGENTFORGE_DISPATCH_MODE=split`: tools that need host access (
 With `in_process`, everything runs on the remote box and you can skip this — but **Apple Reminders still require macOS** (`remindctl` or `osascript`), so split deploy with a Mac `local` worker is the supported path for `reminders_*` tools.
 
 On macOS the worker runs under launchd.
-`scripts/setup-local-worker.sh install` renders `worker/com.agentforge.worker-local-tools.plist.template` into `~/Library/LaunchAgents/`, creates a venv, installs `.[service]`, and bootstraps the agent.
+`scripts/setup-local-worker.sh install` renders `worker/com.agentforge.worker-local-tools.plist.template` into `~/Library/LaunchAgents/`, creates a venv, installs the production package (`pip install -e .`), and bootstraps the agent.
 It reads `REMOTE_HOST` from `deploy.env` to point `REDIS_URL`, `QDRANT_HOST`, `OLLAMA_HOST`, and `AGENTFORGE_WEB_URL` at the remote box, and runs `saq -v web.server.queue.settings_tools.settings`.
 
 ```bash

@@ -34,7 +34,7 @@ import os
 import time
 
 import sandbox_conf as conf
-from agentforge.client import AIClient
+from agentforge.client import AIClient, ChatResponse
 from agentforge.config import get_config
 
 # Lanes that drive tool loops in production (web GUI modes + agent runners).
@@ -144,21 +144,26 @@ def _probe(lane: str, max_tokens: int) -> tuple[str, str, str, str]:
 
     # turn 1 — init with tools
     try:
-        r1 = ai.chat([sys_msg, user_msg], tools=[web_fetch], enable_fallbacks=False)
+        r1_raw = ai.chat([sys_msg, user_msg], tools=[web_fetch], enable_fallbacks=False)
     except Exception as exc:  # noqa: BLE001
         plain_ok, plain_err = _plain_chat_ok(ai)
         if plain_ok:
             return "tools_x", "-", FAIL, f"tools rejected but plain chat ok -> no function calling: {_short(exc)}"
         return "error", "-", FAIL, f"init failed (no tools either) -> model/auth down: {plain_err or _short(exc)}"
 
-    if not getattr(r1, "tool_calls", None):
+    if not isinstance(r1_raw, ChatResponse):
+        return "error", "-", FAIL, "unexpected streaming response on init"
+    r1 = r1_raw
+
+    if not r1.tool_calls:
         return "no_call", "-", WARN, "model answered without a tool call (declined, or truncated -> raise --max-tokens)"
 
     # turn 2 — round-trip (mirror the assistant/tool message shape from agent.py)
+    tool_calls = r1.tool_calls or []
     assistant = {
         "role": "assistant",
         "content": r1.content or "",
-        "tool_calls": [{"function": {"name": tc["name"], "arguments": tc["arguments"]}} for tc in r1.tool_calls],
+        "tool_calls": [{"function": {"name": tc["name"], "arguments": tc["arguments"]}} for tc in tool_calls],
     }
     reasoning = getattr(r1, "reasoning_details", None)
     if reasoning:
@@ -166,9 +171,13 @@ def _probe(lane: str, max_tokens: int) -> tuple[str, str, str, str]:
     tool_msg = {"role": "tool", "content": _TOOL_RESULT}
 
     try:
-        r2 = ai.chat([sys_msg, user_msg, assistant, tool_msg], tools=[web_fetch], enable_fallbacks=False)
+        r2_raw = ai.chat([sys_msg, user_msg, assistant, tool_msg], tools=[web_fetch], enable_fallbacks=False)
     except Exception as exc:  # noqa: BLE001
         return "call", "error", FAIL, f"round-trip rejected the tool result: {_short(exc)}"
+
+    if not isinstance(r2_raw, ChatResponse):
+        return "call", "error", FAIL, "unexpected streaming response on round-trip"
+    r2 = r2_raw
 
     if r2.content and r2.content.strip():
         return "call", "ok", OK, ""

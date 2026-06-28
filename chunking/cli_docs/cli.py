@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from collections.abc import Callable
 
 from chunking.config import settings
 
@@ -39,7 +40,7 @@ logger = logging.getLogger(__name__)
 # Tool-specific subcommand discoverers (man-page mode only)
 # ---------------------------------------------------------------------------
 
-_SUBCOMMAND_DISCOVERERS: dict[str, callable] = {
+_SUBCOMMAND_DISCOVERERS: dict[str, Callable[..., list[str]]] = {
     "git": discover_git_subcommands,
 }
 
