@@ -23,7 +23,8 @@ import logging
 import subprocess
 import time
 import uuid
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -33,10 +34,13 @@ from agentforge.tools.command_guard import get_guard
 if TYPE_CHECKING:
     from .database import ChatDatabase
 
+_enqueue_scheduled_command: Callable[..., Any] | None = None
 try:
-    from web.server.queue.dispatch_compat import enqueue_scheduled_command as _enqueue_scheduled_command
+    from web.server.queue.dispatch_compat import enqueue_scheduled_command as _enqueue_impl
+
+    _enqueue_scheduled_command = _enqueue_impl
 except ImportError:
-    _enqueue_scheduled_command = None
+    pass
 
 logger = logging.getLogger(__name__)
 

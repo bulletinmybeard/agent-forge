@@ -39,10 +39,13 @@ from agentforge.tools.command_policy_store import get_effective_policy
 
 from .registry import tool
 
+OllamaClient: type | None = None
 try:
-    from ollama import Client as OllamaClient
-except ImportError:  # optional; platform-compat rewrite only
-    OllamaClient = None  # type: ignore[misc, assignment]
+    from ollama import Client as _OllamaClientImpl
+
+    OllamaClient = _OllamaClientImpl
+except ImportError:
+    pass
 
 if TYPE_CHECKING:
     from .registry import ToolRegistry
