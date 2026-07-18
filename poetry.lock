@@ -4096,4 +4096,4 @@ dev = ["pytest", "pytest-asyncio", "ruff", "ty"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<4.0"
-content-hash = "8d6c7224aaa52f10e55ce3b70ddbaf0c6e6bed62b58fa5352fcae50f9584a68d"
+content-hash = "c07d96fb36c354952467b5b82f7b9781fe6b6538c5d12d1504c95326610ab3e8"
