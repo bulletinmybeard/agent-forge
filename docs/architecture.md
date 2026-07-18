@@ -102,6 +102,43 @@ These ship with `agentforge-web` but are independent of core chat/RAG. Each has 
 
 Botty honors `analysis_interval` (process every Nth completed run), `max_frequency_seconds` (minimum gap between nudges), and `dismissal_cooldown_seconds` (quiet period after a dismiss). Model roles and the Qdrant `insights` collection are configured under `botty:` but not yet used by the engine.
 
+## SQLite schema (Alembic)
+
+`agentforge-web` SQLite databases are versioned with **[Alembic](https://alembic.sqlalchemy.org/)**.
+
+| Database | File | Migrations | Marker table (legacy stamp) |
+| -------- | ---- | ---------- | --------------------------- |
+| **chat** (+ canvas) | `web.database_path` (e.g. `data/agentforge_chat.db`) | `web/server/database/migrations/` | `chat_sessions` |
+| **prompt_lab** | `data/prompt_lab.db` | `web/server/prompt_lab/database/migrations/` | `prompt_lab_runs` |
+
+Canvas shares the **chat** file; `canvas_items` is revision `002_canvas_items`.
+
+| Concern | How it works |
+| -------- | ------------ |
+| **Docker / deploy** | `Dockerfile.web` `ENTRYPOINT` runs `python -m web.server.database.cli upgrade-all` before uvicorn / SAQ. |
+| **App boot** | `create_tables()` also calls `upgrade` (idempotent safety net). |
+| **Empty DB** | Baseline revisions create all tables. |
+| **Existing pre-Alembic DB** | Marker table present + no `alembic_version` → **stamp** head (no re-CREATE). |
+| **Applied history** | Table `schema_migrations` stores each applied `revision`, **filename**, and `applied_at` (Laravel-style log). Alembic’s `alembic_version` still holds the current head. |
+| **New schema changes** | New files under `…/migrations/versions/` only — never ad-hoc `ALTER` in managers. |
+
+```bash
+# All DBs (also the Docker entrypoint command)
+python -m web.server.database.cli upgrade-all
+
+# Single DB
+python -m web.server.database.cli upgrade --database chat
+python -m web.server.database.cli upgrade --database prompt_lab
+
+# After editing models
+python -m web.server.database.cli revision -m "add foo" --database chat --autogenerate
+
+# Inspect
+python -m web.server.database.cli current --database chat
+python -m web.server.database.cli applied --database chat   # filename log
+python -m web.server.database.cli history --database chat
+```
+
 ## Configuration
 
 Two files at the repo root, both gitignored (copy from the `*.example.yaml`):

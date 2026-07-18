@@ -11,17 +11,45 @@ and to generate Ollama tool specs for the model.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import inspect
 import typing
 from collections.abc import Callable
+from dataclasses import dataclass
 from types import FunctionType
-from typing import Any
+from typing import Any, cast
 
 from chalkbox.logging.bridge import get_logger
 
+from agentforge.config import get_config
+from agentforge.tools.command_guard import get_guard
+from agentforge.tools.command_policy import ToolName, evaluate
+from agentforge.tools.command_policy_store import get_effective_policy
+from agentforge.tools.routing import (
+    _LEGACY_LOCALITY_MAP,
+    check_decorator_drift,
+    get_role_for_tool,
+    my_role,
+)
 from agentforge.typing_utils import ToolCallable, callable_name
 
 logger = get_logger(__name__)
+
+_saq_dispatch_tool: Callable[..., str] | None = None
+try:
+    from web.server.queue.dispatch_compat import saq_dispatch_tool as _saq_dispatch_impl
+
+    _saq_dispatch_tool = _saq_dispatch_impl
+except ImportError:
+    pass
+
+
+@dataclass(frozen=True)
+class _CommandPolicyOutcome:
+    """Result of policy evaluation before CommandGuard."""
+
+    cancel_message: str | None = None
+    skip_guard: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +395,24 @@ class ToolRegistry:
 
     # -- guard & confirmation ------------------------------------------------
 
+    def _evaluate_command_policy(self, name: str, args: dict[str, Any]) -> _CommandPolicyOutcome:
+        """Evaluate YAML command policy for shell/ssh before CommandGuard."""
+        if name not in ("shell", "ssh"):
+            return _CommandPolicyOutcome()
+        command = (args or {}).get("command") or ""
+        if not command.strip():
+            return _CommandPolicyOutcome()
+        tool = cast(ToolName, name)
+        policy = get_effective_policy(tool)
+        verdict = evaluate(tool, command, policy)
+        if verdict.action == "deny":
+            return _CommandPolicyOutcome(
+                cancel_message=(f"Refused: command blocked by policy ({verdict.source}). {verdict.reason}"),
+            )
+        if verdict.action == "allow":
+            return _CommandPolicyOutcome(skip_guard=True)
+        return _CommandPolicyOutcome()
+
     def _classify_guard(self, func: Callable, args: dict[str, Any]) -> dict | None:
         """Run the CommandGuard for the shell + ssh tools (if applicable).
 
@@ -388,8 +434,6 @@ class ToolRegistry:
             return None
 
         try:
-            from .command_guard import get_guard
-
             guard = get_guard()
             verdict = guard.classify(args["command"])
 
@@ -428,8 +472,6 @@ class ToolRegistry:
     def _is_auto_sudo_enabled() -> bool:
         """Check if auto_sudo is enabled in config.yaml → tools.shell.auto_sudo."""
         try:
-            from agentforge.config import get_config
-
             cfg = get_config()
             return cfg._raw.get("tools", {}).get("shell", {}).get("auto_sudo", False)
         except Exception:
@@ -446,8 +488,6 @@ class ToolRegistry:
         Use this wherever you'd otherwise call ``registry.execute("shell", ...)``
         outside of the agent loop — parallel / discovery steps, etc.
         """
-        from .routing import my_role
-
         tool_role = self.get_role(name)
         worker_role = my_role()
 
@@ -466,11 +506,7 @@ class ToolRegistry:
             tool_role,
             worker_role,
         )
-        try:
-            from web.server.queue.dispatch_compat import saq_dispatch_tool
-
-            return str(saq_dispatch_tool(name, args, tool_role))
-        except ImportError:
+        if _saq_dispatch_tool is None:
             logger.error(
                 "[Registry] dispatch_compat unavailable — running '%s' locally on '%s' worker despite tool_role='%s'",
                 name,
@@ -478,6 +514,7 @@ class ToolRegistry:
                 tool_role,
             )
             return str(self.execute(name, args))
+        return str(_saq_dispatch_tool(name, args, tool_role))
 
     def check_confirmation(self, name: str, args: dict[str, Any]) -> tuple[str | None, dict | None]:
         """Public entry point: run guard + confirm for a tool *without* executing it.
@@ -495,7 +532,10 @@ class ToolRegistry:
         if func is None:
             return None, None
         coerced = self._coerce_args(func, args or {})
-        guard_result = self._classify_guard(func, coerced)
+        policy_outcome = self._evaluate_command_policy(name, coerced)
+        if policy_outcome.cancel_message:
+            return policy_outcome.cancel_message, None
+        guard_result = None if policy_outcome.skip_guard else self._classify_guard(func, coerced)
         cancelled = self._check_confirm(func, coerced, guard_result)
         return cancelled, guard_result
 
@@ -609,8 +649,6 @@ class ToolRegistry:
         covered by the catch-all ``"*"`` rule, but the fallback keeps the
         registry usable without a YAML present (e.g., in unit tests).
         """
-        from .routing import _LEGACY_LOCALITY_MAP, get_role_for_tool
-
         try:
             return get_role_for_tool(name)
         except Exception:
@@ -625,8 +663,6 @@ class ToolRegistry:
         Logs a warning per mismatch and returns the drift list. Intended for
         startup observability — not a hard failure.
         """
-        from .routing import check_decorator_drift
-
         return check_decorator_drift(dict(self._tool_locality))
 
     @staticmethod
@@ -686,8 +722,12 @@ class ToolRegistry:
         arg_pairs = ", ".join(f"'{k}': '{v}'" for k, v in args.items())
         logger.debug("%s(%s)", name, arg_pairs)
 
+        policy_outcome = self._evaluate_command_policy(name, args)
+        if policy_outcome.cancel_message:
+            return policy_outcome.cancel_message
+
         # Run guard BEFORE emitting tool_call so the UI can show the badge
-        guard_result = self._classify_guard(func, args)
+        guard_result = None if policy_outcome.skip_guard else self._classify_guard(func, args)
 
         if self._on_tool_call and not skip_events:
             try:
@@ -716,8 +756,6 @@ class ToolRegistry:
                     loop = None
 
                 if loop and loop.is_running():
-                    import concurrent.futures
-
                     with concurrent.futures.ThreadPoolExecutor() as pool:
                         result = pool.submit(asyncio.run, func(**args)).result()
                 else:
@@ -753,8 +791,12 @@ class ToolRegistry:
         arg_pairs = ", ".join(f"'{k}': '{v}'" for k, v in args.items())
         logger.debug("%s(%s)", name, arg_pairs)
 
+        policy_outcome = self._evaluate_command_policy(name, args)
+        if policy_outcome.cancel_message:
+            return policy_outcome.cancel_message
+
         # Run guard BEFORE emitting tool_call so the UI can show the badge
-        guard_result = self._classify_guard(func, args)
+        guard_result = None if policy_outcome.skip_guard else self._classify_guard(func, args)
 
         if self._on_tool_call:
             try:

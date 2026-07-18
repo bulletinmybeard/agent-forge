@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import patch
 
 import agentforge.tools.reminders_tools as rt
@@ -52,6 +52,10 @@ def test_reminders_add_builds_remindctl_args(monkeypatch):
     monkeypatch.setattr(rt, "_is_macos", lambda: True)
     monkeypatch.setattr(rt, "_has_remindctl", lambda: True)
 
+    # Absolute ISO dates must be on/after today (_validate_due_date); use a
+    # far-future day so the test does not expire as the calendar advances.
+    due = (date.today() + timedelta(days=30)).isoformat()
+
     with patch.object(
         rt,
         "_run_remindctl",
@@ -60,7 +64,7 @@ def test_reminders_add_builds_remindctl_args(monkeypatch):
         result = rt.reminders_add(
             "Buy milk",
             list_name="Groceries",
-            due_date="2026-06-30",
+            due_date=due,
             notes="2%",
             priority="high",
         )
@@ -73,7 +77,7 @@ def test_reminders_add_builds_remindctl_args(monkeypatch):
             "--list",
             "Groceries",
             "--due",
-            "2026-06-30",
+            due,
             "--notes",
             "2%",
             "--priority",

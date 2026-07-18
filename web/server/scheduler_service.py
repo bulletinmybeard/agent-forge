@@ -23,13 +23,24 @@ import logging
 import subprocess
 import time
 import uuid
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from agentforge.tools.command_guard import get_guard
+
 if TYPE_CHECKING:
     from .database import ChatDatabase
+
+_enqueue_scheduled_command: Callable[..., Any] | None = None
+try:
+    from web.server.queue.dispatch_compat import enqueue_scheduled_command as _enqueue_impl
+
+    _enqueue_scheduled_command = _enqueue_impl
+except ImportError:
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -180,8 +191,6 @@ class SchedulerService:
         Reuses the existing command_guard infrastructure.
         """
         try:
-            from agentforge.tools.command_guard import get_guard
-
             guard = get_guard()
             verdict = guard.classify(command)
             return {
@@ -190,9 +199,8 @@ class SchedulerService:
                 "source": guard.last_source,
             }
         except Exception as exc:
-            # If the guard is unavailable, fail open with a warning
-            logger.warning("Command guard unavailable: %s — allowing command", exc)
-            return {"safe": True, "verdict": "unknown", "source": "unavailable"}
+            logger.warning("Command guard unavailable: %s — denying command", exc)
+            return {"safe": False, "verdict": "unknown", "source": "unavailable"}
 
     # ------------------------------------------------------------------
     # Job execution (called by APScheduler in a thread)
@@ -218,9 +226,9 @@ class SchedulerService:
         # (not inside Docker). The worker gives access to terminal-notifier,
         # SSH keys, brew, Docker CLI, etc.
         try:
-            from web.server.queue.dispatch_compat import enqueue_scheduled_command
-
-            enqueue_scheduled_command(job_id, run.id, job.command)
+            if _enqueue_scheduled_command is None:
+                raise RuntimeError("dispatch_compat unavailable")
+            _enqueue_scheduled_command(job_id, run.id, job.command)
             logger.info(
                 "Scheduled job %s dispatched to host worker (run %s)",
                 job.label,

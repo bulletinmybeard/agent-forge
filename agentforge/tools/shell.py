@@ -33,7 +33,19 @@ from typing import TYPE_CHECKING
 
 from chalkbox.logging.bridge import get_logger
 
+from agentforge.config import get_config
+from agentforge.tools.command_policy import evaluate
+from agentforge.tools.command_policy_store import get_effective_policy
+
 from .registry import tool
+
+OllamaClient: type | None = None
+try:
+    from ollama import Client as _OllamaClientImpl
+
+    OllamaClient = _OllamaClientImpl
+except ImportError:
+    pass
 
 if TYPE_CHECKING:
     from .registry import ToolRegistry
@@ -121,33 +133,9 @@ def _invalidate_sudo_password(label: str = "localhost") -> None:
 # ---------------------------------------------------------------------------
 
 
-def _get_allowed_commands() -> list[str]:
-    """Return the allowlist from config.yaml → tools.shell.allowed_commands."""
-    try:
-        from agentforge.config import get_config
-
-        cfg = get_config()
-        return cfg._raw.get("tools", {}).get("shell", {}).get("allowed_commands", [])
-    except Exception:
-        return []
-
-
-def _get_blocked_patterns() -> list[str]:
-    """Return blocked command patterns from config.yaml → tools.shell.blocked_patterns."""
-    try:
-        from agentforge.config import get_config
-
-        cfg = get_config()
-        return cfg._raw.get("tools", {}).get("shell", {}).get("blocked_patterns", [])
-    except Exception:
-        return []
-
-
 def _get_default_timeout() -> int:
     """Return default timeout from config.yaml → tools.shell.timeout."""
     try:
-        from agentforge.config import get_config
-
         cfg = get_config()
         return int(cfg._raw.get("tools", {}).get("shell", {}).get("timeout", 600))
     except Exception:
@@ -162,8 +150,6 @@ def _auto_sudo_enabled() -> bool:
     *before* the rewrite never sees. Off by default; opt in explicitly.
     """
     try:
-        from agentforge.config import get_config
-
         cfg = get_config()
         return bool(cfg._raw.get("tools", {}).get("shell", {}).get("auto_sudo", False))
     except Exception:
@@ -443,11 +429,10 @@ def _fix_platform_compat(command: str) -> tuple[str, str]:
     if not _IS_MACOS or not _needs_platform_fix(command):
         return command, ""
 
+    if OllamaClient is None:
+        return command, ""
+
     try:
-        from ollama import Client as OllamaClient
-
-        from agentforge.config import get_config
-
         cfg = get_config()
         fast = cfg.get_profile("fast")
         host = fast.host
@@ -593,36 +578,14 @@ def _detect_agent_tool_misuse(command: str) -> str | None:
 
 
 def _validate_command(command: str) -> str | None:
-    """Validate a command against the allowlist and blocklist.
+    """Validate a command against the effective command policy.
 
     Returns an error string if denied, None if OK.
     """
-
-    # Check blocked patterns first
-    blocked = _get_blocked_patterns()
-    for pattern in blocked:
-        if re.search(pattern, command, re.IGNORECASE):
-            return (
-                f"Error: Command matches a blocked pattern ({pattern}). "
-                f"This command is not permitted by the current configuration."
-            )
-
-    # Check allowlist (empty = allow all)
-    allowed = _get_allowed_commands()
-    if not allowed:
-        return None
-
-    # Extract the base command (first word, ignoring env vars and paths)
-    cmd_parts = command.strip().split()
-    base_cmd = cmd_parts[0] if cmd_parts else ""
-    base_cmd = os.path.basename(base_cmd)
-
-    if base_cmd not in allowed:
-        return (
-            f"Error: Command '{base_cmd}' is not in the allowed commands list. "
-            f"Allowed: {', '.join(allowed)}. "
-            f"Add it to config.yaml → tools.shell.allowed_commands to permit it."
-        )
+    policy = get_effective_policy("shell")
+    verdict = evaluate("shell", command, policy)
+    if verdict.action == "deny":
+        return f"Error: {verdict.reason}"
     return None
 
 

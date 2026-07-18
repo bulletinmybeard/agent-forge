@@ -171,6 +171,32 @@ class SessionInstruction(Base):
         }
 
 
+class CommandPolicyOverride(Base):
+    """Runtime command permission override for shell or ssh tools."""
+
+    __tablename__ = "command_policy_overrides"
+
+    tool = Column(String(16), primary_key=True)  # "shell" | "ssh"
+    mode = Column(String(16), nullable=False, default="confirm")
+    allowed_commands = Column(JSON, nullable=False, default=list)
+    allowed_patterns = Column(JSON, nullable=False, default=list)
+    blocked_patterns = Column(JSON, nullable=False, default=list)
+    updated_at = Column(DateTime, default=_now, onupdate=_now, nullable=False)
+
+    def __repr__(self) -> str:
+        return f"<CommandPolicyOverride(tool='{self.tool}', mode='{self.mode}')>"
+
+    def to_dict(self) -> dict:
+        return {
+            "tool": self.tool,
+            "mode": self.mode,
+            "allowed_commands": self.allowed_commands or [],
+            "allowed_patterns": self.allowed_patterns or [],
+            "blocked_patterns": self.blocked_patterns or [],
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 class CommandNote(Base):
     """A saved bookmark. Tool calls from a run, or an agent answer."""
 

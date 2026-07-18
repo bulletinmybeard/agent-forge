@@ -54,6 +54,7 @@ from .connectors.api import router as connectors_api_router
 from .database import ChatDatabase
 from .model_catalog.api import router as model_catalog_router
 from .monitor_service import init_monitor, shutdown_monitor
+from .permissions.api import router as permissions_api_router
 from .prompt_lab.database.manager import PromptLabDatabase
 from .scheduler_service import init_scheduler, shutdown_scheduler
 from .services.api import router as services_api_router
@@ -341,6 +342,9 @@ app.include_router(model_catalog_router)
 
 # Connectors — external service integrations (Gmail, Drive, etc.)
 app.include_router(connectors_api_router)
+
+# Command permissions: YAML baseline + SQLite runtime overrides
+app.include_router(permissions_api_router)
 
 # Botty — Session Awareness Layer (WebSocket); gated by botty.enabled in config.yaml
 if af_settings.botty.enabled:

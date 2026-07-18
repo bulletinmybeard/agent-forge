@@ -2,12 +2,12 @@
 
 Guides for running and extending AgentForge.
 
-- [architecture.md](architecture.md): how the Docker stack fits together: the services, ports, worker localities, data stores, and request flow. Start here.
-- [api.md](api.md): the HTTP + WebSocket API: search/index endpoints, the Knowledge Database (`/knowledge/*`), the `/ws/chat` agent protocol, memory endpoints, and where the live OpenAPI spec lives.
+- [architecture.md](architecture.md): how the Docker stack fits together: the services, ports, worker localities, data stores, request flow, and **Alembic chat-DB migrations**. Start here.
+- [api.md](api.md): the HTTP + WebSocket API: search/index endpoints, the Knowledge Database (`/knowledge/*`), the `/ws/chat` agent protocol, memory endpoints, command permissions (`/api/permissions/*`), and where the live OpenAPI spec lives.
 - [api-examples.md](api-examples.md): runnable `curl` + `websocat` recipes, from a first prompt to processing the response, plus the in-prompt `@mode` / `#source` / `--flag` DSL.
 - [modes.md](modes.md): the `@mode` prefixes (built-in modes + custom agents + connectors), what each does, and when to use it.
-- [tools.md](tools.md): every built-in agent tool, grouped by category, plus locality, confirmation gates, and how plugins add more.
-- [SECURITY.md](SECURITY.md): the security controls (auth, sidecar/internal tokens, interactive sudo, SSRF and read-only guards).
+- [tools.md](tools.md): every built-in agent tool, grouped by category, plus locality, confirmation gates, shell/SSH command policy, and how plugins add more.
+- [SECURITY.md](SECURITY.md): auth, sidecar/internal tokens, interactive sudo, SSRF and read-only guards, and **shell/SSH command permissions**.
 - [model-catalog.md](model-catalog.md): comparing models across providers to find equivalents (`/api/model-catalog/*`), the per-provider catalog it draws on (`/api/catalog/*`), the `data/catalogs/*.json` files, the `catalog:*` Redis cache, and the `--with-catalog` deploy flow.
 - [chunking/README.md](../chunking/README.md): the chunking mappers (OpenAPI, SQL/tbls, live DB, code, CLI docs, Markdown), chunk layout, the index pipeline, the `/indexer/*` and `/search/*` endpoints, and dedup/drift QA. Served by the `agentforge-api` app on port `8100`.
 - [local-domains.md](local-domains.md): deploying the stack to a Mac/Linux box behind an existing Traefik proxy with custom domains, the `deploy.env` parameters, and the optional native (launchd) tool worker.

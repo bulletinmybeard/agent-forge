@@ -6,16 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-18
+
 ### Added
 
+- **Command permissions** for `shell` / `ssh`: segment-aware allowlist, denylist, and confirm modes (`tools.*.permissions` in config). YAML baseline plus runtime overrides (SQLite), enforced **before** CommandGuard / user confirm. REST API under `/api/permissions/commands/*` (get/put overrides, dry-run validate with optional draft policy). See [docs/SECURITY.md](docs/SECURITY.md)
+- **Alembic migrations** for SQLite: chat DB (sessions, tools, monitor, connectors, **canvas**) and **prompt_lab** DB. Auto-upgrade on web boot; Docker `agentforge-web` entrypoint runs `upgrade-all` before uvicorn/SAQ. Legacy DBs are stamped (no re-CREATE). Applied history in `schema_migrations` (`revision`, **filename**, `applied_at`). CLI: `python -m web.server.database.cli upgrade-all|upgrade|current|applied|history|revision`. See [docs/architecture.md](docs/architecture.md#sqlite-schema-alembic)
 - CI **Type Check (ty)** job: [Astral `ty`](https://docs.astral.sh/ty/) (Rust-based, pairs with Ruff) on `agentforge`, `chunking`, `sidecar`, `sandbox`, `tests`
 - `[tool.ty]` configuration in `pyproject.toml` with `app/` and `web/` excluded until diagnostics are cleared; `ty` added to the `dev` extra
+- `alembic` dependency and console entry point `agentforge-db`
 
 ### Changed
 
 - **Dependencies simplified to production + dev only**: all runtime packages (framework, tools, service stack, SQLAlchemy drivers) live in `[project.dependencies]`; `[project.optional-dependencies]` now has only `dev` (ruff, ty, pytest). Removed granular extras (`bedrock`, `browser`, `service`, `all`, …)
 - CI runs on **pull requests only** (removed `push` to `master`) so merge does not duplicate the same lint/build/typecheck pass and added `concurrency` to cancel stale PR runs
 - Cleared all `ty` diagnostics in `agentforge/` (138 → 0): `chat()` overloads, tool registry typing, Playwright wait literals, config coercion helpers, and assorted narrowings
+- `ChatDatabase.create_tables()` / Canvas / Prompt Lab schema setup use Alembic instead of ad-hoc `create_all` + `ALTER TABLE` blocks
+- Shell `allowed_commands` / `blocked_patterns` still work as legacy keys under `tools.shell` when `permissions.*` lists are empty
+
+### Removed
+
+- Hand-written SQLite column migrations inside `web/server/database/manager.py` (replaced by Alembic revisions)
 
 ## [0.11.0] - 2026-06-28
 

@@ -269,6 +269,16 @@ user_context: "user_context.md"
 tools:
   shell:
     timeout: 600
+    # Command permission policy. YAML baseline for shell command strings.
+    # Runtime overrides (global, all sessions) can be set via the Web UI or
+    # /api/permissions/* and is merged at evaluation time. Checked segment-by-segment
+    # on compound commands (&&, |, ;) before CommandGuard / user confirm.
+    # Modes: confirm (default) | allowlist | denylist — see docs/SECURITY.md.
+    permissions:
+      mode: confirm
+      allowed_commands: []  # first-token allowlist; enforced when mode=allowlist
+      allowed_patterns: []  # regex; every segment must match ≥1 when mode=allowlist
+      blocked_patterns: []  # regex; any segment match → hard deny (all modes)
     # --- Privilege escalation (OFF by default; uncomment to opt in) ---
     # auto_sudo: false
     #   When true, a file-mutating command targeting a root-owned path gets
@@ -279,6 +289,13 @@ tools:
     #   ones — there is no on-disk `sudo_password` anymore (removed). Reuse within
     #   a session (no re-prompt within ~5 min) only happens in in-process dispatch;
     #   the split-dispatch worker re-prompts on every sudo command.
+  ssh:
+    allowed_hosts: []       # host gate only — empty = any host; command policy is separate
+    permissions:
+      mode: confirm
+      allowed_commands: []
+      allowed_patterns: []
+      blocked_patterns: []
   monitor:
     sites: {}                   # per-site extraction selectors (see docs); empty = generic extraction
 
