@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from agentforge.config import get_config
 from agentforge.tools.command_policy import CommandPolicy, load_yaml_policy, merge_policies
-from web.server.database import ChatDatabase
+
+if TYPE_CHECKING:
+    from web.server.database import ChatDatabase
 
 ToolName = Literal["shell", "ssh"]
 
 _db: ChatDatabase | None = None
+_web_unavailable: bool = False
 
 
 def _resolve_db_path() -> Path:
@@ -25,25 +28,48 @@ def _resolve_db_path() -> Path:
     return Path(raw_path).expanduser()
 
 
-def _get_db() -> ChatDatabase:
-    global _db
-    if _db is None:
-        db_path = _resolve_db_path()
-        _db = ChatDatabase(db_path)
-        _db.create_tables()
+def _try_get_db() -> ChatDatabase | None:
+    """Return the chat DB, or ``None`` when the web package is not installed."""
+    global _db, _web_unavailable
+    if _db is not None:
+        return _db
+    if _web_unavailable:
+        return None
+    # Lazy: core wheel does not ship ``web`` (see package hatch targets).
+    try:
+        from web.server.database import ChatDatabase
+    except ImportError:
+        _web_unavailable = True
+        return None
+
+    db_path = _resolve_db_path()
+    _db = ChatDatabase(db_path)
+    _db.create_tables()
     return _db
+
+
+def _require_db() -> ChatDatabase:
+    db = _try_get_db()
+    if db is None:
+        raise RuntimeError(
+            "Runtime command-policy overrides require the AgentForge web stack "
+            "(module 'web' is not installed). YAML tools.*.permissions still apply."
+        )
+    return db
 
 
 def reset_db() -> None:
     """Reset the module-level database singleton (for tests)."""
-    global _db
+    global _db, _web_unavailable
     _db = None
+    _web_unavailable = False
 
 
 def set_db(db: ChatDatabase) -> None:
     """Inject a ChatDatabase instance (for tests)."""
-    global _db
+    global _db, _web_unavailable
     _db = db
+    _web_unavailable = False
 
 
 def _policy_to_dict(policy: CommandPolicy) -> dict:
@@ -65,18 +91,21 @@ def _dict_to_policy(data: dict) -> CommandPolicy:
 
 
 def get_runtime_override(tool: ToolName) -> CommandPolicy | None:
-    data = _get_db().get_command_policy_override(tool)
+    db = _try_get_db()
+    if db is None:
+        return None
+    data = db.get_command_policy_override(tool)
     if data is None:
         return None
     return _dict_to_policy(data)
 
 
 def set_runtime_override(tool: ToolName, policy: CommandPolicy) -> None:
-    _get_db().upsert_command_policy_override(tool, _policy_to_dict(policy))
+    _require_db().upsert_command_policy_override(tool, _policy_to_dict(policy))
 
 
 def clear_runtime_override(tool: ToolName | None = None) -> int:
-    return _get_db().delete_command_policy_override(tool)
+    return _require_db().delete_command_policy_override(tool)
 
 
 def get_effective_policy(tool: ToolName) -> CommandPolicy:
