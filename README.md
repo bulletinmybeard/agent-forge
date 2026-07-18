@@ -1,9 +1,11 @@
 # AgentForge
 
 [![CI](https://github.com/bulletinmybeard/agent-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/bulletinmybeard/agent-forge/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/bulletinmybeard/agent-forge?display_name=tag&sort=semver)](https://github.com/bulletinmybeard/agent-forge/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![ty](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ty/main/assets/badge/v0.json)](https://github.com/astral-sh/ty)
 [![Docker](https://img.shields.io/badge/stack-Docker%20Compose-2496ED?logo=docker&logoColor=white)](./docker-compose.yml)
 
 <!-- prettier-ignore -->
