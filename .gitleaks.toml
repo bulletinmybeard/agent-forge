@@ -1,0 +1,16 @@
+# Gitleaks config — intentional test/docs placeholders are allowlisted.
+# Real secrets must never appear outside these paths.
+# Docs: https://github.com/gitleaks/gitleaks
+title = "AgentForge"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic secrets used only to unit-test the secret redactor / API docs"
+paths = [
+  '''(^|/)tests/test_secret_redactor\.py$''',
+  '''(^|/)docs/api-examples\.md$''',
+  '''(^|/)markdown/skills/security-audit-guidelines\.md$''',
+  '''(^|/)agentforge/secret_redactor\.py$''',
+]
