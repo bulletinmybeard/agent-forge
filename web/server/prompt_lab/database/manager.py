@@ -10,7 +10,9 @@ from sqlalchemy import create_engine, desc, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
-from .models import Base, PromptLabResult, PromptLabRun
+from web.server.database.migrate import upgrade as alembic_upgrade
+
+from .models import PromptLabResult, PromptLabRun
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +45,9 @@ class PromptLabDatabase:
         logger.info("PromptLabDatabase initialised at %s", self.db_path)
 
     def create_tables(self) -> None:
-        Base.metadata.create_all(bind=self.engine)
+        """Apply Prompt Lab Alembic migrations to head."""
+        alembic_upgrade(self.db_path, database="prompt_lab")
+        logger.info("Prompt Lab schema ready (Alembic) at %s", self.db_path)
 
     # ── run operations ────────────────────────────────────────────────
 

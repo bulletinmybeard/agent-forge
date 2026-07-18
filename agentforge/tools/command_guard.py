@@ -32,6 +32,9 @@ from typing import TYPE_CHECKING
 
 from chalkbox.logging.bridge import get_logger
 
+from agentforge.client import AIClient
+from agentforge.config import get_config
+
 if TYPE_CHECKING:
     pass
 
@@ -109,8 +112,6 @@ _DESTRUCTIVE_PATTERNS = re.compile(
 def _get_guard_config() -> dict:
     """Return guard config from config.yaml → tools.shell.guard."""
     try:
-        from agentforge.config import get_config
-
         cfg = get_config()
         return cfg._raw.get("tools", {}).get("shell", {}).get("guard", {})
     except Exception:
@@ -183,9 +184,6 @@ class CommandGuard:
         We use dataclasses.replace to clone with the guard's overrides.
         """
         if self._client is None:
-            from agentforge.client import AIClient
-            from agentforge.config import get_config
-
             shared = get_config().get_profile("fast")
             guard_profile = dataclasses.replace(
                 shared,

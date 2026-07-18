@@ -47,9 +47,11 @@ dependencies = [
     "redis[hiredis]>=5.0.0",
     "saq[hiredis]>=0.12.0",
     "slack-bolt>=1.18.0",
+    "alembic>=1.14.0",
     "sqlalchemy>=2.0.0",
     "timezonefinder>=6.5.0",
     "uvicorn[standard]>=0.49.0",
+    "alembic (>=1.18.5,<2.0.0)",
 ]
 
 [project.optional-dependencies]
@@ -62,6 +64,7 @@ dev = [
 
 [project.scripts]
 agentforge = "agentforge.cli:main"
+agentforge-db = "agentforge.db_cli:main"
 agentforge-chunk-openapi = "chunking.openapi.cli:main"
 agentforge-chunk-sql = "chunking.sql.cli:main"
 agentforge-chunk-code = "chunking.code.cli:main"

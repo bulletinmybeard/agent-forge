@@ -17,7 +17,8 @@ def fake_config(monkeypatch):
     def _get_config():
         return _FakeConfig(holder["raw"])
 
-    monkeypatch.setattr("agentforge.config.get_config", _get_config)
+    # Patch the name bound in command_policy (top-level import).
+    monkeypatch.setattr("agentforge.tools.command_policy.get_config", _get_config)
     return holder
 
 
@@ -100,6 +101,6 @@ def test_config_error_returns_defaults(monkeypatch):
     def _boom():
         raise RuntimeError("no config")
 
-    monkeypatch.setattr("agentforge.config.get_config", _boom)
+    monkeypatch.setattr("agentforge.tools.command_policy.get_config", _boom)
     policy = load_yaml_policy("shell")
     assert policy == CommandPolicy()

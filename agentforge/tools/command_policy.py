@@ -8,6 +8,8 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
+from agentforge.config import get_config
+
 # Share shell parsing semantics with readonly_guard (segment splitting).
 from agentforge.tools.readonly_guard import _split_segments
 
@@ -111,8 +113,6 @@ def evaluate(tool: ToolName, command: str, policy: CommandPolicy) -> PolicyVerdi
 
 def load_yaml_policy(tool: ToolName) -> CommandPolicy:
     try:
-        from agentforge.config import get_config
-
         cfg = get_config()
         tool_cfg = cfg._raw.get("tools", {}).get(tool, {})
         perms = tool_cfg.get("permissions", {})

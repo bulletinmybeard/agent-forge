@@ -18,6 +18,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
+from web.server.database.migrate import upgrade as alembic_upgrade
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,30 +47,9 @@ class CanvasDatabase:
         logger.info("CanvasDatabase initialised at %s", self.db_path)
 
     def create_tables(self) -> None:
-        """Create canvas_items table and index if they don't exist (idempotent)."""
-        with self.engine.connect() as conn:
-            conn.execute(
-                text("""
-                CREATE TABLE IF NOT EXISTS canvas_items (
-                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id   TEXT    NOT NULL,
-                    type         TEXT    NOT NULL,
-                    content      TEXT    NOT NULL,
-                    label        TEXT,
-                    footnote_num INTEGER NOT NULL,
-                    created_at   TEXT    NOT NULL,
-                    UNIQUE(session_id, type, content)
-                )
-            """)
-            )
-            conn.execute(
-                text("""
-                CREATE INDEX IF NOT EXISTS canvas_items_session
-                ON canvas_items(session_id, footnote_num)
-            """)
-            )
-            conn.commit()
-        logger.info("Canvas tables ready")
+        """Apply chat-DB Alembic migrations (includes ``canvas_items``)."""
+        alembic_upgrade(self.db_path, database="chat")
+        logger.info("Canvas schema ready via chat Alembic at %s", self.db_path)
 
     def _row_to_dict(self, row) -> dict:
         return {

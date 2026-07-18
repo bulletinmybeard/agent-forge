@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 
 from chalkbox.logging.bridge import get_logger
 
+from agentforge.config import get_config
 from agentforge.tools.command_policy import evaluate
 from agentforge.tools.command_policy_store import get_effective_policy
 
@@ -82,8 +83,6 @@ def _run(cmd: list[str], timeout: int = 30, merge_stderr: bool = False) -> str:
 def _get_allowed_hosts() -> list[str]:
     """Return the allowed SSH hosts from config."""
     try:
-        from ..config import get_config
-
         cfg = get_config()
         hosts = cfg.get("tools.ssh.allowed_hosts")
         if isinstance(hosts, list):
@@ -96,8 +95,6 @@ def _get_allowed_hosts() -> list[str]:
 def _get_connection_timeout() -> int:
     """Return the SSH connection timeout from config (default 10s)."""
     try:
-        from ..config import get_config
-
         cfg = get_config()
         return int(cfg.get("tools.ssh.connection_timeout", 10))
     except Exception:
@@ -112,8 +109,6 @@ def _strict_host_key_checking() -> str:
     pre-provisioned known_hosts so a MITM on the first connection can't be trusted.
     """
     try:
-        from ..config import get_config
-
         cfg = get_config()
         return str(cfg._raw.get("tools", {}).get("ssh", {}).get("strict_host_key_checking", "accept-new"))
     except Exception:

@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
+from agentforge.config import get_config
 from agentforge.tools.command_policy import CommandPolicy, load_yaml_policy, merge_policies
-
-if TYPE_CHECKING:
-    from web.server.database import ChatDatabase
+from web.server.database import ChatDatabase
 
 ToolName = Literal["shell", "ssh"]
 
@@ -21,8 +20,6 @@ def _resolve_db_path() -> Path:
     if env_path:
         return Path(env_path).expanduser()
 
-    from agentforge.config import get_config
-
     cfg = get_config()
     raw_path = cfg._raw.get("web", {}).get("database_path", "data/agentforge_chat.db")
     return Path(raw_path).expanduser()
@@ -31,8 +28,6 @@ def _resolve_db_path() -> Path:
 def _get_db() -> ChatDatabase:
     global _db
     if _db is None:
-        from web.server.database import ChatDatabase
-
         db_path = _resolve_db_path()
         _db = ChatDatabase(db_path)
         _db.create_tables()

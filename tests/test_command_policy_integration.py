@@ -97,7 +97,7 @@ def test_ssh_policy_denied():
     with (
         patch("agentforge.tools.ssh_tools._validate_host", return_value=None),
         patch(
-            "agentforge.tools.command_policy_store.get_effective_policy",
+            "agentforge.tools.ssh_tools.get_effective_policy",
             return_value=policy,
         ),
     ):

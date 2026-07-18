@@ -33,10 +33,16 @@ from typing import TYPE_CHECKING
 
 from chalkbox.logging.bridge import get_logger
 
+from agentforge.config import get_config
 from agentforge.tools.command_policy import evaluate
 from agentforge.tools.command_policy_store import get_effective_policy
 
 from .registry import tool
+
+try:
+    from ollama import Client as OllamaClient
+except ImportError:  # optional; platform-compat rewrite only
+    OllamaClient = None  # type: ignore[misc, assignment]
 
 if TYPE_CHECKING:
     from .registry import ToolRegistry
@@ -127,8 +133,6 @@ def _invalidate_sudo_password(label: str = "localhost") -> None:
 def _get_default_timeout() -> int:
     """Return default timeout from config.yaml → tools.shell.timeout."""
     try:
-        from agentforge.config import get_config
-
         cfg = get_config()
         return int(cfg._raw.get("tools", {}).get("shell", {}).get("timeout", 600))
     except Exception:
@@ -143,8 +147,6 @@ def _auto_sudo_enabled() -> bool:
     *before* the rewrite never sees. Off by default; opt in explicitly.
     """
     try:
-        from agentforge.config import get_config
-
         cfg = get_config()
         return bool(cfg._raw.get("tools", {}).get("shell", {}).get("auto_sudo", False))
     except Exception:
@@ -424,11 +426,10 @@ def _fix_platform_compat(command: str) -> tuple[str, str]:
     if not _IS_MACOS or not _needs_platform_fix(command):
         return command, ""
 
+    if OllamaClient is None:
+        return command, ""
+
     try:
-        from ollama import Client as OllamaClient
-
-        from agentforge.config import get_config
-
         cfg = get_config()
         fast = cfg.get_profile("fast")
         host = fast.host

@@ -28,8 +28,15 @@ from typing import TYPE_CHECKING
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from agentforge.tools.command_guard import get_guard
+
 if TYPE_CHECKING:
     from .database import ChatDatabase
+
+try:
+    from web.server.queue.dispatch_compat import enqueue_scheduled_command as _enqueue_scheduled_command
+except ImportError:
+    _enqueue_scheduled_command = None
 
 logger = logging.getLogger(__name__)
 
@@ -180,8 +187,6 @@ class SchedulerService:
         Reuses the existing command_guard infrastructure.
         """
         try:
-            from agentforge.tools.command_guard import get_guard
-
             guard = get_guard()
             verdict = guard.classify(command)
             return {
@@ -217,9 +222,9 @@ class SchedulerService:
         # (not inside Docker). The worker gives access to terminal-notifier,
         # SSH keys, brew, Docker CLI, etc.
         try:
-            from web.server.queue.dispatch_compat import enqueue_scheduled_command
-
-            enqueue_scheduled_command(job_id, run.id, job.command)
+            if _enqueue_scheduled_command is None:
+                raise RuntimeError("dispatch_compat unavailable")
+            _enqueue_scheduled_command(job_id, run.id, job.command)
             logger.info(
                 "Scheduled job %s dispatched to host worker (run %s)",
                 job.label,

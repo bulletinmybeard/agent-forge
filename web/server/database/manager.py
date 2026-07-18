@@ -18,6 +18,8 @@ from sqlalchemy import create_engine, event, func
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
+from web.server.database.migrate import upgrade as alembic_upgrade
+
 from .models import (
     Base,
     ChatMessage,
@@ -81,9 +83,7 @@ class ChatDatabase:
         Replaces the old ``create_all`` + ad-hoc ``ALTER TABLE`` path.
         See ``web.server.database.migrate`` and ``agentforge-db`` CLI.
         """
-        from web.server.database.migrate import upgrade
-
-        upgrade(self.db_path)
+        alembic_upgrade(self.db_path)
         logger.info("Database schema ready (Alembic head) at %s", self.db_path)
 
     def drop_tables(self) -> None:
