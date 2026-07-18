@@ -2,7 +2,7 @@
 
 Guides for running and extending AgentForge.
 
-- [architecture.md](architecture.md): how the Docker stack fits together: the services, ports, worker localities, data stores, and request flow. Start here.
+- [architecture.md](architecture.md): how the Docker stack fits together: the services, ports, worker localities, data stores, request flow, and **Alembic chat-DB migrations**. Start here.
 - [api.md](api.md): the HTTP + WebSocket API: search/index endpoints, the Knowledge Database (`/knowledge/*`), the `/ws/chat` agent protocol, memory endpoints, and where the live OpenAPI spec lives.
 - [api-examples.md](api-examples.md): runnable `curl` + `websocat` recipes, from a first prompt to processing the response, plus the in-prompt `@mode` / `#source` / `--flag` DSL.
 - [modes.md](modes.md): the `@mode` prefixes (built-in modes + custom agents + connectors), what each does, and when to use it.

@@ -31,7 +31,7 @@ These projects use AgentForge as their backend and don't run without it:
 
 - **Backends**: Ollama (local + cloud relay), AWS Bedrock, and any OpenAI-compatible API (DeepInfra, OpenRouter, ...). Selected per role via named profiles. Switch the whole stack with one `provider_override`.
 - **Agent loop**: think -> act -> observe with tool calling, error recovery, and optional web-search escalation.
-- **Tools**: filesystem, shell, system info, Docker, Git, SSH, archives, network diagnostics, web search/fetch/render, media, code editing, macOS notifications, **Apple Reminders** (list/create/edit/complete/delete via `remindctl`), and more.
+- **Tools**: filesystem, shell, system info, Docker, Git, SSH, archives, network diagnostics, web search/fetch/render, media, code editing, macOS notifications, **Apple Reminders** (list/create/edit/complete/delete via `remindctl`), and more. Shell/SSH commands can be gated by allowlist, denylist, or confirm policy (config + runtime API).
 - **RAG**: index OpenAPI/SQL schemas, source code, docs, and transcripts into Qdrant. Query with refinement, reranking, and dedup.
 - **Knowledge Database**: personal store for notes, references, documentation, attached documents, cheatsheets, and snippets. One-call ingest, semantic search, tag faceting, and smart updates (re-embeds only when content changes). Multi-collection routing (`X-Knowledge-Collection` header) separates the KB SPA and AgentForge Notes into independent Qdrant collections. Original attachment files (PDFs, etc.) are stored alongside extracted text and downloadable via the API.
 - **Connectors**: link external accounts as agent tools. Gmail, Drive, BigQuery, and YouTube through one Google OAuth client, plus GitLab and GitHub via personal access tokens. Multi-account, in-process, read-only by default.
@@ -42,7 +42,7 @@ These projects use AgentForge as their backend and don't run without it:
 
 Operator guides live in [`docs/`](docs/README.md):
 
-- [Stack architecture](docs/architecture.md): how the containers fit together: services, ports, worker localities, data stores, and request flow. **Start here.**
+- [Stack architecture](docs/architecture.md): how the containers fit together: services, ports, worker localities, data stores, request flow, and **SQLite Alembic migrations**. **Start here.**
 - [HTTP API](docs/api.md): REST + the `/ws/chat` agent WebSocket, memory endpoints, the Knowledge Database (`/knowledge/*`), and the live OpenAPI spec.
 - [Modes](docs/modes.md): the `@mode` prefixes (built-in modes, custom agents, connectors) and when to use each.
 - [Tools](docs/tools.md): every built-in agent tool by category, plus locality and confirmation gates.
@@ -51,7 +51,7 @@ Operator guides live in [`docs/`](docs/README.md):
 - [Connectors](docs/connectors.md): linking external accounts. The unified Google OAuth connector (Gmail, Drive, BigQuery, YouTube) and the GitLab and GitHub token connectors.
 - [Authoring tools and private overlays](docs/plugin-authoring.md): adding private tools, the `AGENTFORGE_TOOL_PLUGINS` seam, and the local overlay files.
 - [Instruction markdown](markdown/README.md): the `skills/` and `custom-agents/` markdown you edit to tune agents without touching Python.
-- [Security](docs/SECURITY.md): the auth model, sidecar/internal tokens, interactive sudo, SSRF and read-only guards.
+- [Security](docs/SECURITY.md): auth, sidecar/internal tokens, interactive sudo, SSRF and read-only guards, and **shell/SSH command permissions**.
 
 ## Run it locally
 
@@ -160,9 +160,14 @@ ruff check .                # lint
 ruff format --check .       # formatting
 ty check                    # type check (phased scope; see pyproject.toml)
 pytest                      # tests
+
+python -m web.server.database.cli upgrade-all
+python -m web.server.database.cli applied --database chat   # revision + filename log
 ```
 
 CI runs lint, format, type check, and build + smoke on pull requests (`.github/workflows/ci.yml`).
+
+Schema changes belong in Alembic revision files under `web/server/database/migrations/` (chat/canvas) or `web/server/prompt_lab/database/migrations/` — see [architecture → SQLite schema](docs/architecture.md#sqlite-schema-alembic).
 
 To exercise the framework directly without the Docker/web stack, see the [sandbox harness](sandbox/README.md): a short Python script driving `AIClient` / `ToolRegistry` / the agent loop against your Ollama.
 
