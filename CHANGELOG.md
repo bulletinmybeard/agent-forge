@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-18
+
 ### Added
 
 - **Command permissions** for `shell` / `ssh`: segment-aware allowlist, denylist, and confirm modes (`tools.*.permissions` in config). YAML baseline plus runtime overrides (SQLite), enforced **before** CommandGuard / user confirm. REST API under `/api/permissions/commands/*` (get/put overrides, dry-run validate with optional draft policy). See [docs/SECURITY.md](docs/SECURITY.md)

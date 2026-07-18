@@ -44,7 +44,7 @@ The exact set exposed on any one run depends on the mode and the active profile:
 | ------- | --------------------------------------------------------- |
 | `shell` | Run a shell command locally (guarded by a command policy) |
 
-Commands run argv-only (no `shell=True`). The destructive-command guard fails **closed** (treats anything it can't classify as destructive and pauses for confirmation). Sudo is never read from disk. If a command needs it, you're prompted interactively (WebSocket+API). Auto-elevating root-owned actions can be opt-in to via `tools.shell.auto_sudo`. See [SECURITY.md](SECURITY.md).
+Commands run argv-only (no `shell=True`). **Policy first:** `tools.shell.permissions` (YAML) plus optional runtime overrides (`/api/permissions/*`) gate allowlist / denylist / confirm **before** CommandGuard. Then the destructive-command guard fails **closed** (unknown → treat as destructive and pause for confirmation). Sudo is never read from disk; if a command needs it, you're prompted interactively (WebSocket+API). Auto-elevating root-owned actions is opt-in via `tools.shell.auto_sudo`. See [SECURITY.md](SECURITY.md#command-permissions-shell--ssh).
 
 ## Docker
 
@@ -80,6 +80,8 @@ Commands run argv-only (no `shell=True`). The destructive-command guard fails **
 | `scp`          | Copy files to or from a remote host |
 | `rsync`        | Sync files or directories remotely  |
 | `ssh_keygen`   | Generate or inspect SSH keys        |
+
+Hosts must be on `tools.ssh.allowed_hosts`. Remote **command strings** use the same permission modes as shell (`tools.ssh.permissions` + runtime overrides); host allowlisting is separate from command policy. See [SECURITY.md](SECURITY.md#command-permissions-shell--ssh).
 
 ## Network and diagnostics
 
