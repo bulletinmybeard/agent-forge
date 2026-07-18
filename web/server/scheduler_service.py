@@ -190,9 +190,8 @@ class SchedulerService:
                 "source": guard.last_source,
             }
         except Exception as exc:
-            # If the guard is unavailable, fail open with a warning
-            logger.warning("Command guard unavailable: %s — allowing command", exc)
-            return {"safe": True, "verdict": "unknown", "source": "unavailable"}
+            logger.warning("Command guard unavailable: %s — denying command", exc)
+            return {"safe": False, "verdict": "unknown", "source": "unavailable"}
 
     # ------------------------------------------------------------------
     # Job execution (called by APScheduler in a thread)

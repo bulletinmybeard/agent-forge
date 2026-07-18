@@ -25,6 +25,9 @@ from typing import TYPE_CHECKING
 
 from chalkbox.logging.bridge import get_logger
 
+from agentforge.tools.command_policy import evaluate
+from agentforge.tools.command_policy_store import get_effective_policy
+
 from .registry import tool
 
 if TYPE_CHECKING:
@@ -131,6 +134,18 @@ def _validate_host(host: str) -> str | None:
     return None
 
 
+def _validate_ssh_command(command: str) -> str | None:
+    """Validate a remote command against the effective SSH command policy."""
+    if not command.strip():
+        return None
+
+    policy = get_effective_policy("ssh")
+    verdict = evaluate("ssh", command, policy)
+    if verdict.action == "deny":
+        return f"Error: {verdict.reason}"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # ssh — general-purpose remote execution
 # ---------------------------------------------------------------------------
@@ -178,6 +193,10 @@ def ssh(host: str, command: str = "", timeout: int = 0) -> str:
 
     # Validate host against allowlist
     err = _validate_host(host)
+    if err:
+        return err
+
+    err = _validate_ssh_command(command)
     if err:
         return err
 

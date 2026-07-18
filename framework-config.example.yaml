@@ -86,8 +86,14 @@ tools:
     max_tail_lines: 200
   shell:
     timeout: 120
-    allowed_commands: []      # empty = allow all; e.g., ["git", "npm", "python"]
-    blocked_patterns: []      # regex patterns to block, e.g., ["rm\\s+-rf\\s+/"]
+    permissions:
+      mode: confirm             # confirm | allowlist | denylist
+      allowed_commands: []     # e.g., ["git", "npm", "python"] — used when mode=allowlist
+      allowed_patterns: []     # regex; every segment must match ≥1 when mode=allowlist
+      blocked_patterns: []     # e.g., ["rm\\s+-rf\\s+/"] — hard deny on any segment match
+    # Legacy: tools.shell.allowed_commands / tools.shell.blocked_patterns are still
+    # read when the matching permissions.* list is empty. Migrate to permissions.*
+    # above so YAML baseline aligns with /api/permissions and the Web UI.
     auto_sudo: false
     guard:
       enabled: true           # LLM-based destructive-command detection
@@ -117,8 +123,13 @@ tools:
       optimize_quality: 82
       strip_metadata: true
   ssh:
-    allowed_hosts: []         # only these hosts may be reached by the ssh tool
+    allowed_hosts: []         # host gate only — command policy applies to the remote command string
     connection_timeout: 10
+    permissions:
+      mode: confirm
+      allowed_commands: []
+      allowed_patterns: []
+      blocked_patterns: []
   ignored_dirs:
     - .venv
     - node_modules

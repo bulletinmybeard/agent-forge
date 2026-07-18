@@ -14,14 +14,25 @@ import asyncio
 import inspect
 import typing
 from collections.abc import Callable
+from dataclasses import dataclass
 from types import FunctionType
 from typing import Any
 
 from chalkbox.logging.bridge import get_logger
 
+from agentforge.tools.command_policy import evaluate
+from agentforge.tools.command_policy_store import get_effective_policy
 from agentforge.typing_utils import ToolCallable, callable_name
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class _CommandPolicyOutcome:
+    """Result of policy evaluation before CommandGuard."""
+
+    cancel_message: str | None = None
+    skip_guard: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +378,23 @@ class ToolRegistry:
 
     # -- guard & confirmation ------------------------------------------------
 
+    def _evaluate_command_policy(self, name: str, args: dict[str, Any]) -> _CommandPolicyOutcome:
+        """Evaluate YAML command policy for shell/ssh before CommandGuard."""
+        if name not in ("shell", "ssh"):
+            return _CommandPolicyOutcome()
+        command = (args or {}).get("command") or ""
+        if not command.strip():
+            return _CommandPolicyOutcome()
+        policy = get_effective_policy(name)  # type: ignore[arg-type]
+        verdict = evaluate(name, command, policy)  # type: ignore[arg-type]
+        if verdict.action == "deny":
+            return _CommandPolicyOutcome(
+                cancel_message=(f"Refused: command blocked by policy ({verdict.source}). {verdict.reason}"),
+            )
+        if verdict.action == "allow":
+            return _CommandPolicyOutcome(skip_guard=True)
+        return _CommandPolicyOutcome()
+
     def _classify_guard(self, func: Callable, args: dict[str, Any]) -> dict | None:
         """Run the CommandGuard for the shell + ssh tools (if applicable).
 
@@ -495,7 +523,10 @@ class ToolRegistry:
         if func is None:
             return None, None
         coerced = self._coerce_args(func, args or {})
-        guard_result = self._classify_guard(func, coerced)
+        policy_outcome = self._evaluate_command_policy(name, coerced)
+        if policy_outcome.cancel_message:
+            return policy_outcome.cancel_message, None
+        guard_result = None if policy_outcome.skip_guard else self._classify_guard(func, coerced)
         cancelled = self._check_confirm(func, coerced, guard_result)
         return cancelled, guard_result
 
@@ -686,8 +717,12 @@ class ToolRegistry:
         arg_pairs = ", ".join(f"'{k}': '{v}'" for k, v in args.items())
         logger.debug("%s(%s)", name, arg_pairs)
 
+        policy_outcome = self._evaluate_command_policy(name, args)
+        if policy_outcome.cancel_message:
+            return policy_outcome.cancel_message
+
         # Run guard BEFORE emitting tool_call so the UI can show the badge
-        guard_result = self._classify_guard(func, args)
+        guard_result = None if policy_outcome.skip_guard else self._classify_guard(func, args)
 
         if self._on_tool_call and not skip_events:
             try:
@@ -753,8 +788,12 @@ class ToolRegistry:
         arg_pairs = ", ".join(f"'{k}': '{v}'" for k, v in args.items())
         logger.debug("%s(%s)", name, arg_pairs)
 
+        policy_outcome = self._evaluate_command_policy(name, args)
+        if policy_outcome.cancel_message:
+            return policy_outcome.cancel_message
+
         # Run guard BEFORE emitting tool_call so the UI can show the badge
-        guard_result = self._classify_guard(func, args)
+        guard_result = None if policy_outcome.skip_guard else self._classify_guard(func, args)
 
         if self._on_tool_call:
             try:

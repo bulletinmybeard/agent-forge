@@ -4,7 +4,7 @@ Adapted from py-rentwatch-dev's DatabaseManager. Same patterns:
   - sessionmaker(autocommit=False, autoflush=False)
   - Context-managed sessions with expunge() before return
   - Naive local datetimes
-  - Idempotent create_tables()
+  - Schema via Alembic (``create_tables`` → ``migrate.upgrade``)
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import create_engine, event, func, text
+from sqlalchemy import create_engine, event, func
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
@@ -23,6 +23,7 @@ from .models import (
     ChatMessage,
     ChatSession,
     CommandNote,
+    CommandPolicyOverride,
     MonitorCheck,
     MonitorJob,
     MonitorSnapshot,
@@ -75,121 +76,15 @@ class ChatDatabase:
         logger.info("ChatDatabase initialised at %s (journal_mode=DELETE)", self.db_path)
 
     def create_tables(self) -> None:
-        """Create tables if they don't exist (idempotent)."""
-        Base.metadata.create_all(bind=self.engine)
-        # Migrate existing databases: add is_incognito if the column doesn't exist yet.
-        # SQLite does not support IF NOT EXISTS in ALTER TABLE, so we swallow the
-        # OperationalError that fires when the column is already present.
-        with self.engine.connect() as conn:
-            try:
-                conn.execute(text("ALTER TABLE chat_messages ADD COLUMN is_incognito INTEGER NOT NULL DEFAULT 0"))
-                conn.commit()
-                logger.info("Migration: added is_incognito column to chat_messages")
-            except Exception:
-                pass  # Column already exists — no-op
-        with self.engine.connect() as conn:
-            try:
-                conn.execute(text("ALTER TABLE chat_messages ADD COLUMN is_volatile INTEGER NOT NULL DEFAULT 0"))
-                conn.commit()
-                logger.info("Migration: added is_volatile column to chat_messages")
-            except Exception:
-                pass  # Column already exists — no-op
-        # Migrate: add chat_sessions.source (external clients tag themselves so
-        # the human sidebar can filter them out). Legacy rows default to "web".
-        with self.engine.connect() as conn:
-            try:
-                conn.execute(text("ALTER TABLE chat_sessions ADD COLUMN source VARCHAR(32) NOT NULL DEFAULT 'web'"))
-                conn.commit()
-                logger.info("Migration: added source column to chat_sessions")
-            except Exception:
-                pass  # Column already exists — no-op
-        # Add screenshot_path to monitor_checks if missing
-        with self.engine.connect() as conn:
-            try:
-                conn.execute(text("ALTER TABLE monitor_checks ADD COLUMN screenshot_path VARCHAR(500)"))
-                conn.commit()
-                logger.info("Migration: added screenshot_path column to monitor_checks")
-            except Exception:
-                pass  # Column already exists — no-op
-        # Add structured_selectors to monitor_jobs
-        with self.engine.connect() as conn:
-            try:
-                conn.execute(text("ALTER TABLE monitor_jobs ADD COLUMN structured_selectors JSON"))
-                conn.commit()
-                logger.info("Migration: added structured_selectors column to monitor_jobs")
-            except Exception:
-                pass
-        # Add structured_content to monitor_snapshots
-        with self.engine.connect() as conn:
-            try:
-                conn.execute(text("ALTER TABLE monitor_snapshots ADD COLUMN structured_content JSON"))
-                conn.commit()
-                logger.info("Migration: added structured_content column to monitor_snapshots")
-            except Exception:
-                pass
-        # Add structured_diff to monitor_checks
-        with self.engine.connect() as conn:
-            try:
-                conn.execute(text("ALTER TABLE monitor_checks ADD COLUMN structured_diff JSON"))
-                conn.commit()
-                logger.info("Migration: added structured_diff column to monitor_checks")
-            except Exception:
-                pass
-        # Add created_at to chat_messages
-        with self.engine.connect() as conn:
-            try:
-                conn.execute(text("ALTER TABLE chat_messages ADD COLUMN created_at DATETIME DEFAULT (datetime('now'))"))
-                conn.commit()
-                logger.info("Migration: added created_at column to chat_messages")
-            except Exception:
-                pass  # Column already exists
-        with self.engine.connect() as conn:
-            try:
-                conn.execute(
-                    text("ALTER TABLE command_notes ADD COLUMN kind VARCHAR(20) NOT NULL DEFAULT 'tool_calls'")
-                )
-                conn.commit()
-                logger.info("Migration: added kind column to command_notes")
-            except Exception:
-                pass
-        with self.engine.connect() as conn:
-            try:
-                conn.execute(text("ALTER TABLE command_notes ADD COLUMN content TEXT"))
-                conn.commit()
-                logger.info("Migration: added content column to command_notes")
-            except Exception:
-                pass
-        # Add sequence to chat_messages
-        with self.engine.connect() as conn:
-            try:
-                conn.execute(text("ALTER TABLE chat_messages ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0"))
-                conn.commit()
-                logger.info("Migration: added sequence column to chat_messages")
-            except Exception:
-                pass  # Column already exists
-        # session_instructions table — created via metadata.create_all above.
-        # No ALTER TABLE migration needed for new table; just ensure it exists.
+        """Apply Alembic migrations to head (idempotent).
 
-        # Token usage columns on chat_sessions
-        for col_name in ("prompt_tokens", "completion_tokens", "total_tokens"):
-            with self.engine.connect() as conn:
-                try:
-                    conn.execute(text(f"ALTER TABLE chat_sessions ADD COLUMN {col_name} INTEGER NOT NULL DEFAULT 0"))
-                    conn.commit()
-                    logger.info("Migration: added %s column to chat_sessions", col_name)
-                except Exception:
-                    pass  # Column already exists
+        Replaces the old ``create_all`` + ad-hoc ``ALTER TABLE`` path.
+        See ``web.server.database.migrate`` and ``agentforge-db`` CLI.
+        """
+        from web.server.database.migrate import upgrade
 
-        # Per-session AI provider override
-        with self.engine.connect() as conn:
-            try:
-                conn.execute(text("ALTER TABLE chat_sessions ADD COLUMN provider_override VARCHAR(32)"))
-                conn.commit()
-                logger.info("Migration: added provider_override column to chat_sessions")
-            except Exception:
-                pass  # Column already exists
-
-        logger.info("Database tables ready")
+        upgrade(self.db_path)
+        logger.info("Database schema ready (Alembic head) at %s", self.db_path)
 
     def drop_tables(self) -> None:
         """Drop all tables (destructive — for testing/reset)."""
@@ -583,6 +478,49 @@ class ChatDatabase:
                 chat.message_count = remaining
             session.commit()
             return count
+
+    def get_command_policy_override(self, tool: str) -> dict | None:
+        """Return the runtime override for *tool*, or None if not set."""
+        with self.SessionLocal() as session:
+            row = session.query(CommandPolicyOverride).filter_by(tool=tool).first()
+            if not row:
+                return None
+            session.expunge(row)
+            return row.to_dict()
+
+    def upsert_command_policy_override(self, tool: str, data: dict) -> dict:
+        """Insert or update a runtime command policy override for *tool*."""
+        with self.SessionLocal() as session:
+            row = session.query(CommandPolicyOverride).filter_by(tool=tool).first()
+            if row:
+                row.mode = data.get("mode", row.mode)
+                row.allowed_commands = data.get("allowed_commands", [])
+                row.allowed_patterns = data.get("allowed_patterns", [])
+                row.blocked_patterns = data.get("blocked_patterns", [])
+                row.updated_at = datetime.now()
+            else:
+                row = CommandPolicyOverride(
+                    tool=tool,
+                    mode=data.get("mode", "confirm"),
+                    allowed_commands=data.get("allowed_commands", []),
+                    allowed_patterns=data.get("allowed_patterns", []),
+                    blocked_patterns=data.get("blocked_patterns", []),
+                )
+                session.add(row)
+            session.commit()
+            session.refresh(row)
+            session.expunge(row)
+            return row.to_dict()
+
+    def delete_command_policy_override(self, tool: str | None = None) -> int:
+        """Delete override(s). Pass *tool* to delete one row, or None for all."""
+        with self.SessionLocal() as session:
+            q = session.query(CommandPolicyOverride)
+            if tool is not None:
+                q = q.filter_by(tool=tool)
+            count = q.delete(synchronize_session=False)
+            session.commit()
+            return int(count)
 
     # -- Command Notes ---------------------------------------------------------
 
