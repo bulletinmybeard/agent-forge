@@ -185,6 +185,31 @@ ensure_user_context() {
     fi
 }
 
+# Bind-mounted into containers (see docker-compose.yml). Docker creates a
+# directory at the mount path when the host path is missing.
+# - custom_agents.yaml falls back to the example in-image when empty.
+# - custom_agents.local.yaml holds private agents (e.g. @felix).
+ensure_custom_agent_files() {
+    if [ ! -f "${PROJECT_ROOT}/custom_agents.yaml" ]; then
+        if [ -f "${PROJECT_ROOT}/custom_agents.example.yaml" ]; then
+            cp "${PROJECT_ROOT}/custom_agents.example.yaml" "${PROJECT_ROOT}/custom_agents.yaml"
+            echo -e "${YELLOW}[i] custom_agents.yaml missing — seeded from custom_agents.example.yaml${NC}"
+        else
+            printf 'agents: {}\n' > "${PROJECT_ROOT}/custom_agents.yaml"
+            echo -e "${YELLOW}[i] custom_agents.yaml missing — created empty placeholder${NC}"
+        fi
+    fi
+    if [ ! -f "${PROJECT_ROOT}/custom_agents.local.yaml" ]; then
+        if [ -f "${PROJECT_ROOT}/custom_agents.local.yaml.example" ]; then
+            cp "${PROJECT_ROOT}/custom_agents.local.yaml.example" "${PROJECT_ROOT}/custom_agents.local.yaml"
+            echo -e "${YELLOW}[i] custom_agents.local.yaml missing — seeded from example${NC}"
+        else
+            printf 'agents: {}\n' > "${PROJECT_ROOT}/custom_agents.local.yaml"
+            echo -e "${YELLOW}[i] custom_agents.local.yaml missing — created empty placeholder${NC}"
+        fi
+    fi
+}
+
 # Install / refresh the native LOCAL tools-worker on this machine.
 setup_local_worker() {
     if [ "${NO_LOCAL_WORKER}" = true ]; then
@@ -219,17 +244,20 @@ fi
 if [ "${CONFIG_ONLY}" = true ]; then
     echo -e "${BLUE}=== AgentForge — config sync ===${NC}"
     check_ssh
-    for f in framework-config.yaml config.yaml custom_agents.yaml; do
+    for f in framework-config.yaml config.yaml; do
         [ -f "${PROJECT_ROOT}/${f}" ] || { echo -e "${RED}[FAIL] ${f} missing (copy from ${f%.yaml}.example.yaml).${NC}"; exit 1; }
     done
     ensure_user_context
+    ensure_custom_agent_files
     echo -e "\n${GREEN}Syncing config + compose...${NC}"
     ${SSH_CMD} "${SSH_HOST}" "mkdir -p ${REMOTE_DIR}/data"
     ${SCP_CMD} \
         "${PROJECT_ROOT}/docker-compose.yml" "${PROJECT_ROOT}/docker-compose.remote.yml" \
         "${PROJECT_ROOT}/framework-config.yaml" "${PROJECT_ROOT}/config.yaml" \
         "${PROJECT_ROOT}/user_context.md" \
-        "${PROJECT_ROOT}/tool_routing.yaml" "${PROJECT_ROOT}/custom_agents.yaml" "${PROJECT_ROOT}/skills.yaml" \
+        "${PROJECT_ROOT}/tool_routing.yaml" \
+        "${PROJECT_ROOT}/custom_agents.yaml" "${PROJECT_ROOT}/custom_agents.local.yaml" \
+        "${PROJECT_ROOT}/skills.yaml" \
         "${SSH_HOST}:${REMOTE_DIR}/"
     ${SSH_CMD} "${SSH_HOST}" "rm -rf ${REMOTE_DIR}/profiles && mkdir -p ${REMOTE_DIR}/profiles"
     ${SCP_CMD} -r "${PROJECT_ROOT}/profiles/." "${SSH_HOST}:${REMOTE_DIR}/profiles/"
@@ -258,6 +286,7 @@ for f in framework-config.yaml config.yaml; do
     fi
 done
 ensure_user_context
+ensure_custom_agent_files
 
 echo -e "\n${GREEN}Syncing source to ${SSH_HOST}:${REMOTE_DIR}...${NC}"
 ${SSH_CMD} "${SSH_HOST}" "mkdir -p ${REMOTE_DIR}/data ${REMOTE_DIR}/secrets"

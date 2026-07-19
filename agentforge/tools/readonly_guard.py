@@ -204,6 +204,8 @@ _VALUE_FLAGS = frozenset(
 # `find` with these actions writes/executes — block even though `find` reads.
 _FIND_WRITE_FLAGS = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf"})
 
+_INFO_FLAGS = frozenset({"-v", "-V", "--version", "-h", "--help"})
+
 # Segment separators and write redirections.
 _SEGMENT_SEPS = ("&&", "||", ";", "|", "\n")
 
@@ -280,6 +282,9 @@ def _segment_is_read_only(segment: str) -> bool:
     if verb == "find":
         return not any(f in rest for f in _FIND_WRITE_FLAGS)
 
+    if rest and _is_info_flags_only(rest):
+        return True
+
     if verb in _DUAL_USE_READ_SUBCMDS:
         sub, after = _subcommand(rest)
         if sub is None:
@@ -287,7 +292,14 @@ def _segment_is_read_only(segment: str) -> bool:
         if verb == "docker" and sub == "compose":
             compose_sub, _ = _subcommand(after)
             return compose_sub in _COMPOSE_READ_SUBCMDS
+        if sub in ("version", "help") and not after:
+            return True
         return sub in _DUAL_USE_READ_SUBCMDS[verb]
+
+    if rest:
+        sub, after = _subcommand(rest)
+        if sub in ("version", "help") and not after:
+            return True
 
     return verb in _READ_VERBS
 
@@ -306,3 +318,10 @@ def _subcommand(tokens: list[str]) -> tuple[str | None, list[str]]:
             continue
         return tok, tokens[i + 1 :]
     return None, []
+
+
+def _is_info_flags_only(tokens: list[str]) -> bool:
+    """True when every token is a pure version/help flag (no other args)."""
+    if not tokens:
+        return False
+    return all(tok in _INFO_FLAGS for tok in tokens)

@@ -223,10 +223,10 @@ Auth is off by default (open).
 Once `security.api_keys` is set (or `AGENTFORGE_API_KEYS`), every request needs a key, except `GET /health`.
 
 ```bash
-# HTTP: either header works
-curl $RAG/indexer/sources -H 'Authorization: Bearer agf_your_key'
-curl $RAG/indexer/sources -H 'X-API-Key: agf_your_key'
+# HTTP: either header works (replace YOUR_API_KEY with a real key from config)
+curl $RAG/indexer/sources -H 'Authorization: Bearer YOUR_API_KEY'
+curl $RAG/indexer/sources -H 'X-API-Key: YOUR_API_KEY'
 
 # WebSocket: query param (browsers can't set headers) or the subprotocol
-websocat -n 'ws://localhost:8200/ws/chat?api_key=agf_your_key' <<<'{"type":"query","text":"hi"}'
+websocat -n 'ws://localhost:8200/ws/chat?api_key=YOUR_API_KEY' <<<'{"type":"query","text":"hi"}'
 ```

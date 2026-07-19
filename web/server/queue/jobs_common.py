@@ -140,16 +140,22 @@ class HttpCallbackSocket:
     Most events are persisted (and broadcast) via _NullDatabase.add_message()
     which POSTs to /internal/sessions/{id}/event.
 
-    Ephemeral live-UI events — tool.call and tool.calls.flush — are NOT
-    persisted to DB but must still reach the browser during live processing.
-    send_json() forwards those event types to the /broadcast endpoint so the
-    ToolCallsPanel animates in real time without creating duplicate DB rows.
+    Ephemeral live-UI events are NOT persisted to DB but must still reach the
+    browser (and CLI clients like Felix) during live processing. send_json()
+    forwards those event types to the /broadcast endpoint so the ToolCallsPanel
+    animates in real time without creating duplicate DB rows.
+
+    agent.tool_exec (start/done, optional truncated output) is included so
+    verbose clients can show tool results without waiting for the final report.
     """
 
     _BROADCAST_TYPES = frozenset(
         {
             "tool.call",
             "tool.calls.flush",
+            "agent.tool_exec",
+            "agent.iteration",
+            "agent.thinking",
             "research.progress",
             "research.activity",
             "context.usage",  # ephemeral token-usage update — never stored

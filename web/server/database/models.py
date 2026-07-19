@@ -197,6 +197,37 @@ class CommandPolicyOverride(Base):
         }
 
 
+class CommandPermissionProfileRow(Base):
+    """User-saved named permission profile (tight/open-style presets)."""
+
+    __tablename__ = "command_permission_profiles"
+
+    id = Column(String(64), primary_key=True)
+    description = Column(String(500), nullable=False, default="")
+    shell = Column(JSON, nullable=True)
+    ssh = Column(JSON, nullable=True)
+    updated_at = Column(DateTime, default=_now, onupdate=_now, nullable=False)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "description": self.description or "",
+            "shell": self.shell,
+            "ssh": self.ssh,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class CommandPermissionActive(Base):
+    """Singleton row: last applied permission profile id (for UI display)."""
+
+    __tablename__ = "command_permission_active"
+
+    id = Column(Integer, primary_key=True, default=1)
+    profile_id = Column(String(64), nullable=True)
+    updated_at = Column(DateTime, default=_now, onupdate=_now, nullable=False)
+
+
 class CommandNote(Base):
     """A saved bookmark. Tool calls from a run, or an agent answer."""
 

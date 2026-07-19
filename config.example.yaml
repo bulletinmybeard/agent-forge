@@ -296,6 +296,56 @@ tools:
       allowed_commands: []
       allowed_patterns: []
       blocked_patterns: []
+  # Named permission profiles (Claude/Grok-style allow/deny presets).
+  # Apply via Web UI, `felix permissions profile apply <id>`, or
+  # POST /api/permissions/profiles/{id}/apply. User-saved profiles live in SQLite.
+  command_permission_profiles:
+    tight:
+      description: "Diagnostic allowlist — safe probes only; block recursive rm and volume prune"
+      shell:
+        mode: allowlist
+        allowed_commands:
+          - ls
+          - df
+          - du
+          - cat
+          - head
+          - tail
+          - grep
+          - find
+          - pwd
+          - docker
+          - git
+          - npm
+          - node
+          - python
+          - python3
+          - jq
+          - which
+          - uname
+        allowed_patterns: []
+        blocked_patterns:
+          - 'rm\s+-[a-z]*r'
+          - 'docker\s+system\s+prune'
+      ssh:
+        mode: allowlist
+        allowed_commands: [ls, df, du, cat, head, docker, systemctl, journalctl]
+        blocked_patterns:
+          - 'rm\s+-[a-z]*r'
+    open:
+      description: "Confirm mode with hard denials only — suitable for repair work"
+      shell:
+        mode: confirm
+        allowed_commands: []
+        allowed_patterns: []
+        blocked_patterns:
+          - 'rm\s+-[a-z]*r\s+/($|\s)'
+          - '\bmkfs\b'
+          - '\bdd\s+if='
+      ssh:
+        mode: confirm
+        blocked_patterns:
+          - 'rm\s+-[a-z]*r\s+/($|\s)'
   monitor:
     sites: {}                   # per-site extraction selectors (see docs); empty = generic extraction
 
@@ -313,7 +363,7 @@ service:
 
 # Chat persistence + uploads (SQLite + files on disk).
 web:
-  database_path: "data/agentforge_chat.db"
+  database_path: "data/web_chat.db"
   uploads_path: "data/uploads"
   max_file_size_mb: 75
   max_files_per_request: 25

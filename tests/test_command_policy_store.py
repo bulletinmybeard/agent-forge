@@ -66,7 +66,8 @@ def test_clear_runtime_override_all(tmp_db):
     assert get_runtime_override("ssh") is None
 
 
-def test_effective_policy_merges_partial_override(tmp_db, monkeypatch):
+def test_effective_policy_override_is_full_document(tmp_db, monkeypatch):
+    """Empty override lists clear the YAML baseline (full-document semantics)."""
     yaml_policy = CommandPolicy(
         mode="confirm",
         allowed_commands=("git", "ls"),
@@ -82,6 +83,6 @@ def test_effective_policy_merges_partial_override(tmp_db, monkeypatch):
     )
     effective = get_effective_policy("shell")
     assert effective.mode == "allowlist"
-    assert effective.allowed_commands == ("git", "ls")
-    assert effective.blocked_patterns == (r"sudo",)
+    assert effective.allowed_commands == ()
+    assert effective.blocked_patterns == ()
     clear_runtime_override("shell")
