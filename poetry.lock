@@ -3537,14 +3537,14 @@ files = [
 
 [[package]]
 name = "slack-bolt"
-version = "1.28.0"
+version = "1.30.0"
 description = "The Bolt Framework for Python"
 optional = false
 python-versions = ">=3.7"
 groups = ["main"]
 files = [
-    {file = "slack_bolt-1.28.0-py2.py3-none-any.whl", hash = "sha256:738d1ca5e7c7039b6e18103d29267ced6e18c2517053eff18991fdd593acce5c"},
-    {file = "slack_bolt-1.28.0.tar.gz", hash = "sha256:bfe367d867e8fb157a057248ebd4ac2d7f43acac6d0700fa31381db1e10f3b0f"},
+    {file = "slack_bolt-1.30.0-py2.py3-none-any.whl", hash = "sha256:81f5bc46e79516d23d5e2a31dded6304dd1b8b6b72c0083f2f31d5d801e262c4"},
+    {file = "slack_bolt-1.30.0.tar.gz", hash = "sha256:af38258d41f801ad9c74503090e0f39accd66c49f667f7e55c97fcdb0e51b886"},
 ]
 
 [package.dependencies]
@@ -4242,4 +4242,4 @@ dev = ["pytest", "pytest-asyncio", "ruff", "ty"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<4.0"
-content-hash = "e9689603da5e6873d000dd012cafdf2f625390916e8ddb2b86b6ca2d1cee3e6b"
+content-hash = "165ca821a89470f4fcad12e65b2d7e4596964702e14f85cca4c1e2b7160b8d58"
