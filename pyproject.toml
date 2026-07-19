@@ -49,7 +49,7 @@ dependencies = [
     "slack-bolt>=1.18.0",
     "alembic>=1.18.5,<2.0.0",
     "sqlalchemy>=2.0.0",
-    "timezonefinder>=6.5.0",
+    "timezonefinder>=8.2.5",
     "uvicorn[standard]>=0.49.0",
 ]
 
