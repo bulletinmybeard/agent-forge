@@ -31,7 +31,7 @@ jobs:
           fi
           echo "name=$TAG" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Extract version
         id: version
