@@ -156,6 +156,7 @@ def validate_command(body: ValidateRequest) -> dict:
         "source": verdict.source,
     }
 
+
 @router.get("/profiles")
 def get_permission_profiles() -> dict:
     """List built-in (YAML) and user-saved permission profiles."""
