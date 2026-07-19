@@ -53,7 +53,7 @@ Operator guides live in [`docs/`](docs/README.md):
 - [Connectors](docs/connectors.md): linking external accounts. The unified Google OAuth connector (Gmail, Drive, BigQuery, YouTube) and the GitLab and GitHub token connectors.
 - [Authoring tools and private overlays](docs/plugin-authoring.md): adding private tools, the `AGENTFORGE_TOOL_PLUGINS` seam, and the local overlay files.
 - [Instruction markdown](markdown/README.md): the `skills/` and `custom-agents/` markdown you edit to tune agents without touching Python.
-- [Security](docs/SECURITY.md): auth, sidecar/internal tokens, interactive sudo, SSRF and read-only guards, and **shell/SSH command permissions**.
+- [Security](docs/SECURITY.md): auth, sidecar/internal tokens, interactive sudo, SSRF and read-only guards, and **shell/SSH command permissions** (modes, runtime overrides, named **permission profiles**).
 
 ## Run it locally
 

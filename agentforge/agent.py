@@ -1091,19 +1091,24 @@ class AgentLoop:
                             output = f"{output}\n\n[Recovery hint (attempt {attempt}/{self._max_retries})]: {guidance}"
                             break
 
-                # Emit tool execution done
+                # Emit tool execution done. Include a short output preview so clients (Felix -vv, Web UI) can show result text without a second fetch. The full body still goes into the model context.
                 tc_elapsed = time.perf_counter() - tc_start
-                self._on_event(
-                    "tool_exec",
-                    {
-                        "iteration": i,
-                        "name": name,
-                        "status": "done",
-                        "output_chars": len(output),
-                        "is_error": self._is_tool_error(output),
-                        "tool_elapsed": round(tc_elapsed, 2),
-                    },
-                )
+                _preview_cap = 1500
+                _done_payload: dict = {
+                    "iteration": i,
+                    "name": name,
+                    "status": "done",
+                    "output_chars": len(output),
+                    "is_error": self._is_tool_error(output),
+                    "tool_elapsed": round(tc_elapsed, 2),
+                }
+                if output:
+                    if len(output) <= _preview_cap:
+                        _done_payload["output"] = output
+                    else:
+                        _done_payload["output"] = output[: _preview_cap - 1] + "…"
+                        _done_payload["output_truncated"] = True
+                self._on_event("tool_exec", _done_payload)
 
                 return {"name": name, "arguments": args, "result": output}
 

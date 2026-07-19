@@ -52,6 +52,8 @@ x-app-volumes: &app-volumes
   - ./config.yaml:/app/config.yaml:ro
   - ./user_context.md:/app/user_context.md:ro
   - ./profiles:/app/profiles:ro
+  - ./custom_agents.yaml:/app/custom_agents.yaml:ro
+  - ./custom_agents.local.yaml:/app/custom_agents.local.yaml:ro
   - ./data:/app/data
   - ./secrets:/app/secrets
 

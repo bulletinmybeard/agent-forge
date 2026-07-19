@@ -85,12 +85,26 @@ Mounted at `/api/permissions` (requires API-key auth when `security.api_keys` is
 | `PUT` | `/api/permissions/commands/overrides` | Upsert overrides: `{shell?: {...}, ssh?: {...}}` |
 | `DELETE` | `/api/permissions/commands/overrides` | Delete one override (`?tool=shell`) or all |
 | `POST` | `/api/permissions/commands/validate` | Dry-run: `{tool, command, policy?}` → `{action, reason, source}` (`allow` \| `deny` \| `confirm`). Optional `policy` previews unsaved Web UI edits (merged with YAML as if saved). |
+| `GET` | `/api/permissions/profiles` | Named profiles (YAML builtins + user SQLite) + `active_profile_id` |
+| `GET` | `/api/permissions/profiles/{id}` | One profile |
+| `POST` | `/api/permissions/profiles/{id}/apply` | Copy profile → live runtime overrides. Synthetic ids: `__yaml__` (clear overrides → config only), `__blank__` (empty confirm lists to start a new profile) |
+| `PUT` | `/api/permissions/profiles/{id}` | Create/update **user** profile (`from_current_overrides` snapshots live policy) |
+| `DELETE` | `/api/permissions/profiles/{id}` | Delete user profile (not YAML builtins) |
 
-Implementation: `web/server/permissions/api.py`, evaluation: `agentforge/tools/command_policy.py`.
+**Profiles** (Claude/Grok-style presets): define under `tools.command_permission_profiles` in config (e.g. `tight`, `open`). Apply via Web UI, Felix (`felix permissions profile apply`), or the REST apply endpoint. User-saved profiles live in SQLite.
+
+Implementation: `web/server/permissions/api.py`, evaluation: `agentforge/tools/command_policy.py`, profiles: `agentforge/tools/command_permission_profiles.py`.
 
 ### Web UI
 
-Open **Command Permissions** from the chat input menu (alongside Profiles / Connectors). The modal edits runtime overrides per tool (mode, allow/deny lists), shows YAML vs effective policy, and includes a **Test command** validator that evaluates the **current form** (including unsaved edits). **Save** persists to SQLite; **Reset** clears overrides and restores the YAML baseline.
+Open **Command Permissions** from the chat input menu (alongside Profiles / Connectors). The modal:
+
+- Edits runtime overrides per tool (mode, allow/deny lists)
+- Shows YAML vs effective policy
+- Applies **named profiles** (`tight` / `open` / user-saved / YAML baseline / blank slate)
+- Includes a **Test command** validator for the current form (including unsaved edits)
+
+**Save** persists overrides to SQLite; **Reset** clears overrides and restores the YAML baseline.
 
 ### Relationship to CommandGuard
 

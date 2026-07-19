@@ -56,7 +56,7 @@ SPECS: dict[DatabaseName, DatabaseSpec] = {
         alembic_ini=_PACKAGE_DIR / "alembic.ini",
         migrations_dir=_PACKAGE_DIR / "migrations",
         legacy_marker_table="chat_sessions",
-        default_rel_path="data/agentforge_chat.db",
+        default_rel_path="data/web_chat.db",
     ),
     "prompt_lab": DatabaseSpec(
         name="prompt_lab",

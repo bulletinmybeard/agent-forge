@@ -16,7 +16,7 @@ from web.server.database.migrate import (
 )
 from web.server.database.models import Base
 
-CHAT_HEAD = "002_canvas_items"
+CHAT_HEAD = "004_perm_profiles"
 PROMPT_LAB_HEAD = "001_pl_baseline"
 
 
@@ -46,8 +46,11 @@ def test_schema_migrations_records_filenames(tmp_path: Path):
     revisions = {r["revision"] for r in rows}
     assert "001_baseline" in revisions
     assert "002_canvas_items" in revisions
+    assert "003_command_policy" in revisions
+    assert "004_perm_profiles" in revisions
     assert any("001_baseline" in f for f in filenames)
     assert any("002_canvas_items" in f or "canvas" in f for f in filenames)
+    assert any("003_command_policy" in f or "command_policy" in f for f in filenames)
 
 
 def test_upgrade_is_idempotent(tmp_path: Path):
@@ -55,7 +58,7 @@ def test_upgrade_is_idempotent(tmp_path: Path):
     upgrade(db, database="chat")
     upgrade(db, database="chat")
     assert current(db, database="chat") == CHAT_HEAD
-    assert len(list_applied(db, database="chat")) == 2
+    assert len(list_applied(db, database="chat")) == 4
 
 
 def test_legacy_db_is_stamped_not_recreated(tmp_path: Path):
@@ -118,6 +121,38 @@ def test_history_includes_chat_revisions():
     revs = history(database="chat")
     assert "001_baseline" in revs
     assert "002_canvas_items" in revs
+    assert "003_command_policy" in revs
+    assert "004_perm_profiles" in revs
+
+
+def test_upgrade_adds_command_policy_to_pre_003_db(tmp_path: Path):
+    """DBs stamped at 002 without command_policy_overrides get the table."""
+    db = tmp_path / "pre003.db"
+    engine = create_engine(f"sqlite:///{db}", poolclass=NullPool)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"))
+            conn.execute(text("INSERT INTO alembic_version (version_num) VALUES ('002_canvas_items')"))
+            # Minimal legacy tables so the DB is not empty — but no policy table.
+            conn.execute(
+                text(
+                    "CREATE TABLE chat_sessions ("
+                    "id VARCHAR NOT NULL PRIMARY KEY, title VARCHAR, source VARCHAR, "
+                    "message_count INTEGER, prompt_tokens INTEGER, completion_tokens INTEGER, "
+                    "total_tokens INTEGER, created_at DATETIME, updated_at DATETIME)"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    upgrade(db, database="chat")
+    assert current(db, database="chat") == CHAT_HEAD
+    engine = create_engine(f"sqlite:///{db}", poolclass=NullPool)
+    try:
+        tables = set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+    assert "command_policy_overrides" in tables
 
 
 def test_chat_database_create_tables_uses_alembic(tmp_path: Path):

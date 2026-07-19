@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -12,10 +13,15 @@ from agentforge.tools.command_policy import CommandPolicy, load_yaml_policy, mer
 if TYPE_CHECKING:
     from web.server.database import ChatDatabase
 
+logger = logging.getLogger(__name__)
+
 ToolName = Literal["shell", "ssh"]
 
 _db: ChatDatabase | None = None
 _web_unavailable: bool = False
+
+# Same default as the web app / config.example — keep policy store on the chat DB.
+_DEFAULT_CHAT_DB = "data/web_chat.db"
 
 
 def _resolve_db_path() -> Path:
@@ -24,7 +30,7 @@ def _resolve_db_path() -> Path:
         return Path(env_path).expanduser()
 
     cfg = get_config()
-    raw_path = cfg._raw.get("web", {}).get("database_path", "data/agentforge_chat.db")
+    raw_path = cfg._raw.get("web", {}).get("database_path", _DEFAULT_CHAT_DB)
     return Path(raw_path).expanduser()
 
 
@@ -44,7 +50,12 @@ def _try_get_db() -> ChatDatabase | None:
 
     db_path = _resolve_db_path()
     _db = ChatDatabase(db_path)
-    _db.create_tables()
+    try:
+        _db.create_tables()
+    except Exception:
+        # Schema may still be usable (or will soft-fail on read). Do not block
+        # shell/ssh on a migration race — YAML policy remains authoritative.
+        logger.warning("command_policy_store: create_tables failed for %s", db_path, exc_info=True)
     return _db
 
 
@@ -94,7 +105,24 @@ def get_runtime_override(tool: ToolName) -> CommandPolicy | None:
     db = _try_get_db()
     if db is None:
         return None
-    data = db.get_command_policy_override(tool)
+    try:
+        data = db.get_command_policy_override(tool)
+    except Exception as exc:
+        # Missing table / corrupt stamp: try one migration pass, then YAML-only.
+        logger.warning(
+            "command_policy_store: read override for %s failed (%s) — repairing schema",
+            tool,
+            exc,
+        )
+        try:
+            db.create_tables()
+            data = db.get_command_policy_override(tool)
+        except Exception:
+            logger.warning(
+                "command_policy_store: schema repair failed — using YAML policy only",
+                exc_info=True,
+            )
+            return None
     if data is None:
         return None
     return _dict_to_policy(data)

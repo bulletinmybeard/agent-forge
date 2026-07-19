@@ -62,3 +62,20 @@ def test_redirect_to_devnull_is_fine():
 
 def test_empty_command_is_noop_safe():
     assert is_read_only_safe("ssh", {"host": "myserver"}) is True
+
+
+def test_version_probes_allowed():
+    # Felix permission-test chain: all three segments must be read-safe.
+    assert _shell("docker ps -a && df -h && npm --version") is True
+    assert _shell("npm --version") is True
+    assert _shell("npm -v") is True
+    assert _shell("node --version") is True
+    assert _shell("python3 -V") is True
+    assert _shell("docker --version") is True
+    assert _shell("npm version") is True  # bare subcommand, no bump args
+
+
+def test_version_mutations_still_blocked():
+    assert _shell("npm version patch") is False
+    assert _shell("npm install --version") is False  # install is not info-only
+    assert _shell("npm install express") is False

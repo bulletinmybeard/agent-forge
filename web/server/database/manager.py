@@ -25,6 +25,8 @@ from .models import (
     ChatMessage,
     ChatSession,
     CommandNote,
+    CommandPermissionActive,
+    CommandPermissionProfileRow,
     CommandPolicyOverride,
     MonitorCheck,
     MonitorJob,
@@ -521,6 +523,63 @@ class ChatDatabase:
             count = q.delete(synchronize_session=False)
             session.commit()
             return int(count)
+
+    # -- Named permission profiles ---------------------------------------------
+
+    def list_command_permission_profiles(self) -> list[dict]:
+        with self.SessionLocal() as session:
+            rows = session.query(CommandPermissionProfileRow).order_by(CommandPermissionProfileRow.id).all()
+            out = []
+            for row in rows:
+                session.expunge(row)
+                out.append(row.to_dict())
+            return out
+
+    def upsert_command_permission_profile(self, profile_id: str, data: dict) -> dict:
+        with self.SessionLocal() as session:
+            row = session.query(CommandPermissionProfileRow).filter_by(id=profile_id).first()
+            if row:
+                row.description = data.get("description", row.description) or ""
+                row.shell = data.get("shell")
+                row.ssh = data.get("ssh")
+                row.updated_at = datetime.now()
+            else:
+                row = CommandPermissionProfileRow(
+                    id=profile_id,
+                    description=data.get("description") or "",
+                    shell=data.get("shell"),
+                    ssh=data.get("ssh"),
+                )
+                session.add(row)
+            session.commit()
+            session.refresh(row)
+            session.expunge(row)
+            return row.to_dict()
+
+    def delete_command_permission_profile(self, profile_id: str) -> int:
+        with self.SessionLocal() as session:
+            count = (
+                session.query(CommandPermissionProfileRow).filter_by(id=profile_id).delete(synchronize_session=False)
+            )
+            session.commit()
+            return int(count)
+
+    def get_active_command_permission_profile(self) -> str | None:
+        with self.SessionLocal() as session:
+            row = session.query(CommandPermissionActive).filter_by(id=1).first()
+            if not row:
+                return None
+            return row.profile_id
+
+    def set_active_command_permission_profile(self, profile_id: str | None) -> None:
+        with self.SessionLocal() as session:
+            row = session.query(CommandPermissionActive).filter_by(id=1).first()
+            if row:
+                row.profile_id = profile_id
+                row.updated_at = datetime.now()
+            else:
+                session.add(CommandPermissionActive(id=1, profile_id=profile_id))
+            session.commit()
 
     # -- Command Notes ---------------------------------------------------------
 

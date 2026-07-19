@@ -144,11 +144,12 @@ def load_yaml_policy(tool: ToolName) -> CommandPolicy:
 
 
 def merge_policies(base: CommandPolicy, override: CommandPolicy | None) -> CommandPolicy:
+    """Merge YAML baseline with a runtime override."""
     if override is None:
         return base
     return CommandPolicy(
         mode=override.mode,
-        allowed_commands=override.allowed_commands or base.allowed_commands,
-        allowed_patterns=override.allowed_patterns or base.allowed_patterns,
-        blocked_patterns=override.blocked_patterns or base.blocked_patterns,
+        allowed_commands=override.allowed_commands,
+        allowed_patterns=override.allowed_patterns,
+        blocked_patterns=override.blocked_patterns,
     )

@@ -56,7 +56,6 @@ from .ws_endpoint import (
     _is_worker_mode,
     _match_mode_patterns,
     _resolve_skills,
-    _runtime,
     _runtime_ready,
     _strip_custom_prefix,
     get_runtime,
@@ -540,9 +539,10 @@ async def broadcast_worker_event(session_id: str, body: dict = Body(...)):
     """Broadcast an ephemeral protocol event to any live browser WS — no DB persist.
 
     Used for transient UI-only events (tool.call, tool.calls.flush,
-    research.progress, research.activity) during worker runs. These events drive
-    the live ToolCallsPanel animation but are never stored in SQLite (the durable
-    tool_calls record is written separately by send_and_persist).
+    agent.tool_exec, agent.iteration, agent.thinking, research.progress,
+    research.activity) during worker runs. These drive the live ToolCallsPanel
+    / Felix -vv output but are never stored in SQLite (the durable tool_calls
+    record is written separately by send_and_persist).
 
     In addition to forwarding to the live WS, we mirror the event into a
     Redis-backed per-session buffer so that a page reload during or shortly
@@ -2031,8 +2031,11 @@ async def list_skills():
     except asyncio.TimeoutError:
         raise HTTPException(503, "Runtime not ready yet")
 
-    rt = _runtime
-    if rt is None:
+    # Use get_runtime() — not a from-import of _runtime. Rebinding
+    # ws_endpoint._runtime in init_runtime() does not update a captured name.
+    try:
+        rt = get_runtime()
+    except RuntimeError:
         raise HTTPException(503, "Runtime not initialised")
 
     skills = rt.list_skills()
@@ -2340,8 +2343,11 @@ async def dry_run(body: DryRunRequest):
     except asyncio.TimeoutError:
         raise HTTPException(503, "Runtime not ready yet")
 
-    rt = _runtime
-    if rt is None:
+    # get_runtime() reads the live module global; a from-import of _runtime
+    # stays None forever after init_runtime() rebinds the name.
+    try:
+        rt = get_runtime()
+    except RuntimeError:
         raise HTTPException(503, "Runtime not initialised")
 
     db = _db
@@ -2796,6 +2802,30 @@ async def dry_run(body: DryRunRequest):
                     "label": "Mode → Tool Set",
                     "status": "skipped",
                     "detail": f"Mode '{base_mode}' has no tools",
+                }
+            )
+        elif final_mode.startswith("custom:"):
+            # Custom agents declare their own allowlist and not the full profile set.
+            agent_id = final_mode.split(":", 1)[-1]
+            agent_cfg = rt.get_custom_agent_by_id(agent_id) if hasattr(rt, "get_custom_agent_by_id") else None
+            tool_names = list((agent_cfg or {}).get("tools") or [])
+            tool_info["tools"] = tool_names
+            tool_info["count"] = len(tool_names)
+            tool_info["source"] = f"custom agent '{agent_id}' tools list"
+            tool_sub_steps.append(
+                {
+                    "id": "mode_check",
+                    "label": "Mode → Tool Set",
+                    "status": "active",
+                    "detail": f"Custom agent '{agent_id}' — use declared tools only",
+                }
+            )
+            tool_sub_steps.append(
+                {
+                    "id": "profile_lookup",
+                    "label": "Agent tool list",
+                    "status": "active",
+                    "detail": f"{len(tool_names)} tools from custom agent config",
                 }
             )
         elif rt.agent_available:
