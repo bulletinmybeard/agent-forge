@@ -27,6 +27,35 @@ def tmp_db(tmp_path, monkeypatch):
     reset_config()
 
 
+def test_read_path_does_not_migrate_on_hot_path(tmp_path, monkeypatch):
+    """Regression: reading command policy must NOT run an Alembic migration.
+
+    The web stack owns the schema and migrates web_chat.db at worker startup.
+    Eager create_tables() in the policy-store read path put a full migration on
+    every shell/ssh command, serialising them behind a SQLite write-lock upgrade
+    that deadlocked under concurrency (native worker + web share the file).
+    """
+    # Emulate the web stack having already migrated the chat DB at startup.
+    db_path = tmp_path / "web_chat.db"
+    ChatDatabase(db_path).create_tables()
+
+    reset_db()
+    monkeypatch.setenv("AGENTFORGE_CHAT_DB", str(db_path))
+
+    calls: list[int] = []
+    orig = ChatDatabase.create_tables
+    monkeypatch.setattr(ChatDatabase, "create_tables", lambda self: (calls.append(1), orig(self))[1])
+
+    try:
+        policy = get_effective_policy("shell")
+    finally:
+        reset_db()
+        reset_config()
+
+    assert calls == [], "policy read triggered a schema migration on the hot path"
+    assert policy is not None
+
+
 def test_runtime_override_overrides_yaml_mode(tmp_db, monkeypatch):
     set_runtime_override("shell", CommandPolicy(mode="allowlist", allowed_commands=("ls",)))
     p = get_effective_policy("shell")

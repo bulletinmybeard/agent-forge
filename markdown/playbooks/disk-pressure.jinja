@@ -1,0 +1,33 @@
+{# Disk pressure (macOS-tuned) — structured findings for the synthesis step. #}
+## Filesystem Usage (df -h)
+_Authoritative: shows which volume is full, plus mounted simulator/DMG volumes._
+{{ commands.df.output }}
+
+{% if commands.docker_df.ok and commands.docker_df.output %}
+## Docker Disk Usage
+{{ commands.docker_df.output }}
+{% endif %}
+
+## $HOME Breakdown (largest top-level dirs)
+_Dev/build dirs (node_modules, .venv, venv, env, __pycache__, .git) excluded, so totals understate those._
+{% if commands.home.output %}
+{{ commands.home.output }}
+{% else %}
+(scan did not finish within the time limit)
+{% endif %}
+
+## Common macOS Space Hogs
+_Caches, Developer/Xcode, Containers, Application Support, Downloads, Movies._
+{% if commands.hogs.output %}
+{{ commands.hogs.output }}
+{% else %}
+(scan did not finish within the time limit)
+{% endif %}
+
+## APFS Local Snapshots
+_These reserve "purgeable" space — df can show low free while the volume reads as full._
+{% if commands.snapshots.output %}
+{{ commands.snapshots.output }}
+{% else %}
+(none listed, or tmutil unavailable)
+{% endif %}

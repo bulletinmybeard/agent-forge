@@ -61,6 +61,7 @@ from .mode_routing import strip_mode_prefix as _strip_mode_prefix
 from .queue.models import JobStatus
 from .queue.store import job_store
 from .secret import SecretBroker
+from .summarise import flatten_messages_for_summary
 
 if TYPE_CHECKING:
     import ollama
@@ -4164,28 +4165,10 @@ async def _compact_session(
         await ws.send_json(protocol.agent_error("Could not load session history"))
         return
 
-    # Build a text representation of the conversation
-    conversation_lines: list[str] = []
-    for msg in db_messages:
-        if msg.type == "query" and msg.content:
-            conversation_lines.append(f"User: {msg.content}")
-        elif msg.type == "result" and msg.content:
-            # Truncate very long results
-            text = msg.content[:2000] + "..." if len(msg.content) > 2000 else msg.content
-            conversation_lines.append(f"Assistant: {text}")
-        elif msg.type == "tool_calls" and msg.tool_calls_json:
-            try:
-                calls = json.loads(msg.tool_calls_json) if isinstance(msg.tool_calls_json, str) else msg.tool_calls_json
-                names = [c.get("name", "?") for c in (calls or [])]
-                conversation_lines.append(f"Tools called: {', '.join(names)}")
-            except Exception:
-                pass
-
-    if not conversation_lines:
+    conversation_text = flatten_messages_for_summary(db_messages)
+    if not conversation_text:
         await ws.send_json(protocol.agent_error("No conversation to compact"))
         return
-
-    conversation_text = "\n".join(conversation_lines[-60:])  # last 60 entries max
 
     compact_prompt = (
         "Summarise this conversation into a concise bullet-point list. "
@@ -9373,11 +9356,24 @@ async def _run_discovery(
         )
         await send_and_persist(config_msg, msg_type="config")
 
+        # --- Playbook retrieval (optional) --------------------------------
+        # A matched playbook seeds the probe commands with a curated set and
+        # forces a single pass. Any failure (Qdrant down, no match) degrades to
+        # the normal LLM-scoped discovery below.
+        from agentforge.playbooks import service as playbook_service
+
+        playbook_seed = None
+        try:
+            playbook_seed = await asyncio.to_thread(playbook_service.match_and_seed, query)
+        except Exception:
+            logger.debug("[Discovery] Playbook matching failed", exc_info=True)
+
         runner = DiscoveryRunner(
             planner_client=planner_client,
             worker_client=worker_client,
             registry=rt.registry,
             cancel_event=cancel_event,
+            max_rounds=1 if playbook_seed is not None else None,
         )
 
         # Helper: send transient pipeline.step event (discovery phases).
@@ -9403,11 +9399,24 @@ async def _run_discovery(
             _step_event("scoping", "running", detail="Identifying investigation areas...")
 
             scope_start = time.perf_counter()
-            areas = await _cancellable_wait(
-                asyncio.to_thread(runner.scope, query + _attachment_text_block(overrides), conversation_history),
-                cancel_event,
-                timeout=_PIPELINE_TIMEOUT,
-            )
+            if playbook_seed is not None:
+                # A matched playbook REPLACES LLM scoping: run only its curated,
+                # bounded commands (single pass). Skipping scope() avoids both the
+                # cost of the planner call and the LLM inventing slow, unbounded
+                # scans (find /, du -sh /*) that blow past the pipeline timeout.
+                areas = [playbook_seed.area]
+                logger.info(
+                    "[Discovery] Playbook '%s' (score=%.3f) replaces scoping — single-pass, %d commands",
+                    playbook_seed.playbook.id,
+                    playbook_seed.score,
+                    len(playbook_seed.area.probe_commands),
+                )
+            else:
+                areas = await _cancellable_wait(
+                    asyncio.to_thread(runner.scope, query + _attachment_text_block(overrides), conversation_history),
+                    cancel_event,
+                    timeout=_PIPELINE_TIMEOUT,
+                )
             scope_elapsed = time.perf_counter() - scope_start
 
             if not areas:
@@ -9496,9 +9505,27 @@ async def _run_discovery(
 
             _step_event("synthesising", "running", detail="Synthesising findings into plan...")
 
+            # Render the playbook template from its seeded area's outputs and pass
+            # it to synthesis as a pre-structured scaffold (raw findings kept too).
+            playbook_context = None
+            informational = False
+            if playbook_seed is not None:
+                informational = playbook_seed.playbook.synthesis == "informational"
+                seed_finding = next(
+                    (f for f in findings if f.area_id == playbook_seed.area.id),
+                    None,
+                )
+                if seed_finding is not None:
+                    try:
+                        playbook_context = playbook_service.render(playbook_seed.playbook, seed_finding)
+                    except Exception:
+                        logger.debug("[Discovery] Playbook render failed", exc_info=True)
+
             synth_start = time.perf_counter()
             plan = await _cancellable_wait(
-                asyncio.to_thread(runner.synthesise, query, findings),
+                asyncio.to_thread(
+                    runner.synthesise, query, findings, extra_context=playbook_context, informational=informational
+                ),
                 cancel_event,
                 timeout=_PIPELINE_TIMEOUT,
             )
@@ -9528,8 +9555,11 @@ async def _run_discovery(
             result_parts = [
                 "## Discovery Report\n",
                 f"**{plan.summary}**\n",
-                f"Total reclaimable: **{plan.total_reclaimable}**\n",
             ]
+            # Only when there's a real estimate — informational runs leave this
+            # empty, which would otherwise render "Total reclaimable: ****".
+            if plan.total_reclaimable:
+                result_parts.append(f"Total reclaimable: **{plan.total_reclaimable}**\n")
 
             if plan.recommendations:
                 result_parts.append("\n### Recommendations\n")
@@ -9550,10 +9580,13 @@ async def _run_discovery(
                 f"(scope: {_fmt_elapsed(scope_elapsed)}, investigate: {_fmt_elapsed(invest_elapsed)}, "
                 f"synthesise: {_fmt_elapsed(synth_elapsed)})*"
             )
-            result_parts.append(
-                "\n\n**Reply 'yes' to execute the safe recommendations, "
-                "or specify which items to run (e.g., '1, 3, 5').**"
-            )
+            # Nothing to execute (informational playbook, or a clean diagnostic
+            # run) → don't show the "Reply 'yes'" execute prompt.
+            if plan.recommendations:
+                result_parts.append(
+                    "\n\n**Reply 'yes' to execute the safe recommendations, "
+                    "or specify which items to run (e.g., '1, 3, 5').**"
+                )
 
             result_text = "\n".join(result_parts)
 
@@ -9602,21 +9635,12 @@ async def _run_discovery(
                     metadata={"type": "tool_calls", "calls": _tool_call_buffer},
                 )
 
-            # Persist the plan in metadata for Phase 4 retrieval
-            db.add_message(
-                session_id=session_id,
-                role="assistant",
-                msg_type="discovery.plan",
-                content=None,
-                metadata={
-                    "type": "discovery.plan",
-                    "plan": {
-                        "summary": plan.summary,
-                        "total_reclaimable": plan.total_reclaimable,
-                        "recommendations": plan.recommendations,
-                    },
-                },
-            )
+            # NOTE: do NOT persist a second discovery.plan record here. The plan
+            # is already persisted (for display + reload) by the
+            # send_and_persist(plan_msg, msg_type="discovery.plan") call above; a
+            # second copy rendered the plan widget twice on page reload, and
+            # nothing consumed its metadata.plan (the post-plan "yes" re-enters the
+            # agent path off the persisted result text, not the structured plan).
 
         finally:
             # Restore registry handlers

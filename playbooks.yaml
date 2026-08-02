@@ -1,0 +1,71 @@
+# playbooks.yaml — curated command-combinations + Jinja2 output templates.
+#
+# A playbook pairs a case-specific set of read-only diagnostic commands with a
+# template that pre-structures their output for the synthesis step. Playbooks are
+# retrieved semantically by the user's query (see agentforge/playbooks/). A matched
+# playbook REPLACES LLM scoping in the DiscoveryRunner: only its curated commands
+# run, single pass, then synthesis. No match -> normal LLM-scoped discovery.
+#
+# NOT the same as skills (skills.yaml): skills inject prose guidance into the
+# system prompt; playbooks are executable gather-and-format scaffolds.
+#
+# Keep commands READ-ONLY. Curated commands bypass the LLM read-only prompt hint,
+# so they rely on the runtime guard/backstop — don't ship destructive commands.
+#
+# ─── Fields ──────────────────────────────────────────────────────────────────
+#   description:      What the case is about (embedded for retrieval).
+#   trigger_examples: Example phrasings a user might type (embedded for retrieval).
+#   commands:         List of {id, command, cwd}. `id` is the placeholder key the
+#                     template references as commands.<id>.output / .ok.
+#   template_file:    Jinja2 template, relative to this file's directory.
+#   score_threshold:  Optional per-playbook match threshold (else global below).
+#
+# Global default match threshold (cosine similarity):
+score_threshold: 0.55
+
+playbooks:
+  disk-pressure:
+    description: >-
+      Diagnose low disk space or disk pressure on the host: which filesystems are
+      full, what is consuming space, Docker disk usage, and large directories.
+    trigger_examples:
+      - why is my disk full
+      - running out of disk space
+      - what is eating my storage
+      - free up disk space
+      - no space left on device
+    # macOS-tuned. Rationale (the local worker runs on macOS):
+    #  - `du -x /` is near-useless here — `/` is the ~12 Gi read-only System
+    #    volume; user data lives on /System/Volumes/Data (separate APFS volume
+    #    that -x won't cross). A full `du -d1` of that 387 Gi volume is too slow
+    #    to bound, so we don't try. df already names the full volume + the
+    #    simulator/DMG volumes; targeted per-dir `du -sh` returns immediate output.
+    #  - `timeout` bounds each scan; `-I <mask>` (BSD du) prunes dense regenerable
+    #    dev/build dirs so du skips walking them (totals exclude those dirs).
+    #  - GNU du (Linux) would need --exclude instead of -I.
+    commands:
+      - { id: df,        command: 'df -h',                                                            cwd: /tmp }
+      - { id: docker_df, command: 'timeout 30 docker system df -v 2>/dev/null',                       cwd: /tmp }
+      - { id: home,      command: 'timeout 120 du -x -h -d1 -I node_modules -I .venv -I .venv_dir -I venv -I env -I __pycache__ -I .git "$HOME" 2>/dev/null | sort -rh | head -20', cwd: /tmp }
+      - { id: hogs,      command: 'timeout 120 du -sh "$HOME/Library/Caches" "$HOME/Library/Developer" "$HOME/Library/Containers" "$HOME/Library/Application Support" "$HOME/Downloads" "$HOME/Movies" 2>/dev/null | sort -rh', cwd: /tmp }
+      - { id: snapshots, command: 'tmutil listlocalsnapshots / 2>/dev/null | head -20',               cwd: /tmp }
+    template_file: markdown/playbooks/disk-pressure.jinja
+
+  docker-status:
+    # Informational: describe/analyse container state, don't push a cleanup plan.
+#    synthesis: informational
+    description: >-
+      Report the status of local Docker containers: which are running or stopped,
+      their health and restart counts, resource usage, and overall disk footprint.
+    trigger_examples:
+      - status of all running docker containers
+      - which containers are running
+      - are my docker containers healthy
+      - show docker container resource usage
+      - what docker containers do I have
+    commands:
+      - { id: running, command: "docker ps",                     cwd: /tmp }
+      - { id: all,     command: "docker ps -a",                  cwd: /tmp }
+      - { id: stats,   command: "docker stats --no-stream",      cwd: /tmp }
+      - { id: disk,    command: "docker system df",              cwd: /tmp }
+    template_file: markdown/playbooks/docker-status.jinja

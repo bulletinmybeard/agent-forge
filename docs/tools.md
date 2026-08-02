@@ -133,7 +133,7 @@ These run in the sidecar (locality `remote`). See [Plugins and availability](#pl
 
 | Tool           | Description                                                      |
 | -------------- | ---------------------------------------------------------------- |
-| `linter_run`   | Run linters, formatters, type checkers (ruff, mypy, eslint, ...) |
+| `linter_run`   | Run linters, formatters, type checkers. Groups or `tool_name=` (ruff, black, isort, flake8, mypy, eslint, …; known-tool map if not in config) |
 | `test_runner`  | Run tests in Docker (pytest/jest/vitest), parse results          |
 | `k6_load_test` | k6 HTTP load testing: latency, throughput, error rates           |
 
@@ -260,6 +260,27 @@ Loaded as a plugin (not part of the core set), these back `@sql`. They need the 
 | `execute_sql`        | Run a SQL query (row-capped; writes confirm)                         |
 | `db_query_plan`      | `EXPLAIN ANALYZE`: execution plan, index usage, timing               |
 
+## Direct tool-run API
+
+IDE clients (and scripts) can invoke allowlisted tools **without** a chat session or LLM loop:
+
+- `POST /api/tools/run` — body `{ "tool": "linter_run", "args": { ... }, "wait": true }`
+- `GET /api/tools/run/{job_id}` — poll when `wait` is false
+- `GET /api/tools/run-allowlist` — names + resolved worker roles
+
+Dispatch reuses the same path as agent tool calls:
+
+| `dispatch.mode` / env | Where it runs |
+| --------------------- | ------------- |
+| `in_process`          | Web/runtime registry on this process |
+| `split`               | SAQ tools queue for the tool's role (`local` → macOS/native worker, `remote` → container workers) |
+
+Default allowlist is quality/git/docker oriented (`linter_run`, `test_runner`, `k6_load_test`, selected `docker_*` / `git_*`). Extend with `tools_run.allowed_tools` in `config.yaml` or `AGENTFORGE_TOOLS_RUN_ALLOW`. `shell` and `ssh` stay off unless you add them deliberately.
+
+For IntelliJ Quality (lint/format/typecheck/test), prefer this API over spawning processes inside the IDE so PATH, Docker socket, and shell policy match the native tools worker. Pass `args.tool_name` (`black`, `isort`, `flake8`, `mypy`, …) or a quality `group` (`lint` / `format` / `type` / `all`). Ensure `scripts/setup-local-worker.sh` (or the launchd plist) is running when `dispatch.mode` is `split`.
+
+Full request/response shapes: [api.md — Direct tool run](api.md#direct-tool-run).
+
 ## Plugins and availability
 
 - **Locality.** Most tools run on the host (locality `local`). The web tools (`web_search`, `web_fetch`, `web_fetch_rendered`, `web_screengrab`) run `remote`, in the scraper sidecar. Routing is set in `tool_routing.yaml`.
@@ -267,8 +288,10 @@ Loaded as a plugin (not part of the core set), these back `@sql`. They need the 
 - **Credentials.** Some tools only register (or only work) once their secret is set: TMDB (`TMDB_API_KEY`), Put.io (`PUTIO_TOKEN`), Premiumize (`PREMIUMIZE_API_KEY`), and the SQL plugin (`databases` in `config.yaml`). The infra tools (`qdrant_admin`, `redis_inspect`) talk to the stack's own Qdrant/Redis, no extra secret.
 - **External binaries.** Some tools shell out and only work if the binary is present: `ffmpeg` (video), ImageMagick (images, icons), `yt-dlp`, `jq`/`yq`, `ncdu`, `tree`, `gh`, `k6`, `ripgrep`, `remindctl` (Apple Reminders, macOS), `terminal-notifier` (desktop notifications, macOS). Missing binaries fail that one tool, not the run.
 - **Adding tools.** Third-party packages register their own via a `register(registry)` entry point under the `agentforge.tools` group, or the `AGENTFORGE_TOOL_PLUGINS` env var. See [plugin-authoring.md](plugin-authoring.md).
+- **Direct REST.** Allowlisted tools can also run outside the agent loop via `/api/tools/run` (see [Direct tool-run API](#direct-tool-run-api)).
 
 ## See also
 
 - [modes.md](modes.md): which mode exposes which tools.
 - [api-examples.md](api-examples.md): driving a tool-calling run over the WebSocket.
+- [api.md](api.md#direct-tool-run): direct tool execution for IDEs.

@@ -100,6 +100,10 @@ class InvestigationArea:
     probe_commands: list[dict]  # initial commands: [{"command": "...", "cwd": "..."}]
     hints: str = ""  # domain hints for the area agent
     priority: int = 1  # 1=high, 2=medium, 3=low
+    # Areas backed by a deterministic output template (playbooks) skip the
+    # worker-LLM analyse step: the template structures the findings, so the
+    # "dig deeper?" round-trip is redundant. Such areas are single-pass.
+    skip_analysis: bool = False
 
 
 @dataclass
@@ -285,6 +289,35 @@ For non-disk investigations, set to "" (empty string). NEVER use "N/A".
 - "size" on recommendations is optional. For non-disk items, set to "" or omit.
 - "risk" should always be set: "safe", "caution", or "danger".
 - NEVER use "N/A", "unknown", or "none" for any field — use "" instead.\
+"""
+
+
+_SYNTHESISE_INFORMATIONAL_SYSTEM_PROMPT = """\
+You are a system analyst producing an INFORMATIONAL report from investigation findings.
+The user asked to understand or analyse the current state, NOT to clean up or fix it.
+
+RULES:
+1. Write a clear, thorough "summary" that describes and analyses what was found:
+   the actual state, notable observations, and anything interesting. Be specific
+   — names, counts, sizes, resource figures. Several sentences are expected.
+2. Do NOT invent cleanup, pruning, or fixes for a healthy system.
+3. Leave "recommendations" EMPTY ([]) unless the findings reveal a GENUINE problem
+   needing attention (an error, an unhealthy/restarting service, a near-full
+   resource, a security issue). Only then add it — as "caution" or "danger" — and
+   scope it to the real issue, never routine housekeeping.
+4. "total_reclaimable" must be "" — reclaimable space is not an informational concern.
+5. Return ONLY valid JSON.
+
+OUTPUT FORMAT:
+{
+  "summary": "Detailed description and analysis of what was found ...",
+  "total_reclaimable": "",
+  "recommendations": []
+}
+
+If (and only if) a genuine problem exists, a recommendation has the same shape as
+diagnostic mode: {"area","action","size","risk","commands":[...],"needs_sudo",
+"needs_confirm"}. NEVER use "N/A"/"unknown"/"none" — use "" instead.\
 """
 
 
@@ -556,6 +589,13 @@ class DiscoveryRunner:
                 if on_area_event:
                     on_area_event(area.id, area.label, "result", entry)
 
+            # Template-backed areas (playbooks) don't need the analyse LLM — the
+            # rendered template is the structured output. Skipping it avoids a
+            # redundant, occasionally hang-prone worker call and ends the pass.
+            if area.skip_analysis:
+                finding.rounds = round_num
+                break
+
             # Analyse outputs — ask the worker LLM if we need to dig deeper
             if on_area_event:
                 on_area_event(
@@ -713,8 +753,20 @@ class DiscoveryRunner:
         self,
         query: str,
         findings: list[AreaFinding],
+        *,
+        extra_context: str | None = None,
+        informational: bool = False,
     ) -> DiscoveryPlan:
-        """Aggregate findings into an actionable plan using the heavy model."""
+        """Aggregate findings into a plan (or informational report) using the heavy model.
+
+        ``extra_context`` is an optional pre-structured scaffold (e.g. a rendered
+        playbook template) injected as an additional, clearly-labelled block. It
+        supplements the raw findings; it does not change the output schema.
+
+        ``informational`` swaps the diagnostic cleanup-plan system prompt for a
+        descriptive one: the model summarises/analyses what was found and leaves
+        ``recommendations`` empty unless a genuine problem exists. Same JSON schema.
+        """
 
         # Build findings summary for the synthesiser
         findings_text = ""
@@ -740,16 +792,19 @@ class DiscoveryRunner:
                 findings_text += f"Errors: {', '.join(f.errors)}\n"
             findings_text += "\n"
 
+        user_content = f"ORIGINAL REQUEST: {query}\n\nINVESTIGATION FINDINGS:\n{findings_text}\n"
+        if extra_context:
+            user_content += f"\nSTRUCTURED FINDINGS (curated playbook output):\n{extra_context}\n"
+        if informational:
+            user_content += "\nProduce an informational analysis of what was found."
+            system_prompt = _SYNTHESISE_INFORMATIONAL_SYSTEM_PROMPT
+        else:
+            user_content += "\nProduce an actionable cleanup plan."
+            system_prompt = _SYNTHESISE_SYSTEM_PROMPT
+
         messages = [
-            {"role": "system", "content": _SYNTHESISE_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": (
-                    f"ORIGINAL REQUEST: {query}\n\n"
-                    f"INVESTIGATION FINDINGS:\n{findings_text}\n"
-                    f"Produce an actionable cleanup plan."
-                ),
-            },
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
         ]
 
         try:

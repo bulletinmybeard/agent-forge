@@ -42,6 +42,12 @@ from .result_store import get_result_store
 from .scheduler_service import get_scheduler_service
 from .session_event_buffer import get_session_event_buffer
 from .session_source import resolve_session_source
+from .summarise import (
+    RECAP_MESSAGE_TYPE,
+    flatten_messages_for_summary,
+    select_recap_window,
+    strip_markdown,
+)
 from .ws_endpoint import (
     _AGENT_KEYWORDS,
     _AGENT_PATTERNS,
@@ -348,6 +354,140 @@ async def get_messages(
     # Legacy: return flat array of all messages
     messages = db.get_messages(session_id)
     return [m.to_dict() for m in messages]
+
+
+RECAP_TYPE = RECAP_MESSAGE_TYPE
+
+_RECAP_SYSTEM_PROMPT = "You are a concise conversation summariser."
+
+_RECAP_STYLE = (
+    'Past tense, first person plural ("We ..."). Be dense and specific — preserve names, '
+    "file paths, and numbers. Write plain prose only: no markdown, no backticks around "
+    "identifiers, no asterisks, no bullet points, no headings, no preamble. "
+    "Do not suggest next steps."
+)
+
+_RECAP_INSTRUCTION = (
+    f"Write a 1-2 sentence recap of what was accomplished in this conversation. {_RECAP_STYLE}\n\n"
+    "CONVERSATION:\n{conversation}"
+)
+
+# Later recaps are seeded with the previous one instead of re-reading the whole
+# session: the output stays a cumulative running summary while the input cost
+# stays proportional to what is new.
+_RECAP_UPDATE_INSTRUCTION = (
+    "Below is a running recap of a conversation, followed by what has happened since. "
+    "Rewrite it as a single updated 1-2 sentence recap covering BOTH — keep the earlier "
+    "work (compress it further if needed) and fold in the new exchanges. "
+    f"{_RECAP_STYLE}\n\n"
+    "RECAP SO FAR:\n{previous}\n\n"
+    "SINCE THEN:\n{conversation}"
+)
+
+
+class RecapCovered(BaseModel):
+    """Sequence range a recap was generated from."""
+
+    from_sequence: int
+    to_sequence: int
+    messages: int
+
+
+class RecapResponse(BaseModel):
+    """Response body for ``POST /api/sessions/{session_id}/recap``."""
+
+    recap: str | None = None
+    created: bool = False
+    sequence: int | None = None
+    covered: RecapCovered | None = None
+    # Why nothing was generated: no_new_messages | too_few | empty_summary | generation_failed
+    reason: str | None = None
+
+
+@router.post("/sessions/{session_id}/recap", response_model=RecapResponse)
+async def create_recap(session_id: str) -> RecapResponse:
+    """Produce a cumulative running recap of the conversation.
+
+    Only the messages after the previous recap are read (its ``sequence`` is the
+    watermark), but the previous recap text is fed back in as the seed, so the
+    result covers the whole session while the input stays proportional to what
+    is new. When nothing new exists the previous recap is returned and no LLM
+    call is made — that is what makes it safe for the client's idle timer to
+    fire repeatedly.
+
+    Generation failures return ``created=False`` rather than an error status: a
+    recap is chrome and must never disrupt the chat. The cause is logged.
+    """
+    if not af_settings.recap.enabled:
+        raise HTTPException(status_code=503, detail="Recap disabled (recap.enabled=false)")
+
+    db = get_db()
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    fresh, _watermark, previous = select_recap_window(db.get_messages(session_id), RECAP_TYPE)
+
+    if len(fresh) < af_settings.recap.min_new_messages:
+        return RecapResponse(
+            recap=previous,
+            created=False,
+            reason="no_new_messages" if not fresh else "too_few",
+        )
+
+    conversation = flatten_messages_for_summary(fresh, max_entries=af_settings.recap.max_entries)
+    if not conversation:
+        return RecapResponse(recap=previous, created=False, reason="no_new_messages")
+
+    if previous:
+        instruction = _RECAP_UPDATE_INSTRUCTION.format(previous=previous, conversation=conversation)
+    else:
+        instruction = _RECAP_INSTRUCTION.format(conversation=conversation)
+
+    try:
+        client = AIClient(profile=af_settings.recap.profile)
+        resp = await client.achat(
+            [
+                {"role": "system", "content": _RECAP_SYSTEM_PROMPT},
+                {"role": "user", "content": instruction},
+            ],
+            stream=False,
+        )
+        # The prompt asks for plain prose, but models slip markdown in anyway —
+        # and it renders literally in the recap block.
+        text = strip_markdown(resp.content or "")
+    except Exception as exc:  # noqa: BLE001 — a failed recap must not break the chat
+        logger.warning("recap: generation failed for session %s: %s", session_id[:12], exc)
+        return RecapResponse(recap=previous, created=False, reason="generation_failed")
+
+    if not text:
+        logger.warning("recap: empty summary for session %s", session_id[:12])
+        return RecapResponse(recap=previous, created=False, reason="empty_summary")
+
+    covered = RecapCovered(
+        from_sequence=fresh[0].sequence,
+        to_sequence=fresh[-1].sequence,
+        messages=len(fresh),
+    )
+    # is_volatile keeps the recap out of future conversation history, so it never
+    # feeds back into the model or into the next recap.
+    stored = db.add_message(
+        session_id=session_id,
+        role="system",
+        msg_type=RECAP_TYPE,
+        content=text,
+        metadata={"type": RECAP_TYPE, "text": text, **covered.model_dump()},
+        is_volatile=True,
+    )
+    logger.info(
+        "recap: session %s — %d message(s), sequence %d-%d",
+        session_id[:12],
+        covered.messages,
+        covered.from_sequence,
+        covered.to_sequence,
+    )
+
+    return RecapResponse(recap=text, created=True, sequence=stored.sequence, covered=covered)
 
 
 @router.get("/sessions/{session_id}/messages/around")

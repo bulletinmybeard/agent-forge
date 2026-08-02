@@ -46,6 +46,10 @@ x-app-env: &app-env
   # Shared secret for worker->web /internal callbacks (X-Internal-Token).
   # Empty = disabled (network isolation only).
   AGENTFORGE_INTERNAL_TOKEN: "${AGENTFORGE_INTERNAL_TOKEN:-}"
+  # Secret redaction (AIClient / tool results / DB). Prefer config.yaml, but
+  # env is checked first by get_redactor() and survives stale singletons only
+  # after process restart. Set false while coding-with-whole-file is the norm.
+  SECRET_REDACTION_ENABLED: "${SECRET_REDACTION_ENABLED:-false}"
 
 x-app-volumes: &app-volumes
   - ./framework-config.yaml:/app/framework-config.yaml:ro

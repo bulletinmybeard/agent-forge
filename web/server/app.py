@@ -58,6 +58,7 @@ from .permissions.api import router as permissions_api_router
 from .prompt_lab.database.manager import PromptLabDatabase
 from .scheduler_service import init_scheduler, shutdown_scheduler
 from .services.api import router as services_api_router
+from .tools_run_api import router as tools_run_api_router
 from .ws_endpoint import init_runtime
 from .ws_endpoint import router as ws_router
 
@@ -345,6 +346,9 @@ app.include_router(connectors_api_router)
 
 # Command permissions: YAML baseline + SQLite runtime overrides
 app.include_router(permissions_api_router)
+
+# Direct tool run (IDE clients: IntelliJ Quality panel, etc.) — no LLM loop
+app.include_router(tools_run_api_router)
 
 # Botty — Session Awareness Layer (WebSocket); gated by botty.enabled in config.yaml
 if af_settings.botty.enabled:

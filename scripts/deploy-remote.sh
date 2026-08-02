@@ -319,29 +319,56 @@ fi
 
 # ── Health checks + prune ─────────────────────────────────────────────
 # Only probe services the active preset actually starts.
+# NOTE: web serves no SPA at `/` (404) — probe `/api/health` instead. Using
+# `curl -sf http://localhost:8200/` made the wait look "stuck" / failed under
+# flaky SSH and never printed the Done banner when the remote block errored.
 api_active=false; deploy_has_service agentforge-api && api_active=true
+# Compose project name doubles the service prefix: agentforge-agentforge-web-1
 WORKER_CHECK=""
 for s in agentforge-worker-saq agentforge-worker-saq-tools agentforge-saq-web; do
-    deploy_has_service "$s" && WORKER_CHECK="${WORKER_CHECK:+${WORKER_CHECK} }${s}-1"
+    deploy_has_service "$s" && WORKER_CHECK="${WORKER_CHECK:+${WORKER_CHECK} }agentforge-${s}-1"
 done
 echo -e "\n${GREEN}Waiting for containers...${NC}"
-${SSH_CMD} "${SSH_HOST}" "
-  sleep 6
+# Never let the health probe abort the deploy (set -e) — report and continue.
+if ! ${SSH_CMD} "${SSH_HOST}" "
+  set +e
+  # Retry briefly: uvicorn + SearchRuntime can take >6s after recreate
+  for attempt in 1 2 3 4 5 6; do
+    api_ok=0; web_ok=0
+    if ${api_active}; then
+      curl -sf --max-time 3 http://localhost:8100/health >/dev/null 2>&1 && api_ok=1
+    else
+      api_ok=1
+    fi
+    curl -sf --max-time 3 http://localhost:8200/api/health >/dev/null 2>&1 && web_ok=1
+    if [ \"\$api_ok\" = 1 ] && [ \"\$web_ok\" = 1 ]; then
+      break
+    fi
+    sleep 5
+  done
   docker ps --format 'table {{.Names}}\t{{.Status}}' | grep -E 'agentforge|qdrant|NAMES' || true
   echo ''
   echo 'Health:'
-  if ${api_active}; then curl -sf http://localhost:8100/health >/dev/null 2>&1 && echo '  [OK] api (8100)' || echo '  [WAIT] api still starting...'; fi
-  curl -sf http://localhost:8200/ >/dev/null 2>&1 && echo '  [OK] web (8200)' || echo '  [WAIT] web still starting...'
+  if ${api_active}; then
+    curl -sf --max-time 3 http://localhost:8100/health >/dev/null 2>&1 \\
+      && echo '  [OK] api (8100)' || echo '  [WAIT] api still starting...'
+  fi
+  curl -sf --max-time 3 http://localhost:8200/api/health >/dev/null 2>&1 \\
+    && echo '  [OK] web (8200 /api/health)' || echo '  [WAIT] web still starting...'
   for s in ${WORKER_CHECK}; do
-    docker ps --format '{{.Names}}' | grep -q \"\$s\" && echo \"  [OK] \$s\" || echo \"  [WAIT] \$s\"
+    docker ps --format '{{.Names}}' | grep -qF \"\$s\" \\
+      && echo \"  [OK] \$s\" || echo \"  [WAIT] \$s\"
   done
   echo ''
   echo 'Pruning dangling images...'
   docker image prune -f >/dev/null 2>&1 || true
-"
+  exit 0
+"; then
+    echo -e "${YELLOW}[warn] health probe SSH step failed — check: ssh ${SSH_HOST} 'docker ps'${NC}"
+fi
 
-setup_local_worker
-close_ssh
+setup_local_worker || echo -e "${YELLOW}[warn] setup_local_worker returned non-zero${NC}"
+close_ssh || true
 
 echo ""
 echo -e "${GREEN}================================================${NC}"

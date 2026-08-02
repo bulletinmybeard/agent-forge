@@ -1,9 +1,10 @@
 """Multi-collection routing for the Knowledge Database API.
 
 The Knowledge Base SPA uses ``knowledge_entries`` (default). AgentForge Notes
-uses ``kb_note_entries``. Clients select a collection via the
-``X-Knowledge-Collection`` header; WebSocket agent tools inherit the session
-``source`` (``notes`` -> notes collection).
+uses ``kb_note_entries``. AgentForge Email uses ``kb_mail_entries``. Clients
+select a collection via the ``X-Knowledge-Collection`` header; WebSocket agent
+tools inherit the session ``source`` (``notes`` -> notes collection,
+``mail`` -> mail collection).
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ def allowed_collections() -> frozenset[str]:
         {
             settings.knowledge.collection_name,
             settings.knowledge.notes_collection_name,
+            settings.knowledge.mail_collection_name,
         }
     )
 
@@ -42,6 +44,10 @@ def default_collection() -> str:
 
 def notes_collection() -> str:
     return settings.knowledge.notes_collection_name
+
+
+def mail_collection() -> str:
+    return settings.knowledge.mail_collection_name
 
 
 def resolve_collection(header_value: str | None = None) -> str:
@@ -72,6 +78,8 @@ def set_request_knowledge_collection(collection: str | None) -> None:
 def collection_for_session_source(source: str | None) -> str | None:
     if source == "notes":
         return notes_collection()
+    if source == "mail":
+        return mail_collection()
     return None
 
 

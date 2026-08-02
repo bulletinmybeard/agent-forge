@@ -9,9 +9,10 @@ of showing `key: "[REDACTED:...]"`.
 from agentforge.secret_redactor import SecretRedactor
 
 
-def _redact(text: str) -> str:
+def _redact(text: str, *, high_entropy: bool = True) -> str:
     # Construct directly (not the config-backed singleton) so the test is hermetic.
-    return SecretRedactor().redact(text).text
+    # HE is opt-in: production defaults it off (CamelCase type-name FPs).
+    return SecretRedactor(detect_high_entropy=high_entropy).redact(text).text
 
 
 def test_high_entropy_catch_all_redacts_unknown_tokens():
@@ -33,6 +34,19 @@ def test_high_entropy_keeps_structured_identifiers():
         'stream: "audit:tool_executions"',
     ]:
         assert _redact(line) == line, line
+
+
+def test_high_entropy_skips_camel_case_type_names():
+    # Regression: convert-method replies were full of [REDACTED:HighEntropyString]
+    # because AcceptedOrderIntakeResponse etc. trip Shannon entropy.
+    for name in (
+        "AcceptedOrderIntakeResponse",
+        "RejectedOrderIntakeResponse",
+        "ServiceConfigurationSummary",
+        "RequestedServiceOrder",
+    ):
+        line = f") -> {name}:"
+        assert _redact(line) == line, name
 
 
 def test_high_entropy_can_be_disabled():

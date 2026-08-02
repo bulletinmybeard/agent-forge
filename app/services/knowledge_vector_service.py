@@ -110,6 +110,22 @@ class KnowledgeVectorService:
             logger.warning("Failed to retrieve point '%s': %s", point_id, e)
             return None
 
+    @staticmethod
+    def _project_conditions(
+        project: str | None = None,
+        projects: list[str] | None = None,
+    ) -> list[FieldCondition]:
+        """Exact project match, or MatchAny when multiple (All Inboxes mail isolation)."""
+        if projects:
+            cleaned = [p for p in projects if p]
+            if len(cleaned) == 1:
+                return [FieldCondition(key="project", match=MatchValue(value=cleaned[0]))]
+            if len(cleaned) > 1:
+                return [FieldCondition(key="project", match=MatchAny(any=cleaned))]
+        if project:
+            return [FieldCondition(key="project", match=MatchValue(value=project))]
+        return []
+
     def search(
         self,
         query_vector: list[float],
@@ -119,6 +135,7 @@ class KnowledgeVectorService:
         language: str | None = None,
         tags: list[str] | None = None,
         project: str | None = None,
+        projects: list[str] | None = None,
         parent_id: str | None = None,
     ) -> list[dict]:
         client = self._get_client()
@@ -130,8 +147,7 @@ class KnowledgeVectorService:
             conditions.append(FieldCondition(key="language", match=MatchValue(value=language)))
         if tags:
             conditions.append(FieldCondition(key="tags", match=MatchAny(any=tags)))
-        if project:
-            conditions.append(FieldCondition(key="project", match=MatchValue(value=project)))
+        conditions.extend(self._project_conditions(project=project, projects=projects))
         if parent_id:
             conditions.append(FieldCondition(key="parent_id", match=MatchValue(value=parent_id)))
 

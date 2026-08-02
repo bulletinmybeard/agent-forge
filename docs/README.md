@@ -3,9 +3,9 @@
 Guides for running and extending AgentForge.
 
 - [architecture.md](architecture.md): how the Docker stack fits together: the services, ports, worker localities, data stores, request flow, and **Alembic chat-DB migrations**. Start here.
-- [api.md](api.md): the HTTP + WebSocket API: search/index endpoints, the Knowledge Database (`/knowledge/*`), the `/ws/chat` agent protocol, memory endpoints, command permissions (`/api/permissions/*`), and where the live OpenAPI spec lives.
+- [api.md](api.md): the HTTP + WebSocket API: search/index endpoints, the Knowledge Database (`/knowledge/*`, Notes + Email collections), the `/ws/chat` agent protocol, memory endpoints, session recap, direct tool-run (`/api/tools/run*`), command permissions (`/api/permissions/*`), and where the live OpenAPI spec lives.
 - [api-examples.md](api-examples.md): runnable `curl` + `websocat` recipes, from a first prompt to processing the response, plus the in-prompt `@mode` / `#source` / `--flag` DSL.
-- [modes.md](modes.md): the `@mode` prefixes (built-in modes + custom agents + connectors), what each does, and when to use it.
+- [modes.md](modes.md): the `@mode` prefixes (built-in modes + custom agents + connectors), what each does, and when to use it, plus the **playbooks** that seed `@discover` with curated commands.
 - [tools.md](tools.md): every built-in agent tool, grouped by category, plus locality, confirmation gates, shell/SSH command policy, and how plugins add more.
 - [SECURITY.md](SECURITY.md): auth, sidecar/internal tokens, interactive sudo, SSRF and read-only guards, and **shell/SSH command permissions**.
 - [model-catalog.md](model-catalog.md): comparing models across providers to find equivalents (`/api/model-catalog/*`), the per-provider catalog it draws on (`/api/catalog/*`), the `data/catalogs/*.json` files, the `catalog:*` Redis cache, and the `--with-catalog` deploy flow.
@@ -13,7 +13,7 @@ Guides for running and extending AgentForge.
 - [local-domains.md](local-domains.md): deploying the stack to a Mac/Linux box behind an existing Traefik proxy with custom domains, the `deploy.env` parameters, and the optional native (launchd) tool worker.
 - [connectors.md](connectors.md): linking external accounts. The unified Google OAuth connector (Gmail, Drive, BigQuery, YouTube) and the GitLab and GitHub token connectors, plus the OAuth client setup and the REST flow.
 - [plugin-authoring.md](plugin-authoring.md): adding private tools with `@tool`, the `AGENTFORGE_TOOL_PLUGINS` seam, tool routing, and the private overlay files (`config.yaml`, `custom_agents.yaml`, `tool_routing.local.yaml`, `markdown/local/`, `plugins/`).
-- [markdown/README.md](../markdown/README.md): the service-level instruction markdown — the `skills/` instruction sets and `custom-agents/` system prompts you can edit to tune agents without touching Python.
+- [markdown/README.md](../markdown/README.md): the service-level instruction markdown — the `skills/` instruction sets, `custom-agents/` system prompts, and `playbooks/` output templates you can edit to tune agents without touching Python.
 - [sandbox/README.md](../sandbox/README.md): the no-UI harness for driving the framework (`AIClient` / `ToolRegistry` / agent loop) directly from a Python script, without the web stack.
 
 ## Two apps, two ports

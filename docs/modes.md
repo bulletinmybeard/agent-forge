@@ -17,7 +17,7 @@ Files uploaded with a prompt (via `/api/upload/{session_id}`) are injected as co
 | `@agent`              | agent      | Full tool-calling agent (files, shell, git, Docker, SSH, Apple Reminders on macOS, ...). Iterates until the task is done. |
 | `@sql`                | sql        | Generate and run SQL from natural language. Needs the SQL plugin (see below).                            |
 | `@logs`               | logs       | Log analysis: read logs, run shell/SSH, cross-reference with the web.                                    |
-| `@discover`           | discover   | Multi-phase investigation: scope the system, probe areas concurrently, synthesize, optionally fix.       |
+| `@discover`           | discover   | Multi-phase investigation: scope the system, probe areas concurrently, synthesize, optionally fix. A matching playbook replaces scoping with curated commands. |
 | `@pipeline`           | pipeline   | Typed multi-step workflow with deterministic tools (no raw shell).                                       |
 | `@scheduler`          | scheduler  | Turn natural language into recurring jobs (APScheduler).                                                 |
 | `@monitor`            | monitor    | Watch a website for changes: snapshot, then poll on a schedule.                                          |

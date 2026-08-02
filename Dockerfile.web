@@ -33,8 +33,8 @@ COPY app/ app/
 COPY web/ web/
 # Shipped agent templates (custom_agents.yaml is gitignored and bind-mounted at
 # runtime). Optional custom_agents.local.yaml merges private agents on top.
-COPY tool_routing*.yaml custom_agents.example.yaml custom_agents.local.yaml.example skills.yaml ./
-# Service-level instruction markdown: skills/ + custom-agent prompts.
+COPY tool_routing*.yaml custom_agents.example.yaml custom_agents.local.yaml.example skills.yaml playbooks.yaml ./
+# Service-level instruction markdown: skills/ + custom-agent prompts + playbook templates.
 COPY markdown/ markdown/
 # Optional private tool plugins (gitignored modules baked when present; public
 # checkouts have only the package scaffolding). Loaded via AGENTFORGE_TOOL_PLUGINS.
