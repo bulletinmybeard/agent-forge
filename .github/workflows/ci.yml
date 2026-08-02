@@ -109,8 +109,10 @@ jobs:
           path: dist/
           retention-days: 7
 
-  ci-summary:
-    name: CI Summary
+  # Job display name must be exactly "CI" — ruleset master-protecta requires that
+  # check context. Workflow name is also "CI", so the PR UI shows "CI / CI".
+  ci:
+    name: CI
     needs: [lint, typecheck, build]
     runs-on: ubuntu-latest
     if: always()
@@ -129,4 +131,14 @@ jobs:
             echo "All CI checks passed." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "Some CI checks failed — see the jobs above." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Required check must fail when any dependency failed (summary alone always exits 0).
+      - name: Require lint, typecheck, and build green
+        run: |
+          if [ "${{ needs.lint.result }}" != "success" ] \
+            || [ "${{ needs.typecheck.result }}" != "success" ] \
+            || [ "${{ needs.build.result }}" != "success" ]; then
+            echo "One or more CI jobs did not succeed."
+            exit 1
           fi
