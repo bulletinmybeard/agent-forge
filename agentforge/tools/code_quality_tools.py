@@ -28,14 +28,34 @@ _DEFAULT_CONFIG = {
     "languages": ["python", "node"],
     "use_npx": True,
     "python": {
-        "lint": ["ruff check"],
-        "format": ["ruff format --check"],
+        # Multiple tools per group — IDE / tool_name= can pick one
+        "lint": ["ruff check", "flake8"],
+        "format": ["ruff format --check", "black --check", "isort --check-only"],
         "type": ["mypy"],
         "security": ["bandit -r -ll"],
     },
     "node": {
         "lint": ["eslint"],
         "format": ["prettier --check"],
+    },
+}
+
+# When tool_name is set but missing from config groups, use these check-mode templates.
+# Keys are lowercase tool names (first argv token).
+_KNOWN_TOOL_COMMANDS: dict[str, dict[str, str]] = {
+    "python": {
+        "ruff": "ruff check",
+        "black": "black --check",
+        "isort": "isort --check-only",
+        "flake8": "flake8",
+        "mypy": "mypy",
+        "bandit": "bandit -r -ll",
+        "pylint": "pylint",
+    },
+    "node": {
+        "eslint": "eslint",
+        "prettier": "prettier --check",
+        "tsc": "tsc --noEmit",
     },
 }
 
@@ -182,19 +202,28 @@ def linter_run(path: str, group: str = "lint", tool_name: str = "", fix: bool = 
     commands: list[str] = []
 
     if tool_name:
-        # Specific tool requested — find it in any group
+        # Specific tool requested — find it in any group (match first token)
+        want = tool_name.lower().strip()
         for grp_cmds in lang_config.values():
             for cmd in grp_cmds if isinstance(grp_cmds, list) else [grp_cmds]:
-                if tool_name.lower() in cmd.lower().split()[0]:
+                first = cmd.lower().split()[0] if cmd else ""
+                if want == first or want in first:
                     commands.append(cmd)
                     break
             if commands:
                 break
+        # Config often only lists ruff — still honor black/isort/flake8 via known map
+        if not commands:
+            known = (_KNOWN_TOOL_COMMANDS.get(lang) or {}).get(want)
+            if known:
+                commands.append(known)
         if not commands:
             available = []
             for grp, cmds in lang_config.items():
                 for c in cmds if isinstance(cmds, list) else [cmds]:
                     available.append(f"  {grp}: {c}")
+            for name, cmd in sorted((_KNOWN_TOOL_COMMANDS.get(lang) or {}).items()):
+                available.append(f"  (builtin) {name}: {cmd}")
             return f"ERROR: Tool '{tool_name}' not found for {lang}.\nAvailable tools:\n" + "\n".join(available)
     elif group == "all":
         for grp_cmds in lang_config.values():
@@ -222,18 +251,21 @@ def linter_run(path: str, group: str = "lint", tool_name: str = "", fix: bool = 
         # Apply fix flag
         full_cmd = cmd_template
         if fix:
-            if "ruff check" in full_cmd:
+            if "ruff check" in full_cmd and "--fix" not in full_cmd:
                 full_cmd = full_cmd.replace("ruff check", "ruff check --fix")
             elif "ruff format --check" in full_cmd:
                 full_cmd = full_cmd.replace("ruff format --check", "ruff format")
-            elif "eslint" in full_cmd:
+            elif "eslint" in full_cmd and "--fix" not in full_cmd:
                 full_cmd += " --fix"
             elif "prettier --check" in full_cmd:
                 full_cmd = full_cmd.replace("prettier --check", "prettier --write")
             elif "isort" in full_cmd and "--check" in full_cmd:
-                full_cmd = full_cmd.replace("--check", "")
+                # isort --check-only → isort (write)
+                full_cmd = full_cmd.replace("--check-only", "").replace("--check", "")
+                full_cmd = " ".join(full_cmd.split())
             elif "black" in full_cmd and "--check" in full_cmd:
                 full_cmd = full_cmd.replace("--check", "")
+                full_cmd = " ".join(full_cmd.split())
 
         # Build argv: runner tokens + command tokens + target (no shell)
         argv = shlex.split(runner) + shlex.split(full_cmd) + [rel_target]

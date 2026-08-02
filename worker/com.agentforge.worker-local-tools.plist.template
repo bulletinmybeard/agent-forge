@@ -42,6 +42,9 @@
         <string>__REPO__</string>
         <key>PATH</key>
         <string>__VENV__/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <!-- Force off even if an old singleton / stale config.yaml is mounted -->
+        <key>SECRET_REDACTION_ENABLED</key>
+        <string>false</string>
     </dict>
 
     <key>RunAtLoad</key>

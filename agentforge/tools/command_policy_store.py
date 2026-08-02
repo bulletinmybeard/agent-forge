@@ -48,14 +48,15 @@ def _try_get_db() -> ChatDatabase | None:
         _web_unavailable = True
         return None
 
+    # Open the chat DB WITHOUT running migrations. The web stack owns the schema
+    # and migrates web_chat.db at worker startup; re-running Alembic here put a
+    # full migration on the shell/ssh hot path, which serialised every command
+    # behind a SQLite write-lock upgrade (journal_mode=DELETE) and deadlocked
+    # under concurrency when the native worker and web share the file. A genuinely
+    # missing table is handled lazily by get_runtime_override (one-shot repair,
+    # else YAML-only) — YAML policy stays authoritative either way.
     db_path = _resolve_db_path()
     _db = ChatDatabase(db_path)
-    try:
-        _db.create_tables()
-    except Exception:
-        # Schema may still be usable (or will soft-fail on read). Do not block
-        # shell/ssh on a migration race — YAML policy remains authoritative.
-        logger.warning("command_policy_store: create_tables failed for %s", db_path, exc_info=True)
     return _db
 
 

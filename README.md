@@ -35,24 +35,26 @@ These projects use AgentForge as their backend and don't run without it:
 - **Agent loop**: think -> act -> observe with tool calling, error recovery, and optional web-search escalation.
 - **Tools**: filesystem, shell, system info, Docker, Git, SSH, archives, network diagnostics, web search/fetch/render, media, code editing, macOS notifications, **Apple Reminders** (list/create/edit/complete/delete via `remindctl`), and more. Shell/SSH commands can be gated by allowlist, denylist, or confirm policy (config + runtime API).
 - **RAG**: index OpenAPI/SQL schemas, source code, docs, and transcripts into Qdrant. Query with refinement, reranking, and dedup.
-- **Knowledge Database**: personal store for notes, references, documentation, attached documents, cheatsheets, and snippets. One-call ingest, semantic search, tag faceting, and smart updates (re-embeds only when content changes). Multi-collection routing (`X-Knowledge-Collection` header) separates the KB SPA and AgentForge Notes into independent Qdrant collections. Original attachment files (PDFs, etc.) are stored alongside extracted text and downloadable via the API.
+- **Knowledge Database**: personal store for notes, references, documentation, attached documents, cheatsheets, and snippets. One-call ingest, semantic search, tag faceting, and smart updates (re-embeds only when content changes). Multi-collection routing (`X-Knowledge-Collection` header) separates the KB SPA, AgentForge Notes, and AgentForge Email into independent Qdrant collections. Original attachment files (PDFs, etc.) are stored alongside extracted text and downloadable via the API.
+- **Direct tool run**: IDE clients (e.g. IntelliJ Quality) can call allowlisted tools (`linter_run`, `test_runner`, …) over REST without an agent/LLM loop, on the same tools worker as chat.
 - **Connectors**: link external accounts as agent tools. Gmail, Drive, BigQuery, and YouTube through one Google OAuth client, plus GitLab and GitHub via personal access tokens. Multi-account, in-process, read-only by default.
 - **Pluggable**: add your own tools via a `register(registry)` entry point. No fork needed.
 - **Pipelines**: typed multi-step runner, parallel fan-out, and discovery.
+- **Playbooks**: curated command-combinations + Jinja2 output templates for known diagnostic cases, matched semantically against the query. When one hits, `@discover` runs the vetted commands instead of inventing probes, and its template pre-structures the findings.
 
 ## Documentation
 
 Operator guides live in [`docs/`](docs/README.md):
 
 - [Stack architecture](docs/architecture.md): how the containers fit together: services, ports, worker localities, data stores, request flow, and **SQLite Alembic migrations**. **Start here.**
-- [HTTP API](docs/api.md): REST + the `/ws/chat` agent WebSocket, memory endpoints, the Knowledge Database (`/knowledge/*`), and the live OpenAPI spec.
+- [HTTP API](docs/api.md): REST + the `/ws/chat` agent WebSocket, memory endpoints, the Knowledge Database (`/knowledge/*`), session recap, direct tool-run, and the live OpenAPI spec.
 - [Modes](docs/modes.md): the `@mode` prefixes (built-in modes, custom agents, connectors) and when to use each.
 - [Tools](docs/tools.md): every built-in agent tool by category, plus locality and confirmation gates.
 - [Chunking and indexing into Qdrant](chunking/README.md): the mappers (OpenAPI, SQL/tbls, live DB, code, CLI docs, Markdown), the index pipeline, the `/indexer/*` + `/search/*` endpoints, and dedup/drift QA.
 - [Deploying with custom local domains](docs/local-domains.md): running the stack behind Traefik, the `deploy.env` knobs, and the split-host worker.
 - [Connectors](docs/connectors.md): linking external accounts. The unified Google OAuth connector (Gmail, Drive, BigQuery, YouTube) and the GitLab and GitHub token connectors.
 - [Authoring tools and private overlays](docs/plugin-authoring.md): adding private tools, the `AGENTFORGE_TOOL_PLUGINS` seam, and the local overlay files.
-- [Instruction markdown](markdown/README.md): the `skills/` and `custom-agents/` markdown you edit to tune agents without touching Python.
+- [Instruction markdown](markdown/README.md): the `skills/`, `custom-agents/`, and `playbooks/` markdown you edit to tune agents without touching Python.
 - [Security](docs/SECURITY.md): auth, sidecar/internal tokens, interactive sudo, SSRF and read-only guards, and **shell/SSH command permissions** (modes, runtime overrides, named **permission profiles**).
 
 ## Run it locally

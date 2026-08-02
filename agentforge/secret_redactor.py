@@ -265,7 +265,7 @@ class SecretRedactor:
         log_findings: bool = True,
         extra_patterns: list[dict[str, str]] | None = None,
         detect_secrets_plugins: list[dict[str, Any]] | None = None,
-        detect_high_entropy: bool = True,
+        detect_high_entropy: bool = False,
         high_entropy_min_length: int = 20,
         high_entropy_min_entropy: float = 3.5,
     ) -> None:
@@ -508,6 +508,21 @@ class SecretRedactor:
             )
         )
 
+    # Pure CamelCase / PascalCase identifier (type names, class names).
+    # Shannon entropy alone flags AcceptedOrderIntakeResponse as a "secret".
+    _CAMEL_CASE_RE = re.compile(r"^[A-Z][a-z]+(?:[A-Z][a-z]+)+$")
+    # snake_case with only letters (optionally multi-segment) — not a token.
+    _SNAKE_WORDS_RE = re.compile(r"^[A-Za-z]+(?:_[A-Za-z]+)+$")
+
+    @classmethod
+    def _looks_like_identifier(cls, run: str) -> bool:
+        """True for normal code identifiers that HE must not touch."""
+        if cls._CAMEL_CASE_RE.match(run):
+            return True
+        if cls._SNAKE_WORDS_RE.match(run):
+            return True
+        return False
+
     def _scan_high_entropy_runs(self, text: str) -> list[SecretFinding]:
         """Flag contiguous random-looking runs (unknown-format tokens, any key).
 
@@ -526,6 +541,9 @@ class SecretRedactor:
                 # filesystem path or URL, not a secret. Redacting it would corrupt
                 # the path the agent passes to tools (read_file, find_files, ...).
                 if (start > 0 and line[start - 1] == "/") or (end < len(line) and line[end] == "/"):
+                    continue
+                # Type names / CamelCase symbols look high-entropy but are not secrets
+                if self._looks_like_identifier(run):
                     continue
                 if self._char_classes(run) >= 2 and self._shannon_entropy(run) >= self._he_min_entropy:
                     findings.append(
@@ -557,6 +575,13 @@ def get_redactor() -> SecretRedactor:
     """Return the module-level :class:`SecretRedactor` singleton.
 
     Lazily initialised from ``config.yaml → secret_redaction`` on first call.
+    Restart the process after changing config — the singleton does not hot-reload.
+
+    Precedence:
+    1. ``SECRET_REDACTION_ENABLED`` env (``false`` / ``0`` / ``no`` forces off;
+       ``true`` / ``1`` / ``yes`` forces on and still reads other YAML knobs)
+    2. ``secret_redaction`` block in config.yaml
+    3. Safe defaults: enabled, no high-entropy catch-all
     """
     global _instance
     if _instance is not None:
@@ -566,11 +591,16 @@ def get_redactor() -> SecretRedactor:
         if _instance is not None:
             return _instance
 
-        # Read config
-        enabled = os.getenv("SECRET_REDACTION_ENABLED", "").lower()
-        if enabled in ("0", "false", "no"):
-            _instance = SecretRedactor(enabled=False)
-            logger.info("Secret redaction disabled via environment")
+        env_flag = os.getenv("SECRET_REDACTION_ENABLED", "").strip().lower()
+        env_force_off = env_flag in ("0", "false", "no")
+        env_force_on = env_flag in ("1", "true", "yes")
+
+        if env_force_off:
+            _instance = SecretRedactor(enabled=False, detect_high_entropy=False)
+            logger.info(
+                "Secret redaction disabled via SECRET_REDACTION_ENABLED=%s",
+                env_flag,
+            )
             return _instance
 
         try:
@@ -579,30 +609,48 @@ def get_redactor() -> SecretRedactor:
             cfg = get_config()
             sr_cfg = cfg.get("secret_redaction") or {}
             if isinstance(sr_cfg, dict) and sr_cfg:
+                yaml_enabled = bool(sr_cfg.get("enabled", True))
+                if env_force_on:
+                    yaml_enabled = True
                 _instance = SecretRedactor(
-                    enabled=sr_cfg.get("enabled", True),
+                    enabled=yaml_enabled,
                     placeholder=sr_cfg.get("placeholder", "[REDACTED:{type}]"),
                     log_findings=sr_cfg.get("log_findings", True),
                     extra_patterns=sr_cfg.get("extra_patterns"),
                     detect_secrets_plugins=sr_cfg.get("detect_secrets_plugins"),
-                    detect_high_entropy=sr_cfg.get("detect_high_entropy", True),
+                    # Default OFF — HE false-positives on CamelCase type names
+                    # (AcceptedOrderIntakeResponse etc.) corrupt code-edit replies.
+                    detect_high_entropy=sr_cfg.get("detect_high_entropy", False),
                     high_entropy_min_length=sr_cfg.get("high_entropy_min_length", 20),
                     high_entropy_min_entropy=sr_cfg.get("high_entropy_min_entropy", 3.5),
                 )
             else:
-                _instance = SecretRedactor()
+                # No secret_redaction block — named detectors only, HE off
+                _instance = SecretRedactor(
+                    enabled=env_force_on or True,
+                    detect_high_entropy=False,
+                )
         except Exception as exc:
-            logger.warning("Failed to load secret_redaction config: %s — using defaults", exc)
-            _instance = SecretRedactor()
+            logger.warning(
+                "Failed to load secret_redaction config: %s — named detectors only (HE off)",
+                exc,
+            )
+            _instance = SecretRedactor(enabled=True, detect_high_entropy=False)
 
         if _instance._enabled:
             ds_plugin_names = [p.get("name", "?") for p in (_instance._ds_plugins or [])]
             logger.info(
-                "Secret redaction initialised (detect-secrets=%s, ds_plugins=%d [%s], extra_patterns=%d)",
+                "Secret redaction initialised (enabled=true, high_entropy=%s, "
+                "detect-secrets=%s, ds_plugins=%d [%s], extra_patterns=%d)",
+                _instance._detect_high_entropy,
                 "available" if _DETECT_SECRETS_AVAILABLE else "unavailable",
                 len(ds_plugin_names),
                 ", ".join(ds_plugin_names) if ds_plugin_names else "defaults",
                 len(_instance._extra_patterns),
+            )
+        else:
+            logger.info(
+                "Secret redaction disabled (config secret_redaction.enabled=false)",
             )
 
         return _instance

@@ -58,16 +58,19 @@ security:
   api_keys: []
 
 # Scans text sent to the model (and persisted) for secrets/credentials.
-# detect-secrets primary + regex safety net. Env: SECRET_REDACTION_ENABLED.
+# detect-secrets primary + regex safety net. Env: SECRET_REDACTION_ENABLED
+# (true/1/yes force on; false/0/no force off). Process restart required after
+# env/config changes — the redactor is a process singleton.
 secret_redaction:
   enabled: true
   placeholder: "[REDACTED:{type}]"
   log_findings: true
-  # High-entropy catch-all: redacts contiguous random-looking runs (tokens) that
-  # match no known signature and sit under any key name — covers arbitrary files
-  # read by the agent. Cost: may occasionally redact a legitimate long random
-  # string (content hash, UUID-without-dashes, base64 blob). Tune or disable:
-  detect_high_entropy: true
+  # High-entropy catch-all: redacts contiguous random-looking runs that match no
+  # known signature. Default off — CamelCase type names and long identifiers
+  # used to get false-positive redactions. When enabled, pure CamelCase /
+  # snake_case identifiers are skipped. Compose + the native tools worker
+  # force SECRET_REDACTION_ENABLED=false for whole-file coding paths.
+  detect_high_entropy: false
   high_entropy_min_length: 20      # shorter = more coverage but more false positives
   high_entropy_min_entropy: 3.5    # higher = stricter (fewer false positives)
   # extra_patterns:
@@ -105,11 +108,13 @@ dedup:
 #     readonly: true
 
 # -- Knowledge Database -------------------------------------------------
-# Dedicated Qdrant collection for user-created knowledge entries (notes, snippets, etc.).
-# Used by the /knowledge API endpoints. Env prefix: KNOWLEDGE_
+# Dedicated Qdrant collections for user-created knowledge entries (notes, mail, …).
+# Used by the /knowledge API endpoints. Clients pick a collection with the
+# X-Knowledge-Collection header (or session source notes|mail). Env prefix: KNOWLEDGE_
 knowledge:
   collection_name: "knowledge_entries"               # Knowledge Base SPA (default /knowledge/*)
   notes_collection_name: "kb_note_entries"             # AgentForge Notes macOS app
+  mail_collection_name: "kb_mail_entries"              # AgentForge Email macOS app
   dedup_threshold: 0.92                              # cosine; higher = stricter near-dup gate
   composite_template: "{title}\n{notes}\n{content}"  # text that gets embedded
   files_dir: "data/knowledge_files"                    # original attachments
@@ -234,17 +239,45 @@ routing:
     profile: agent-heavy         # any profile from framework-config.yaml / profiles/*
 
 # linter_run tool — auto-detects language + package manager.
+# tool_name=black|isort|flake8|… also works via built-in known-tool map if omitted here.
 linter:
   languages: ["python", "node"]
   use_npx: true
   python:
-    lint: ["ruff check"]
-    format: ["ruff format --check"]
+    lint: ["ruff check", "flake8"]
+    format: ["ruff format --check", "black --check", "isort --check-only"]
     type: ["mypy"]
     security: ["bandit -r -ll"]
   node:
     lint: ["eslint"]
     format: ["prettier --check"]
+
+# Direct tool execution for IDE clients (no LLM agent loop).
+# POST /api/tools/run — routes via tool_routing.yaml to the macOS/local tools
+# worker (SAQ) or runs in-process when AGENTFORGE_DISPATCH_MODE=in_process.
+# Default allowlist covers quality/git/docker tools; shell/ssh stay off.
+# Env: AGENTFORGE_TOOLS_RUN_ALLOW / AGENTFORGE_TOOLS_RUN_DENY (comma-separated).
+tools_run:
+  allowed_tools: []             # extra tool names merged into the built-in allowlist
+
+# Playbooks — curated command sets + Jinja templates for @discover.
+# Registry + templates are the source of truth; Qdrant holds embeddings for match.
+# CLI: python -m agentforge.playbooks.cli reindex|list|match
+# Env prefix: PLAYBOOKS_ (e.g. PLAYBOOKS_ENABLED=false)
+playbooks:
+  enabled: true
+  registry_path: playbooks.yaml
+  collection_name: agentforge_playbooks
+  score_threshold: 0.55         # global cosine floor; per-playbook override allowed
+
+# Session recap — POST /api/sessions/{id}/recap (Web UI idle timer, other clients).
+# Incremental: only messages after the last recap are read; previous recap seeds
+# the prompt so the text stays cumulative. Env prefix: RECAP_
+recap:
+  enabled: true
+  profile: cloud-light          # any profile from framework-config / profiles/*
+  min_new_messages: 2           # need at least this many new summarisable msgs
+  max_entries: 60               # last N flattened lines into the prompt
 
 # Enriches code-type search results with source snippets + grep usage sites.
 code_context:

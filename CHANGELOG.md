@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-30
+
+### Added
+
+- **Direct tool-run API** for IDE clients (no LLM loop): `POST /api/tools/run`, `GET /api/tools/run/{job_id}`, `DELETE /api/tools/run/{job_id}` (cancel + SAQ abort), `GET /api/tools/run-allowlist`. Allowlisted tools (`linter_run`, `test_runner`, docker/git helpers, …) route via `tool_routing.yaml` to the native tools worker (SAQ) or run in-process. Config `tools_run.allowed_tools` plus `AGENTFORGE_TOOLS_RUN_ALLOW` / `AGENTFORGE_TOOLS_RUN_DENY`. See [docs/api.md](docs/api.md#direct-tool-run) and [docs/tools.md](docs/tools.md#direct-tool-run-api)
+- **Playbooks**: curated command-combinations + Jinja2 output templates for `@discover`. Registry `playbooks.yaml` + templates under `markdown/playbooks/*.jinja`, retrieved semantically from a dedicated Qdrant collection (`agentforge_playbooks`, threshold-gated). A match seeds the investigation's probe commands and replaces LLM scoping (single pass, `skip_analysis`), and the rendered template pre-structures the synthesis input. Per-playbook `synthesis: diagnostic|informational` picks the cleanup-plan or descriptive-report prompt. CLI: `python -m agentforge.playbooks.cli reindex|list|match`. Config under `playbooks.*`
+- **Recap**: `POST /api/sessions/{id}/recap` returns a cumulative running summary of a session. Only messages after the previous recap are read (its `sequence` is the watermark) and the previous recap text seeds the prompt, so the summary covers the whole session at incremental cost. Persisted as a volatile `recap` message so it survives reloads without entering model context. Idle-safe: fewer than `recap.min_new_messages` (default **2**) or no new messages returns the previous recap with no LLM call. Config under `recap.*`
+- **`@rebase` skill** (`markdown/skills/git-rebase.md`): drives the local rebase-onto-default-branch flow, proposes per-file conflict resolutions and waits for approval, and enforces `--force-with-lease` (never bare `--force`, never the default branch)
+- **AgentForge Email** knowledge collection: `knowledge.mail_collection_name` (`kb_mail_entries`), allowed via `X-Knowledge-Collection` / session `source=mail`. Search accepts `projects: [...]` (MatchAny) for multi-account All Inboxes filtering
+- **JetBrains / IntelliJ custom-agent prompt** (`markdown/custom-agents/intellij.md`) for IDE-context agent runs
+
+### Changed
+
+- Session compaction and recap share one conversation flattener (`web/server/summarise.py`) instead of each carrying its own copy
+- `Dockerfile.web` ships `playbooks.yaml` alongside `skills.yaml`
+- New dependency: `jinja2` (playbook templates)
+- **`linter_run`**: multi-tool quality groups (ruff/flake8, black/isort checks, …); `tool_name=black|isort|flake8|mypy|…` resolves via a built-in known-tool map when missing from config; improved `--fix` for black/isort
+- **Secret redaction**: high-entropy catch-all defaults **off** (fewer CamelCase false positives); skip pure CamelCase / snake_case identifiers when HE is on; clearer `SECRET_REDACTION_ENABLED` force on/off; compose + native tools-worker launchd plist default redaction **off** for whole-file coding paths
+- `deploy-remote.sh` health probes: retry loop, web checks `/api/health` (not `/`), correct compose container name prefix, non-fatal SSH/health failures so the Done banner still prints
+
+### Fixed
+
+- **Command policy store no longer migrates on the shell/SSH hot path.** Opening the chat DB ran `create_tables()` (a full Alembic upgrade) on every command, which serialised each one behind a SQLite write-lock upgrade (`journal_mode=DELETE`) and deadlocked when the native worker and the web container share `web_chat.db`. A genuinely missing table is now repaired lazily by `get_runtime_override`; YAML policy stays authoritative either way
+- **`@discover` no longer double-persists `discovery.plan`** (plan widget rendered twice on session reload)
+
 ## [0.13.0] - 2026-07-19
 
 ### Added

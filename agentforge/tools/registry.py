@@ -17,7 +17,7 @@ import typing
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import FunctionType
-from typing import Any, cast
+from typing import Any
 
 from chalkbox.logging.bridge import get_logger
 
@@ -397,12 +397,16 @@ class ToolRegistry:
 
     def _evaluate_command_policy(self, name: str, args: dict[str, Any]) -> _CommandPolicyOutcome:
         """Evaluate YAML command policy for shell/ssh before CommandGuard."""
-        if name not in ("shell", "ssh"):
+        tool: ToolName
+        if name == "shell":
+            tool = "shell"
+        elif name == "ssh":
+            tool = "ssh"
+        else:
             return _CommandPolicyOutcome()
         command = (args or {}).get("command") or ""
         if not command.strip():
             return _CommandPolicyOutcome()
-        tool = cast(ToolName, name)
         policy = get_effective_policy(tool)
         verdict = evaluate(tool, command, policy)
         if verdict.action == "deny":

@@ -76,7 +76,10 @@ class KnowledgeSearchRequest(BaseModel):
     tags: list[str] | None = None
     content_type: str | None = None
     language: str | None = None
+    # Single project (exact). For multi-account mail use ``projects``.
     project: str | None = None
+    # Match any project (e.g. All Inboxes: mail:<accountId> per account).
+    projects: list[str] | None = None
     parent_id: str | None = None
     limit: int = Field(default=10, ge=1)  # clamped to 50 by cap_limit validator
     score_threshold: float | None = None
@@ -85,6 +88,14 @@ class KnowledgeSearchRequest(BaseModel):
     @classmethod
     def normalize_tags(cls, v: list[str] | None) -> list[str] | None:
         return _normalize_tags(v)
+
+    @field_validator("projects", mode="before")
+    @classmethod
+    def normalize_projects(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        cleaned = [p.strip() for p in v if isinstance(p, str) and p.strip()]
+        return cleaned or None
 
     @field_validator("limit")
     @classmethod

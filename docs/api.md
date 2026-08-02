@@ -86,14 +86,15 @@ Stored in dedicated Qdrant collections, separate from the RAG collection.
 
 ### Multi-collection routing
 
-Two collections are maintained by default:
+Three collections are maintained by default:
 
 | Collection             | Config key                           | Default              | Used by              |
 | ---------------------- | ------------------------------------ | -------------------- | -------------------- |
 | Knowledge Base (SPA)   | `knowledge.collection_name`          | `knowledge_entries`  | KB SPA (default)     |
 | AgentForge Notes       | `knowledge.notes_collection_name`    | `kb_note_entries`    | Notes macOS app      |
+| AgentForge Email       | `knowledge.mail_collection_name`     | `kb_mail_entries`    | Email macOS app      |
 
-Clients select a collection by sending the `X-Knowledge-Collection` header with the collection name. When omitted, the default collection (`knowledge_entries`) is used. WebSocket sessions with `source=notes` auto-scope `kb_search` to the notes collection.
+Clients select a collection by sending the `X-Knowledge-Collection` header with the collection name. When omitted, the default collection (`knowledge_entries`) is used. WebSocket sessions with `source=notes` or `source=mail` auto-scope `kb_search` to the notes or mail collection.
 
 ### Content types
 
@@ -169,11 +170,14 @@ Body (`KnowledgeSearchRequest`):
   "tags": ["kubernetes"],                   // optional, OR-matched
   "content_type": "cheatsheet",             // optional
   "language": null,                         // optional
-  "project": "AgentForge",                  // optional
+  "project": "AgentForge",                  // optional, exact match
+  "projects": ["mail:a1", "mail:b2"],       // optional, MatchAny (e.g. All Inboxes)
   "limit": 10,                              // optional, default 10, max 50
   "score_threshold": null                   // optional cosine floor
 }
 ```
+
+`project` is a single exact filter. `projects` matches any of the listed project values (used by AgentForge Email for multi-account "All Inboxes"). When both are set, `projects` wins.
 
 Response (`SearchResponse`):
 
@@ -374,8 +378,43 @@ Each chat session row carries a `source` tag (write-once at creation) so externa
 | GET    | `/api/sessions/{id}/messages/around` | Window around a timestamp. Query: `ts`, `window`.                      |
 | GET    | `/api/sessions/{id}/token-usage`     | Real token totals for the session.                                     |
 | GET    | `/api/sessions/{id}/job`             | Active worker job for the session, or 404.                             |
+| POST   | `/api/sessions/{id}/recap`           | Cumulative running recap (see [Session recap](#session-recap)).        |
 | PATCH  | `/api/sessions/{id}`                 | Rename. Body: `{ title }`.                                             |
 | DELETE | `/api/sessions/{id}`                 | Delete the session and its messages.                                   |
+
+### Session recap
+
+`POST /api/sessions/{id}/recap` produces a short plain-text running summary for the Web UI (idle timer) or other clients.
+
+Behaviour:
+
+- Only messages **after** the previous recap are read (that recap's `sequence` is the watermark).
+- The previous recap text is fed back into the prompt so the result stays **cumulative** while input cost stays proportional to what is new.
+- The new recap is stored as a volatile `recap` message (`is_volatile`): it survives reloads but never enters model context or the next recap's message window.
+- Generation failures return `created=false` (not an HTTP error) so an idle timer never breaks chat.
+
+Config (`recap.*` / env prefix `RECAP_`):
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `enabled` | `true` | `503` when false |
+| `profile` | `cloud-light` | Model profile for the summary call |
+| `min_new_messages` | `2` | Minimum new summarisable messages (query/result/tool_calls) before regenerating |
+| `max_entries` | `60` | Cap on flattened lines sent to the model |
+
+Response (`RecapResponse`):
+
+```jsonc
+{
+  "recap": "We fixed the login timeout and re-ran pytest.",
+  "created": true,
+  "sequence": 42,
+  "covered": { "from_sequence": 10, "to_sequence": 41, "messages": 8 },
+  "reason": null   // when created=false: no_new_messages | too_few | empty_summary | generation_failed
+}
+```
+
+When there is nothing new enough to summarise, the previous recap is returned with `created=false` and **no LLM call**.
 
 ## Memory
 
@@ -400,6 +439,40 @@ Facts (SQLite `user_facts`) and conversation memory (Qdrant `conversation_memory
 Investigative modes (`agent`, `web_search`, `research`, `sql`, ...) keep session chat but skip cross-session memory by policy (`web/server/memory_policy.py`).
 So a deployment that has only run `@search`/`@agent` will show empty memory. That's expected.
 
+## Direct tool run
+
+Run a registered tool **without** an agent/LLM loop. Intended for IDE plugins and scripts that need `linter_run`, `test_runner`, docker/git helpers, etc. on the same host PATH as the tools worker.
+
+Routing matches agent cross-dispatch: `tool_routing.yaml` + `AGENTFORGE_DISPATCH_MODE`. In `split` mode the call is enqueued on the role's tools queue (e.g. macOS `agentforge:tools:local`). In `in_process` it runs on the web process registry.
+
+| Method | Path                        | Purpose                                                                 |
+| ------ | --------------------------- | ----------------------------------------------------------------------- |
+| POST   | `/api/tools/run`            | Execute one allowlisted tool. Body: `tool`, `args`, optional `timeout_s`, `wait`, `session_id`. |
+| GET    | `/api/tools/run/{job_id}`   | Poll a job started with `wait: false`.                                  |
+| DELETE | `/api/tools/run/{job_id}`   | Cancel a running job (best-effort SAQ abort on the tools worker).       |
+| GET    | `/api/tools/run-allowlist`  | List tools allowed for direct run, with resolved role per tool.         |
+
+Default allowlist: `linter_run`, `test_runner`, `k6_load_test`, selected `docker_*` and `git_*`. `shell` / `ssh` are **not** included — open them only via `tools_run.allowed_tools` or `AGENTFORGE_TOOLS_RUN_ALLOW` if you accept the risk. Deny always wins: `AGENTFORGE_TOOLS_RUN_DENY`.
+
+Example (sync wait, local tools worker):
+
+```bash
+curl -sS -X POST http://localhost:8200/api/tools/run \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "tool": "linter_run",
+    "args": {"path": "/app", "group": "lint"},
+    "timeout_s": 300,
+    "wait": true
+  }'
+```
+
+Response fields: `job_id`, `status` (`queued` | `running` | `done` | `error`), `tool`, `role`, `output`, `error`, `duration_s`, `dispatch` (`in_process` | `saq`).
+
+Async: set `wait: false`, then poll `GET /api/tools/run/{job_id}` until `done` or `error`. Job records live in the web process memory (~1h TTL).
+
+See [tools.md — Direct tool-run API](tools.md#direct-tool-run-api) and [local-domains.md](local-domains.md#native-local-worker-optional) for the native worker.
+
 ## Other REST groups
 
 Grouped by subsystem. See the live `/docs` for full request/response schemas.
@@ -414,6 +487,7 @@ Grouped by subsystem. See the live `/docs` for full request/response schemas.
 | Monitor    | `/api/monitor/*`                                                                                 | Website-change monitors + checks.                                                                |
 | Connectors | `/api/connectors/*`                                                                              | Google (Gmail/Drive/BigQuery/YouTube) OAuth + GitLab token connections (see [connectors.md](connectors.md)). |
 | Permissions | `/api/permissions/commands/*`, `/api/permissions/profiles/*`                                    | Shell/SSH command policy: YAML baseline + SQLite runtime overrides, named profiles (`tight`/`open`/user), dry-run validate (see [SECURITY.md](SECURITY.md#command-permissions-shell--ssh)). |
+| Tools run  | `/api/tools/run*`, `/api/tools/run-allowlist`                                                    | Direct allowlisted tool execution (no LLM); SAQ → tools worker or in-process (see [Direct tool run](#direct-tool-run)). |
 | Canvas     | `/api/canvas/*`                                                                                  | Per-session pinned-items workspace.                                                              |
 | Configs    | `/api/configs*`                                                                                  | Read-only view of whitelisted YAML config files.                                                 |
 | Services   | `/api/services*`                                                                                 | Container/service health dashboard + log tail/stream.                                            |

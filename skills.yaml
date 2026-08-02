@@ -198,6 +198,23 @@ skills:
     auto_detect: true
     priority: 0
 
+  # ── Git Rebase (execute the local rebase) ───────────────────────────
+  git-rebase:
+    description: "Rebase a feature branch onto the default branch, force-with-lease, propose conflict fixes"
+    instruction_file: markdown/skills/git-rebase.md
+    condensed: |
+      [Skill: Git Rebase]
+      Sequence: update the default branch -> git rebase origin/<default> from the feature
+      branch -> on conflict, PROPOSE resolutions per file and STOP for approval -> after
+      approval git add + git rebase --continue -> git push --force-with-lease (never --force;
+      never master/main). Require a clean working tree first; on resume, re-check git status
+      for an in-progress rebase.
+    aliases: ["@rebase"]
+    keywords: ["rebase", "force-with-lease", "rebase --continue", "onto master", "onto main"]
+    modes: ["agent"]
+    auto_detect: true
+    priority: 1
+
   # ── SQL Optimization ───────────────────────────────────────────────
   sql-optimization:
     description: "SQL tuning — EXPLAIN analysis, indexes, query patterns, DuckDB"

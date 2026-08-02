@@ -19,8 +19,17 @@ class TestResolveCollection:
         with (
             patch.object(reg.settings.knowledge, "collection_name", "knowledge_entries"),
             patch.object(reg.settings.knowledge, "notes_collection_name", "kb_note_entries"),
+            patch.object(reg.settings.knowledge, "mail_collection_name", "kb_mail_entries"),
         ):
             assert reg.resolve_collection("kb_note_entries") == "kb_note_entries"
+
+    def test_mail_header(self):
+        with (
+            patch.object(reg.settings.knowledge, "collection_name", "knowledge_entries"),
+            patch.object(reg.settings.knowledge, "notes_collection_name", "kb_note_entries"),
+            patch.object(reg.settings.knowledge, "mail_collection_name", "kb_mail_entries"),
+        ):
+            assert reg.resolve_collection("kb_mail_entries") == "kb_mail_entries"
 
     def test_rejects_unknown_header(self):
         with pytest.raises(HTTPException) as exc:
@@ -31,6 +40,7 @@ class TestResolveCollection:
         with (
             patch.object(reg.settings.knowledge, "collection_name", "knowledge_entries"),
             patch.object(reg.settings.knowledge, "notes_collection_name", "kb_note_entries"),
+            patch.object(reg.settings.knowledge, "mail_collection_name", "kb_mail_entries"),
         ):
             reg.set_request_knowledge_collection("kb_note_entries")
             assert reg.resolve_collection() == "kb_note_entries"
@@ -39,6 +49,22 @@ class TestResolveCollection:
         with patch.object(reg.settings.knowledge, "notes_collection_name", "kb_note_entries"):
             assert reg.collection_for_session_source("notes") == "kb_note_entries"
             assert reg.collection_for_session_source("web") is None
+
+    def test_session_source_mail(self):
+        with patch.object(reg.settings.knowledge, "mail_collection_name", "kb_mail_entries"):
+            assert reg.collection_for_session_source("mail") == "kb_mail_entries"
+            assert reg.collection_for_session_source("other") is None
+
+    def test_allowed_includes_mail(self):
+        with (
+            patch.object(reg.settings.knowledge, "collection_name", "knowledge_entries"),
+            patch.object(reg.settings.knowledge, "notes_collection_name", "kb_note_entries"),
+            patch.object(reg.settings.knowledge, "mail_collection_name", "kb_mail_entries"),
+        ):
+            allowed = reg.allowed_collections()
+            assert "knowledge_entries" in allowed
+            assert "kb_note_entries" in allowed
+            assert "kb_mail_entries" in allowed
 
 
 class TestGetKnowledgeService:

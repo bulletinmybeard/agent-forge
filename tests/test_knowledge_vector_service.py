@@ -94,6 +94,28 @@ class TestSearch:
         assert len(results) == 1
         assert results[0]["score"] == 0.95
 
+    def test_search_with_single_project(self, svc, mock_client):
+        mock_client.query_points.return_value = types.SimpleNamespace(points=[])
+        svc.search(query_vector=[0.1], limit=5, project="mail:acct-a")
+        qf = mock_client.query_points.call_args.kwargs["query_filter"]
+        must = qf.must or []
+        assert any(getattr(c, "key", None) == "project" for c in must)
+
+    def test_search_with_projects_match_any(self, svc, mock_client):
+        mock_client.query_points.return_value = types.SimpleNamespace(points=[])
+        svc.search(
+            query_vector=[0.1],
+            limit=5,
+            projects=["mail:acct-a", "mail:acct-b"],
+        )
+        qf = mock_client.query_points.call_args.kwargs["query_filter"]
+        must = qf.must or []
+        project_conds = [c for c in must if getattr(c, "key", None) == "project"]
+        assert len(project_conds) == 1
+        match = project_conds[0].match
+        assert hasattr(match, "any")
+        assert set(match.any) == {"mail:acct-a", "mail:acct-b"}
+
     def test_search_with_tag_filter(self, svc, mock_client):
         mock_client.query_points.return_value = types.SimpleNamespace(points=[])
         svc.search(query_vector=[0.1], limit=5, tags=["python", "docker"])

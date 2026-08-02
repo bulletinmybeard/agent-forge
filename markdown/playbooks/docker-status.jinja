@@ -1,0 +1,14 @@
+{# Docker status — structured findings for the synthesis step. #}
+## Running Containers (docker ps)
+{{ commands.running.output }}
+
+## All Containers, incl. stopped (docker ps -a)
+{{ commands.all.output }}
+
+{% if commands.stats.ok and commands.stats.output %}
+## Resource Usage (docker stats)
+{{ commands.stats.output }}
+{% endif %}
+
+## Disk Footprint (docker system df)
+{{ commands.disk.output }}

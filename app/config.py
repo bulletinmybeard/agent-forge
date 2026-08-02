@@ -579,6 +579,8 @@ class KnowledgeSettings(BaseSettings):
     notes_collection_name: str = Field(
         default=_yaml.get("knowledge", {}).get("notes_collection_name", "kb_note_entries")
     )
+    # AgentForge Email macOS app — mail chunks only (X-Knowledge-Collection header).
+    mail_collection_name: str = Field(default=_yaml.get("knowledge", {}).get("mail_collection_name", "kb_mail_entries"))
     dedup_threshold: float = Field(default=_yaml.get("knowledge", {}).get("dedup_threshold", 0.92))
     composite_template: str = Field(
         default=_yaml.get("knowledge", {}).get("composite_template", "{title}\n{notes}\n{content}")
@@ -587,6 +589,38 @@ class KnowledgeSettings(BaseSettings):
     max_attachment_bytes: int = Field(
         default=int(_yaml.get("knowledge", {}).get("max_attachment_bytes", 50 * 1024 * 1024))
     )
+
+
+class PlaybookSettings(BaseSettings):
+    """Curated command-combinations + Jinja2 templates for the DiscoveryRunner.
+
+    Files (playbooks.yaml + markdown/playbooks/*.jinja) are the source of truth;
+    a dedicated Qdrant collection is the semantic-retrieval layer.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="PLAYBOOKS_")
+
+    enabled: bool = Field(default=bool(_yaml.get("playbooks", {}).get("enabled", True)))
+    registry_path: str = Field(default=_yaml.get("playbooks", {}).get("registry_path", "playbooks.yaml"))
+    collection_name: str = Field(default=_yaml.get("playbooks", {}).get("collection_name", "agentforge_playbooks"))
+    score_threshold: float = Field(default=_yaml.get("playbooks", {}).get("score_threshold", 0.55))
+
+
+class RecapSettings(BaseSettings):
+    """Idle-triggered conversation recaps shown under the last assistant response.
+
+    Incremental: each recap covers only the messages after the previous recap,
+    whose ``sequence`` acts as the watermark.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="RECAP_")
+
+    enabled: bool = Field(default=bool(_yaml.get("recap", {}).get("enabled", True)))
+    profile: str = Field(default=_yaml.get("recap", {}).get("profile", "cloud-light"))
+    # One complete exchange is enough — later recaps fold into the running
+    # summary, so even a short exchange produces something useful.
+    min_new_messages: int = Field(default=_yaml.get("recap", {}).get("min_new_messages", 2))
+    max_entries: int = Field(default=_yaml.get("recap", {}).get("max_entries", 60))
 
 
 class Settings(BaseSettings):
@@ -628,6 +662,8 @@ class Settings(BaseSettings):
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     slack: SlackSettings = Field(default_factory=SlackSettings)
     knowledge: KnowledgeSettings = Field(default_factory=KnowledgeSettings)
+    playbooks: PlaybookSettings = Field(default_factory=PlaybookSettings)
+    recap: RecapSettings = Field(default_factory=RecapSettings)
 
 
 settings = Settings()

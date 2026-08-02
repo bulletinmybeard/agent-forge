@@ -97,7 +97,7 @@ The deploy script (`scripts/deploy-remote.sh`, via `COMPOSE_ENV`) forwards the d
    `--scale redis=0` skips the bundled Redis. Containers use host-native Redis via `REMOTE_REDIS_URL` (typically `redis://host.docker.internal:6379`).
 
 1. On macOS, installs/refreshes the native local worker (see below) unless `--no-local-worker`.
-1. Health-checks `:8100/health` and `:8200/`, then prunes dangling images.
+1. Health-checks `:8100/health` and `:8200/api/health` (with retries; web serves no SPA at `/`), then prunes dangling images. Probe failures are non-fatal so a flaky SSH step does not hide a successful deploy.
 
 Useful flags: `--no-build`, `--no-cache`, `--config-only` (scp config + recreate, no rsync), `--api-only` / `--web-only` / `--sidecar-only`, and the `--saq-*` / `--workers-only` restart-only fast paths.
 
@@ -132,6 +132,8 @@ scripts/setup-local-worker.sh uninstall  # unload + remove plist
 
 Logs land in `~/Library/Logs/com.agentforge.worker-local-tools/`.
 launchd is macOS-only. On Linux run the same `saq` command under systemd with the equivalent env vars.
+
+IDE clients can call allowlisted tools on this worker without an LLM loop via `POST /api/tools/run` (see [api.md — Direct tool run](api.md#direct-tool-run)). Quality tools (`linter_run`, `test_runner`) route to role `local` by default, so the native worker must be up when dispatch mode is `split`.
 
 ## Why some routes aren't in /docs
 
