@@ -23,7 +23,7 @@ from chalkbox.logging.bridge import get_logger
 
 from agentforge.config import get_config
 from agentforge.tools.command_guard import get_guard
-from agentforge.tools.command_policy import evaluate
+from agentforge.tools.command_policy import ToolName, evaluate
 from agentforge.tools.command_policy_store import get_effective_policy
 from agentforge.tools.routing import (
     _LEGACY_LOCALITY_MAP,
@@ -397,13 +397,18 @@ class ToolRegistry:
 
     def _evaluate_command_policy(self, name: str, args: dict[str, Any]) -> _CommandPolicyOutcome:
         """Evaluate YAML command policy for shell/ssh before CommandGuard."""
-        if name not in ("shell", "ssh"):
+        tool: ToolName
+        if name == "shell":
+            tool = "shell"
+        elif name == "ssh":
+            tool = "ssh"
+        else:
             return _CommandPolicyOutcome()
         command = (args or {}).get("command") or ""
         if not command.strip():
             return _CommandPolicyOutcome()
-        policy = get_effective_policy(name)
-        verdict = evaluate(name, command, policy)
+        policy = get_effective_policy(tool)
+        verdict = evaluate(tool, command, policy)
         if verdict.action == "deny":
             return _CommandPolicyOutcome(
                 cancel_message=(f"Refused: command blocked by policy ({verdict.source}). {verdict.reason}"),
