@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.15.0 - 2026-08-23
+
 ### Added
 
 - **`@trip` / `@tripplanner` custom agent**: plans A→B drives or city walking tours with timed stops, then publishes an interactive Leaflet map. OpenRouteService for geocode / directions / POIs (`ORS_API_KEY` or `tools.ors.api_key`). Map at `GET /trips/{uuid}`; toggling a stop re-routes via `POST /api/trips/{uuid}/route` (the key never reaches the browser). Optional detours over +45 min / +50 km vs origin→destination are disabled on publish. See [docs/modes.md](docs/modes.md), [docs/tools.md](docs/tools.md#openrouteservice-trips), [docs/api.md](docs/api.md#trips)
