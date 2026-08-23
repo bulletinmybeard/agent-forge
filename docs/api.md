@@ -6,7 +6,7 @@ It runs as two FastAPI apps with different exposure:
 | App              | Module              | Port   | Exposure                                                      |
 | ---------------- | ------------------- | ------ | ------------------------------------------------------------- |
 | `agentforge-api` | `app/main.py`       | `8100` | RAG indexing + search + Knowledge Database. LAN-only.         |
-| `agentforge-web` | `web/server/app.py` | `8200` | Chat WebSocket + REST + agent runners. The public entrypoint. |
+| `agentforge-web` | `web/server/app.py` | `8200` | Chat WebSocket + REST + agent runners + trip maps. The public entrypoint. |
 
 ## Live reference
 
@@ -342,7 +342,10 @@ Client -> server (JSON). The prompt goes in `text`; the mode is chosen from the 
 { "type": "query", "text": "@agent list the markdown files here",
   "session_id": "...",                     // optional; only used to set the id on the first query
   "overrides": { "provider": "ollama",     // optional; provider is stamped once, on the first query
-                 "source": "kb" } }         // optional; client tag (write-once); default "web"
+                 "source": "kb",           // optional; client tag (write-once); default "web"
+                 "profiles": {             // optional; per-role model / temperature / max_tokens
+                   "agent": { "model": "qwen2.5:32b", "temperature": 0.2 }
+                 } } }
 { "type": "cancel" }                       // stop the running job
 { "type": "confirm.response", "request_id": "...", "confirmed": true }
 { "type": "secret.response", "request_id": "...", "value": "..." }  // masked secret (e.g., sudo password)
@@ -429,7 +432,7 @@ Two stores, both populated by the backend after a successful run (not by the cal
 | GET    | `/api/memory/exchanges`              | List stored Q&A exchanges (Qdrant scroll). Query: `limit`, `offset`. |
 | DELETE | `/api/memory/exchanges/{id}`         | Delete one exchange.                                                 |
 | DELETE | `/api/memory/exchanges`              | Clear all exchanges.                                                 |
-| GET    | `/api/memory/schemas`                | Cached SQL schemas (for `@sql`).                                     |
+| GET    | `/api/memory/schemas`                | Cached SQL schemas (for `@sql`). Includes `schema_tool_available`; never 503s when the private plugin is missing. |
 | POST   | `/api/memory/schemas/{db}/scan`      | Refresh a schema cache.                                              |
 | DELETE | `/api/memory/schemas/{db}`           | Clear one cached schema.                                             |
 | PUT    | `/api/memory/schemas/cache/disabled` | Toggle "always fetch fresh". Body: `{ disabled }`.                   |
@@ -473,6 +476,25 @@ Async: set `wait: false`, then poll `GET /api/tools/run/{job_id}` until `done` o
 
 See [tools.md — Direct tool-run API](tools.md#direct-tool-run-api) and [local-domains.md](local-domains.md#native-local-worker-optional) for the native worker.
 
+## Trips
+
+Published `@trip` itineraries. JSON is the source of truth under `data/trips/{uuid}.json`. The HTML map is server-templated; the OpenRouteService key stays on the server. Routes are registered **before** the SPA catch-all.
+
+Needs `ORS_API_KEY` or `tools.ors.api_key`. Without a key, the agent tools error and re-route returns 4xx/5xx from ORS.
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| GET | `/trips/{uuid}` | Interactive Leaflet map (HTML). `Cache-Control: no-store`. `{uuid}.html` is accepted. |
+| GET | `/api/trips/{uuid}` | Trip JSON (hydrated: schedule, geometry). |
+| POST | `/api/trips/{uuid}/route` | Re-route. Body: `{ "enabled_stop_ids": ["..."] }`. Origin/destination stay on. |
+| PATCH | `/api/trips/{uuid}` | Same as re-route via `enabled_stop_ids`, or replace the trip JSON with `{ "trip": { ... } }`. |
+
+Coordinates in trip JSON and agent tools are `[lat, lon]`. ORS itself uses `[lon, lat]` — the client converts. Optional stops that add more than **+45 min / +50 km** vs origin→destination are disabled on publish; the map can re-enable them.
+
+The WebUI (and any reverse proxy in front of chat) must forward `/trips/` to this service, same as `/api` and `/ws`.
+
+See [modes.md](modes.md) (`@trip`) and [tools.md — OpenRouteService](tools.md#openrouteservice-trips).
+
 ## Other REST groups
 
 Grouped by subsystem. See the live `/docs` for full request/response schemas.
@@ -488,6 +510,7 @@ Grouped by subsystem. See the live `/docs` for full request/response schemas.
 | Connectors | `/api/connectors/*`                                                                              | Google (Gmail/Drive/BigQuery/YouTube) OAuth + GitLab token connections (see [connectors.md](connectors.md)). |
 | Permissions | `/api/permissions/commands/*`, `/api/permissions/profiles/*`                                    | Shell/SSH command policy: YAML baseline + SQLite runtime overrides, named profiles (`tight`/`open`/user), dry-run validate (see [SECURITY.md](SECURITY.md#command-permissions-shell--ssh)). |
 | Tools run  | `/api/tools/run*`, `/api/tools/run-allowlist`                                                    | Direct allowlisted tool execution (no LLM); SAQ → tools worker or in-process (see [Direct tool run](#direct-tool-run)). |
+| Trips      | `/trips/{uuid}`, `/api/trips/{uuid}`, `/api/trips/{uuid}/route`                                  | Published `@trip` maps + JSON + re-route (see [Trips](#trips)). |
 | Canvas     | `/api/canvas/*`                                                                                  | Per-session pinned-items workspace.                                                              |
 | Configs    | `/api/configs*`                                                                                  | Read-only view of whitelisted YAML config files.                                                 |
 | Services   | `/api/services*`                                                                                 | Container/service health dashboard + log tail/stream.                                            |

@@ -3,7 +3,7 @@
 Guides for running and extending AgentForge.
 
 - [architecture.md](architecture.md): how the Docker stack fits together: the services, ports, worker localities, data stores, request flow, and **Alembic chat-DB migrations**. Start here.
-- [api.md](api.md): the HTTP + WebSocket API: search/index endpoints, the Knowledge Database (`/knowledge/*`, Notes + Email collections), the `/ws/chat` agent protocol, memory endpoints, session recap, direct tool-run (`/api/tools/run*`), command permissions (`/api/permissions/*`), and where the live OpenAPI spec lives.
+- [api.md](api.md): the HTTP + WebSocket API: search/index endpoints, the Knowledge Database (`/knowledge/*`, Notes + Email collections), the `/ws/chat` agent protocol, memory endpoints, session recap, direct tool-run (`/api/tools/run*`), command permissions (`/api/permissions/*`), **trip maps** (`/trips/{uuid}`, `/api/trips/*`), and where the live OpenAPI spec lives.
 - [api-examples.md](api-examples.md): runnable `curl` + `websocat` recipes, from a first prompt to processing the response, plus the in-prompt `@mode` / `#source` / `--flag` DSL.
 - [modes.md](modes.md): the `@mode` prefixes (built-in modes + custom agents + connectors), what each does, and when to use it, plus the **playbooks** that seed `@discover` with curated commands.
 - [tools.md](tools.md): every built-in agent tool, grouped by category, plus locality, confirmation gates, shell/SSH command policy, and how plugins add more.
@@ -23,7 +23,7 @@ The stack runs two FastAPI apps:
 | App              | Module              | Port   | Scope                                                      |
 | ---------------- | ------------------- | ------ | ---------------------------------------------------------- |
 | `agentforge-api` | `app/main.py`       | `8100` | RAG indexing + vector search + Knowledge Database. LAN-only. |
-| `agentforge-web` | `web/server/app.py` | `8200` | Chat WebSocket + REST + agent runners. Public via Traefik. |
+| `agentforge-web` | `web/server/app.py` | `8200` | Chat WebSocket + REST + agent runners + trip maps. Public via Traefik. |
 
 Only `agentforge-web` is exposed publicly.
 The indexing/search API stays on the LAN.

@@ -106,6 +106,20 @@ Hosts must be on `tools.ssh.allowed_hosts`. Remote **command strings** use the s
 
 These run in the sidecar (locality `remote`). See [Plugins and availability](#plugins-and-availability). The sidecar validates targets (no private/loopback/link-local URLs unless `SIDECAR_ALLOW_PRIVATE_URLS=1`) and requires `X-Sidecar-Token` when `SIDECAR_AUTH_TOKEN` is set. See [SECURITY.md](SECURITY.md) for more.
 
+## OpenRouteService (trips)
+
+Geocoding, driving/walking directions, and POIs for the `@trip` agent. Always registered; each tool errors until `ORS_API_KEY` or `tools.ors.api_key` is set. Coordinates are `[lat, lon]` (ORS itself uses `[lon, lat]`; the client converts). The key never goes to the browser — the map page re-routes through `/api/trips/{id}/route`. ORS calls retry on 429/502/503. `wiki_place_image` hits the Wikipedia REST summary API (needs a real User-Agent); do not invent image URLs.
+
+| Tool            | Description                                              |
+| --------------- | -------------------------------------------------------- |
+| `ors_geocode`   | Forward geocode an address or place                      |
+| `ors_reverse`   | Reverse geocode lat/lon to a label                       |
+| `ors_route`     | `driving-car` or `foot-walking` through ordered waypoints |
+| `ors_pois`      | POIs near a point or along a route linestring            |
+| `trip_publish`  | Persist a trip and return `/trips/{uuid}`                |
+| `trip_get`      | Load a published trip JSON                               |
+| `wiki_place_image` | Wikimedia thumbnail for a place name (never invent URLs) |
+
 ## CLI helpers
 
 | Tool                 | Description                               |

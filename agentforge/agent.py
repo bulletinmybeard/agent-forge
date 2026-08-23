@@ -140,6 +140,78 @@ def _looks_like_fabricated_tool_use(text: str, offered_tools: list[str] | None) 
     return names_a_tool and bool(_FABRICATED_RESULT_RE.search(text))
 
 
+# Mid-loop plan fragments reasoning models dump as "final" content/thinking
+# instead of either calling tools or writing the full answer.
+_PLAN_FRAGMENT_RE = re.compile(
+    r"^(?:"
+    r"now\b|let me\b|i(?:'ll| will| should| need to| am going to)\b|"
+    r"next\b|looking at\b|moving on\b|continuing\b|then\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_plan_fragment(text: str) -> bool:
+    """Short transitional narration after tools — not a complete answer."""
+    t = (text or "").strip()
+    if not t or len(t) > 500:
+        return False
+    if _PLAN_FRAGMENT_RE.search(t):
+        return True
+    # Trailing ellipsis / "next:" style incomplete closers
+    return bool(re.search(r"(?:\.\.\.|…)\s*$|:\s*$", t)) and len(t) < 280
+
+
+def _best_answer_from_iterations(
+    iterations: list[AgentIteration],
+    *,
+    ctx_thinking: str | None = None,
+) -> str:
+    """Pick the best leftover text when the loop exits without a final answer.
+
+    Collects content and thinking from newest to oldest, prefers non-plan
+    fragments, then the longest remaining candidate. Tool dumps are a
+    separate salvage step.
+    """
+    candidates: list[str] = []
+    for it in reversed(iterations):
+        for text in ((it.response or "").strip(), (it.thought or "").strip()):
+            if text and text not in candidates:
+                candidates.append(text)
+    ctx_t = (ctx_thinking or "").strip()
+    if ctx_t and ctx_t not in candidates:
+        candidates.append(ctx_t)
+    if not candidates:
+        return ""
+    non_plan = [c for c in candidates if not _looks_like_plan_fragment(c)]
+    pool = non_plan or candidates
+    return max(pool, key=len)
+
+
+def _coerce_final_text(
+    content: str | None,
+    thinking: str | None,
+    *,
+    iterations: list[AgentIteration] | None = None,
+    ctx_thinking: str | None = None,
+) -> str:
+    """Pick user-visible final text from content, thinking, or leftovers.
+
+    Prefers content; falls back to thinking; if both look like plan fragments
+    and we have iteration history, prefer the best leftover instead.
+    """
+    text = (content or "").strip() or (thinking or "").strip()
+    if not text:
+        if iterations is not None:
+            return _best_answer_from_iterations(iterations, ctx_thinking=ctx_thinking)
+        return ""
+    if iterations is not None and _looks_like_plan_fragment(text):
+        better = _best_answer_from_iterations(iterations, ctx_thinking=thinking or ctx_thinking)
+        if better and len(better) > len(text) and not _looks_like_plan_fragment(better):
+            return better
+    return text
+
+
 # Default system prompt that teaches the model the think/act/observe pattern
 DEFAULT_AGENT_SYSTEM_PROMPT = """\
 You are a helpful AI assistant with access to tools.
@@ -170,7 +242,10 @@ success from memory.
 6. Never prefix your reply with a bracketed timestamp like \
 ``[2026-04-10 23:43]`` — those are historical markers added by the system, \
 not something you should emit.
-7. When you have the answer, respond with plain text (no tool calls).
+7. When you have the answer, respond with plain text (no tool calls). Put \
+the full answer in response content, not only in a private thinking channel. \
+When quoting code from tool results, copy it verbatim — do not invent or \
+corrupt regexes, strings, or line numbers.
 8. When the user asks to "show", "display", "print", "cat", or "output" the \
 contents of a file (or says "full content", "raw content", "verbatim"), \
 you MUST present the COMPLETE file content inside a fenced code block \
@@ -869,29 +944,31 @@ class AgentLoop:
             # --- No tool calls → final answer ---
             if not response.tool_calls:
                 final_text = (response.content or "").strip()
+                thinking_text = (response.thinking or "").strip()
 
                 # Cloud models sometimes return empty content with no tool
-                # calls (e.g., after <think> stripping, or transient API
-                # quirks).  If we have prior tool results in context, nudge
+                # calls (e.g., after <think> stripping, or native thinking
+                # only).  If we have prior tool results in context, nudge
                 # the model to produce a real answer instead of accepting
-                # the empty response — but only retry once to avoid loops.
+                # empty/mid-plan CoT — but only retry once to avoid loops.
                 if not final_text and i > 1 and not getattr(ctx, "_empty_nudge_sent", False):
                     logger.warning(
-                        "[Agent] Empty response with no tool calls at iteration %d — nudging model to summarise",
+                        "[Agent] Empty response with no tool calls at iteration %d "
+                        "(thinking_len=%d) — nudging model to summarise",
                         i,
+                        len(thinking_text),
                     )
                     ctx._empty_nudge_sent = True
-                    ctx.messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "[System] Your previous response was empty. "
-                                "Please provide your final answer based on the "
-                                "tool results you already have. Do not call any "
-                                "more tools — just summarise the findings."
-                            ),
-                        }
+                    _empty_nudge = (
+                        "[System] Your previous response had no user-visible answer "
+                        "(content was empty"
+                        + ("; reasoning was only in the thinking channel" if thinking_text else "")
+                        + "). Provide your COMPLETE final answer now based on the "
+                        "tool results you already have. Write the full answer in "
+                        "the response content — do not only think. Do not call more "
+                        "tools unless a critical fact is still missing."
                     )
+                    ctx.messages.append({"role": "user", "content": _empty_nudge})
                     # Emit as "warning" (not "recovery") — the event builder
                     # for `recovery` expects tool/error/attempt/max_retries
                     # (tool-retry schema); this empty-response nudge is a
@@ -908,6 +985,64 @@ class AgentLoop:
                     iteration.duration = time.perf_counter() - iter_start
                     iterations.append(iteration)
                     continue  # retry with the nudge
+
+                # After the empty nudge (or on a pure no-tool turn), promote
+                # native thinking / pick best leftover so we don't salvage tools.
+                if not final_text:
+                    final_text = _coerce_final_text(
+                        None,
+                        thinking_text,
+                        iterations=iterations + [iteration],
+                        ctx_thinking=ctx.thinking,
+                    )
+                    if final_text:
+                        logger.info(
+                            "[Agent] Using thinking/leftover as final answer (iteration %d, %d chars)",
+                            i,
+                            len(final_text),
+                        )
+
+                # Plan fragment after tools: "Now the app/config.py pieces…"
+                # is narration, not the requested write-up. Nudge once.
+                if (
+                    any_tool_ran
+                    and final_text
+                    and _looks_like_plan_fragment(final_text)
+                    and not getattr(ctx, "_plan_fragment_nudge_sent", False)
+                ):
+                    logger.warning(
+                        "[Agent] Plan-fragment final at iteration %d (%d chars) — nudging for complete answer",
+                        i,
+                        len(final_text),
+                    )
+                    ctx._plan_fragment_nudge_sent = True
+                    # Keep the fragment in history so the model continues from it
+                    ctx.messages.append({"role": "assistant", "content": final_text})
+                    if thinking_text and thinking_text != final_text:
+                        ctx.messages[-1]["thinking"] = thinking_text
+                    ctx.messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "[System] That reply looks like a progress note, not the "
+                                "final answer. Write the COMPLETE answer now covering every "
+                                "part of the user request. Use the tool results you already "
+                                "have. Do not call more tools unless something essential "
+                                "is still missing."
+                            ),
+                        }
+                    )
+                    self._on_event(
+                        "warning",
+                        {
+                            "iteration": i,
+                            "category": "plan_fragment",
+                            "message": "Model returned a mid-plan fragment — nudging for full answer",
+                        },
+                    )
+                    iteration.duration = time.perf_counter() - iter_start
+                    iterations.append(iteration)
+                    continue
 
                 # Fabricated-tool-use guard: the model produced a text-only
                 # answer that narrates tool calls and reports results (e.g., a
@@ -992,8 +1127,9 @@ class AgentLoop:
 
             # Add assistant message with tool_calls (for correct Ollama role
             # ordering). Carry the provider's reasoning trace when present so
-            # interleaved-reasoning models (MiniMax M2, Nemotron) keep their
-            # thread across turns — dropping it confuses them into restarting.
+            # interleaved-reasoning models (MiniMax M2, Nemotron, DeepSeek via
+            # Ollama message.thinking) keep their thread across turns — dropping
+            # it confuses them into restarting or empty finals.
             _assistant_msg: dict[str, Any] = {
                 "role": "assistant",
                 "content": response.content or "",
@@ -1003,6 +1139,8 @@ class AgentLoop:
             }
             if response.reasoning_details:
                 _assistant_msg["reasoning_details"] = response.reasoning_details
+            if response.thinking:
+                _assistant_msg["thinking"] = response.thinking
             ctx.messages.append(_assistant_msg)
 
             tool_results: list[dict] = []
@@ -1424,17 +1562,98 @@ class AgentLoop:
                     iteration.duration,
                 )
 
-        else:
-            # Max iterations reached without a final answer
-            ctx.add_error(f"Agent reached max iterations ({self._max_iterations}) without a final answer")
-            # Use the last response as the result
-            if not ctx.result and iterations:
-                ctx.result = iterations[-1].response
+            # Last budgeted iteration still spent on tools: force one closing
+            # text turn (no tools). Thinking models often burn the budget on
+            # tool_calls + empty content; without this we hit for/else salvage.
+            if i >= self._max_iterations and not ctx.result:
+                logger.warning(
+                    "[Agent] Max iterations (%d) after tools — forcing final answer turn",
+                    self._max_iterations,
+                )
+                ctx.messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "[System] Iteration budget is exhausted. Do NOT call any more "
+                            "tools. Write your COMPLETE final answer now from the tool "
+                            "results you already have."
+                        ),
+                    }
+                )
+                self._on_event(
+                    "warning",
+                    {
+                        "iteration": i,
+                        "category": "force_final",
+                        "message": "Max iterations after tools — forcing final answer",
+                    },
+                )
+                try:
+                    _call_ctx = contextvars.copy_context()
+                    future = _model_pool.submit(
+                        _call_ctx.run,
+                        self._client.chat,
+                        ctx.messages,
+                        attachments=ctx.attachments or None,
+                        tools=None,
+                        deep_think=self._deep_think,
+                        temperature=self._temperature,
+                    )
+                    force_resp = future.result(timeout=_ITER_TIMEOUT)
+                    if not isinstance(force_resp, ChatResponse):
+                        raise TypeError(f"Expected ChatResponse, got {type(force_resp).__name__}")
+                    if force_resp.thinking:
+                        ctx.thinking = force_resp.thinking
+                    force_iter = AgentIteration(
+                        iteration=i + 1,
+                        thought=force_resp.thinking,
+                        response=force_resp.content or "",
+                        duration=0.0,
+                    )
+                    iterations.append(force_iter)
+                    force_text = _coerce_final_text(
+                        force_resp.content,
+                        force_resp.thinking,
+                        iterations=iterations,
+                        ctx_thinking=ctx.thinking,
+                    )
+                    if force_text:
+                        ctx.result = force_text
+                        ctx.add_assistant_message(force_text)
+                        logger.info(
+                            "[Agent] Force-final answer (%d chars) after max iterations",
+                            len(force_text),
+                        )
+                except Exception as exc:
+                    logger.warning("[Agent] Force-final turn failed: %s", exc)
+                break
 
-        # Safety net: if ctx.result is still empty after the loop, try to
-        # salvage something useful from tool results gathered during the run.
+        else:
+            # Max iterations reached without a final answer (no tools on last
+            # turn either — empty content / only thinking already handled above,
+            # or the model never produced anything usable).
+            ctx.add_error(f"Agent reached max iterations ({self._max_iterations}) without a final answer")
+            if not ctx.result and iterations:
+                best = _best_answer_from_iterations(iterations, ctx_thinking=ctx.thinking)
+                if best:
+                    ctx.result = best
+                    logger.info(
+                        "[Agent] Max iterations — using best leftover content/thinking (%d chars)",
+                        len(best),
+                    )
+
+        # Safety net: prefer thinking/content leftovers over raw tool dumps.
         if not ctx.result and iterations:
-            # Collect non-empty tool results from all iterations
+            best = _best_answer_from_iterations(iterations, ctx_thinking=ctx.thinking)
+            if best:
+                ctx.result = best
+                logger.warning(
+                    "[Agent] Empty result after %d iterations — promoted leftover thinking/content (%d chars)",
+                    len(iterations),
+                    len(best),
+                )
+
+        if not ctx.result and iterations:
             salvaged: list[str] = []
             for it in iterations:
                 for tr in it.tool_results or []:

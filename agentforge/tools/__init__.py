@@ -50,6 +50,7 @@ def register_core_tools(registry: ToolRegistry) -> int:
     from .netdiag_tools import register_netdiag_tools
     from .network_tools import register_network_tools
     from .notify import register_notify_tools
+    from .ors_tools import register_ors_tools
     from .qdrant_tools import register_qdrant_tools
     from .redis_tools import register_redis_tools
     from .reminders_tools import register_reminders_tools
@@ -58,6 +59,7 @@ def register_core_tools(registry: ToolRegistry) -> int:
     from .system import register_system_tools
     from .testing_tools import register_testing_tools
     from .tmdb import register_tmdb_tools
+    from .trip_tools import register_trip_tools
     from .web_render import register_web_render_tools
     from .web_search import register_web_search_tools
 
@@ -87,6 +89,8 @@ def register_core_tools(registry: ToolRegistry) -> int:
     count += register_qdrant_tools(registry)
     count += register_redis_tools(registry)
     count += register_tmdb_tools(registry)
+    count += register_ors_tools(registry)
+    count += register_trip_tools(registry)
     return count
 
 

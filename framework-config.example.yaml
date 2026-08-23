@@ -99,6 +99,9 @@ tools:
       enabled: true           # LLM-based destructive-command detection
       fast_path: false
       model: ""               # empty = use the 'fast' profile
+  ors:
+    api_key: ""                 # OpenRouteService key, or env ORS_API_KEY
+    base_url: ""                # empty = https://api.openrouteservice.org
   web_search:
     provider: ollama          # ollama | brave | tavily
     provider_fallbacks: []

@@ -24,6 +24,7 @@ import httpx
 from chalkbox.logging.bridge import get_logger
 
 from ..typing_utils import callable_name
+from ._thinking import strip_inline_think
 from .base import Backend
 
 if TYPE_CHECKING:
@@ -422,12 +423,12 @@ class OpenAICompatibleBackend(Backend):
             reasoning_details = None
 
         # Fallback for providers that inline <think> tags in content instead of
-        # using the dedicated reasoning field.
+        # using the dedicated reasoning field. Fence-aware: do not destroy
+        # quoted <think> examples inside code blocks.
         if self._profile.parse_thinking and content and not thinking:
-            match = re.search(r"<think>(.*?)</think>", content, re.DOTALL)
-            if match:
-                thinking = match.group(1).strip()
-                content = re.sub(r"<think>.*?</think>\s*", "", content, flags=re.DOTALL).strip()
+            content, tag_thinking = strip_inline_think(content)
+            if tag_thinking:
+                thinking = tag_thinking
 
         tool_calls: list[dict] | None = None
         raw_calls = message.get("tool_calls")

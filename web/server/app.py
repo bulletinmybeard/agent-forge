@@ -59,6 +59,8 @@ from .prompt_lab.database.manager import PromptLabDatabase
 from .scheduler_service import init_scheduler, shutdown_scheduler
 from .services.api import router as services_api_router
 from .tools_run_api import router as tools_run_api_router
+from .trips.api import init_trips
+from .trips.api import router as trips_router
 from .ws_endpoint import init_runtime
 from .ws_endpoint import router as ws_router
 
@@ -144,6 +146,10 @@ async def lifespan(app: FastAPI):
         max_files = web_cfg.get("max_files_per_request", max_files)
 
     set_upload_config(upload_path, max_size_mb=int(max_size), max_files=int(max_files))
+
+    trips_root = SERVICE_ROOT / "data" / "trips"
+    trips_root.mkdir(parents=True, exist_ok=True)
+    init_trips(trips_root)
 
     # Serve uploaded files (images need to be accessible for thumbnails)
     upload_path.mkdir(parents=True, exist_ok=True)
@@ -349,6 +355,9 @@ app.include_router(permissions_api_router)
 
 # Direct tool run (IDE clients: IntelliJ Quality panel, etc.) — no LLM loop
 app.include_router(tools_run_api_router)
+
+# Interactive trip maps (@trip) — must be before the SPA catch-all
+app.include_router(trips_router)
 
 # Botty — Session Awareness Layer (WebSocket); gated by botty.enabled in config.yaml
 if af_settings.botty.enabled:

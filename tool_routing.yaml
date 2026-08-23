@@ -49,6 +49,13 @@ rules:
       - web_search
       - web_fetch
       - web_fetch_rendered
+      - ors_geocode
+      - ors_reverse
+      - ors_route
+      - ors_pois
+      - trip_publish
+      - trip_get
+      - wiki_place_image
     role: remote
   - tools:
       - "*"

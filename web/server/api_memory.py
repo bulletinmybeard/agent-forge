@@ -200,6 +200,17 @@ def clear_exchanges() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _import_schema_tool():
+    """Load sql_schema_tool helpers; return None when the private plugin is absent."""
+    try:
+        from agentforge.tools import sql_schema_tool as mod
+
+        return mod
+    except Exception as exc:
+        logger.warning("sql_schema_tool not available: %s", exc)
+        return None
+
+
 @router.get("/schemas")
 def list_schemas() -> dict[str, Any]:
     """Return the list of configured databases with cache status per DB.
@@ -216,21 +227,33 @@ def list_schemas() -> dict[str, Any]:
           "view_count": int,
         }
     Plus top-level ``cache_disabled`` so the UI can render the global toggle.
+
+    Never 503s the Memory modal when the optional SQL schema plugin is
+    missing — return configured DBs with empty cache metadata instead.
     """
     try:
-        from agentforge.tools.sql_schema_tool import (
-            get_cached_schema_metadata,
-            is_cache_disabled,
-        )
         from app.services.db_service import db_service
     except Exception as exc:
-        logger.warning("list_schemas: import failed: %s", exc)
-        raise HTTPException(status_code=503, detail="DB service not available")
+        logger.warning("list_schemas: db_service import failed: %s", exc)
+        return {
+            "cache_disabled": False,
+            "schema_tool_available": False,
+            "databases": [],
+        }
+
+    schema_mod = _import_schema_tool()
+    get_meta = getattr(schema_mod, "get_cached_schema_metadata", None) if schema_mod else None
+    is_disabled = getattr(schema_mod, "is_cache_disabled", None) if schema_mod else None
 
     databases = []
     for key in db_service.available_databases:
         entry = db_service._configs.get(key)
-        meta = get_cached_schema_metadata(key) or {}
+        meta: dict[str, Any] = {}
+        if get_meta is not None:
+            try:
+                meta = get_meta(key) or {}
+            except Exception as exc:
+                logger.warning("list_schemas: metadata for %s failed: %s", key, exc)
         databases.append(
             {
                 "database": key,
@@ -244,8 +267,16 @@ def list_schemas() -> dict[str, Any]:
             }
         )
 
+    cache_disabled = False
+    if is_disabled is not None:
+        try:
+            cache_disabled = bool(is_disabled())
+        except Exception as exc:
+            logger.warning("list_schemas: is_cache_disabled failed: %s", exc)
+
     return {
-        "cache_disabled": is_cache_disabled(),
+        "cache_disabled": cache_disabled,
+        "schema_tool_available": schema_mod is not None,
         "databases": databases,
     }
 
@@ -262,13 +293,19 @@ def scan_schema(database: str) -> dict[str, Any]:
     cache as a side effect, so after dispatch we read metadata from Redis
     just like any other call.
     """
+    schema_mod = _import_schema_tool()
+    if schema_mod is None:
+        raise HTTPException(
+            status_code=503,
+            detail="sql_schema_tool not installed (private plugin missing on this host)",
+        )
     try:
         from agentforge.tools.routing import get_role_for_tool
-        from agentforge.tools.sql_schema_tool import get_cached_schema_metadata
         from web.server.queue.dispatch_compat import saq_dispatch_tool
     except Exception as exc:
         logger.warning("scan_schema: import failed: %s", exc)
         raise HTTPException(status_code=503, detail="DB service not available")
+    get_cached_schema_metadata = schema_mod.get_cached_schema_metadata
 
     target_role = get_role_for_tool("sql_extract_schema")
     try:
@@ -304,9 +341,13 @@ def scan_schema(database: str) -> dict[str, Any]:
 @router.delete("/schemas/{database}")
 def clear_schema(database: str) -> dict[str, Any]:
     """Remove one cached schema."""
-    from agentforge.tools.sql_schema_tool import clear_cached_schema
-
-    ok = clear_cached_schema(database)
+    schema_mod = _import_schema_tool()
+    if schema_mod is None:
+        raise HTTPException(
+            status_code=503,
+            detail="sql_schema_tool not installed (private plugin missing on this host)",
+        )
+    ok = schema_mod.clear_cached_schema(database)
     if not ok:
         raise HTTPException(status_code=503, detail="Redis not available")
     return {"database": database, "cleared": True}
@@ -315,9 +356,13 @@ def clear_schema(database: str) -> dict[str, Any]:
 @router.delete("/schemas")
 def clear_all_schemas() -> dict[str, Any]:
     """Remove every cached schema (disable flag is preserved)."""
-    from agentforge.tools.sql_schema_tool import clear_all_cached_schemas
-
-    removed = clear_all_cached_schemas()
+    schema_mod = _import_schema_tool()
+    if schema_mod is None:
+        raise HTTPException(
+            status_code=503,
+            detail="sql_schema_tool not installed (private plugin missing on this host)",
+        )
+    removed = schema_mod.clear_all_cached_schemas()
     return {"cleared": removed}
 
 
@@ -327,8 +372,12 @@ def set_schema_cache_disabled(body: dict[str, Any]) -> dict[str, Any]:
 
     Request body: ``{"disabled": true | false}``
     """
-    from agentforge.tools.sql_schema_tool import is_cache_disabled, set_cache_disabled
-
+    schema_mod = _import_schema_tool()
+    if schema_mod is None:
+        raise HTTPException(
+            status_code=503,
+            detail="sql_schema_tool not installed (private plugin missing on this host)",
+        )
     disabled = bool(body.get("disabled"))
-    set_cache_disabled(disabled)
-    return {"cache_disabled": is_cache_disabled()}
+    schema_mod.set_cache_disabled(disabled)
+    return {"cache_disabled": schema_mod.is_cache_disabled()}

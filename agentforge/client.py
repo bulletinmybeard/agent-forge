@@ -23,6 +23,7 @@ from .backends.base import Backend
 from .backends.ollama import OllamaBackend
 from .config import AIProfile, ConfigManager, get_config
 from .secret_redactor import RedactionResult, get_redactor
+from .session_overrides import apply_session_overrides
 
 logger = get_logger(__name__)
 
@@ -46,26 +47,57 @@ FallbackHook = Callable[[str, str, BaseException], None]
 _models_used: ContextVar[list[str] | None] = ContextVar("agentforge_models_used", default=None)
 
 
+def normalize_model_label(model: str | None) -> str:
+    """Short stable label for summary display.
+
+    - ``deepseek/deepseek-v4-flash`` → ``deepseek-v4-flash``
+    - keeps ``:cloud`` / tag suffixes so cloud vs local stays visible
+    """
+    if not model:
+        return ""
+    m = str(model).strip()
+    if "/" in m:
+        m = m.rsplit("/", 1)[-1]
+    return m
+
+
 def reset_models_used() -> None:
-    """Begin a fresh per-request model chain. Call once at request start."""
+    """Begin a fresh per-request model chain. Call once at request start.
+
+    Must run in the parent context *before* any ``asyncio.to_thread`` /
+    executor work so the shared list object is visible to worker threads
+    (they mutate it in place via copy_context).
+    """
     _models_used.set([])
 
 
 def add_model_used(model: str | None) -> None:
     """Record a model that just answered, collapsing consecutive duplicates so
     the chain reads as transitions (e.g., ministral-3 -> mistral-large)."""
-    if not model:
+    label = normalize_model_label(model)
+    if not label:
         return
     chain = _models_used.get()
     if chain is None:
-        return  # tracking not initialised for this request — skip silently
-    if not chain or chain[-1] != model:
-        chain.append(model)
+        # Tracking not initialised — skip rather than create a thread-local
+        # list the parent would never see (copy_context would not share it).
+        return
+    if not chain or chain[-1] != label:
+        chain.append(label)
 
 
-def get_models_used() -> list[str]:
-    """Return the per-request model chain (consecutive duplicates collapsed)."""
-    return list(_models_used.get() or [])
+def get_models_used(*extra: str | None) -> list[str]:
+    """Return the per-request model chain (consecutive duplicates collapsed).
+
+    Optional *extra* models (e.g. the primary agent client) are appended when
+    missing so a failed contextvar still surfaces at least the main model.
+    """
+    models = list(_models_used.get() or [])
+    for m in extra:
+        label = normalize_model_label(m)
+        if label and label not in models:
+            models.append(label)
+    return models
 
 
 # ---------------------------------------------------------------------------
@@ -139,14 +171,27 @@ class AIClient:
         profile: str | AIProfile | None = None,
         config: ConfigManager | None = None,
         config_path: str | None = None,
+        session_overrides: dict | None = None,
     ) -> None:
         self._config = config or get_config(config_path)
 
         # Resolve profile
+        profile_key: str | None = None
         if isinstance(profile, AIProfile):
             self._profile = profile
+            profile_key = profile.name
         else:
+            profile_key = profile
             self._profile = self._config.get_profile(profile)
+
+        # Session Profile Overrides modal (Web UI): merge model/temp/max_tokens
+        # from overrides.profiles[<role>] (and legacy flat model/temperature).
+        if session_overrides:
+            self._profile = apply_session_overrides(
+                self._profile,
+                session_overrides,
+                profile_key=profile_key,
+            )
 
         self._backend: Backend = _build_backend(self._profile)
         # Fallback backends are built lazily on first use so a profile with a
@@ -482,7 +527,9 @@ class AIClient:
                         deep_think=deep_think,
                         keep_alive=keep_alive,
                     )
-                    add_model_used(resp.model or profile.model)
+                    # Prefer the configured profile model (honours session
+                    # overrides); fall back to provider-reported name.
+                    add_model_used(profile.model or getattr(resp, "model", None))
                     return resp
                 except BaseException as exc:
                     if self._is_cancellation(exc):
@@ -546,7 +593,7 @@ class AIClient:
                         deep_think=deep_think,
                         keep_alive=keep_alive,
                     )
-                    add_model_used(resp.model or profile.model)
+                    add_model_used(profile.model or getattr(resp, "model", None))
                     return resp
                 except BaseException as exc:
                     if self._is_cancellation(exc):

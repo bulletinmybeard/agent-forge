@@ -252,6 +252,7 @@ def agent_summary(
     tools: dict[str, int],
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
+    models: list[str] | None = None,
 ) -> dict:
     msg: dict = {
         "type": "agent.summary",
@@ -265,18 +266,18 @@ def agent_summary(
         msg["prompt_tokens"] = prompt_tokens
         msg["completion_tokens"] = completion_tokens
         msg["total_tokens"] = total
-    # Models actually used this request (query refiner -> agent -> any fallback /
-    # escalation -> answer refiner), de-duped into a transition chain. Read from
-    # the request-scoped contextvar AIClient appends to; empty when only one
-    # model ran or tracking wasn't initialised.
+    # Models actually used this request (classifier / agent / fallbacks / …).
+    # Prefer an explicit list from the runner; fall back to the request-scoped
+    # contextvar AIClient appends to.
     try:
         from agentforge.client import get_models_used
 
-        models = get_models_used()
-        if models:
-            msg["models"] = models
+        chain = list(models) if models is not None else get_models_used()
+        if chain:
+            msg["models"] = chain
     except Exception:  # noqa: BLE001 — never let summary formatting fail a run
-        pass
+        if models:
+            msg["models"] = list(models)
     return msg
 
 

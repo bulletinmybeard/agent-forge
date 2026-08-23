@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>__TITLE__</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Oswald:wght@500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>__CSS__</style>
+</head>
+<body>
+  <div class="app">
+    <aside class="panel">
+      <header class="brand">
+        <div class="brand-top">
+          <div>
+            <p class="eyebrow">Trip</p>
+            <h1 id="trip-title">__TITLE__</h1>
+          </div>
+        </div>
+        <p class="lede" id="lede"></p>
+        <div class="meta" id="meta"></div>
+      </header>
+      <ul class="timeline" id="timeline"></ul>
+      <p class="error" id="form-error" hidden></p>
+      <p class="legal">
+        Map data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors.
+        Directions © <a href="https://openrouteservice.org/">openrouteservice</a> / HeiGIT.
+      </p>
+    </aside>
+    <button type="button" class="split-handle" id="split-handle" aria-label="Resize panel">
+      <svg viewBox="0 0 8 24" aria-hidden="true"><rect x="3" y="4" width="2" height="16" rx="1"/></svg>
+    </button>
+    <div class="stage">
+      <div id="map"></div>
+      <div class="board">
+        <p class="board-kicker" id="board-kicker">Route</p>
+        <p class="board-time" id="board-time">--</p>
+        <p class="board-sub" id="board-sub"></p>
+        <dl class="board-stats">
+          <div><dt>Time</dt><dd id="stat-time">--</dd></div>
+          <div><dt>Distance</dt><dd id="stat-km">--</dd></div>
+          <div><dt>Stops</dt><dd id="stat-stops">0</dd></div>
+        </dl>
+      </div>
+    </div>
+  </div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    window.TRIP = __TRIP_JSON__;
+    window.TRIP_API = __API_BASE__;
+  </script>
+  <script>__JS__</script>
+</body>
+</html>

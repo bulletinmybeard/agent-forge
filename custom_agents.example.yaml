@@ -249,6 +249,25 @@ agents:
     max_iterations: 12
     description: "AgentForge Notes — personal memory assistant (kb_search, Apple Reminders, optional local read, web)"
 
+  # ── Trip planner ────────────────────────────────────────────────────────
+  trip:
+    aliases: ["@trip", "@tripplanner"]
+    profile: cloud-heavy
+    tools:
+      - ors_geocode
+      - ors_reverse
+      - ors_route
+      - ors_pois
+      - trip_publish
+      - trip_get
+      - wiki_place_image
+      - web_search
+      - web_fetch
+      - web_fetch_rendered
+    system_prompt: markdown/custom-agents/trip.md
+    max_iterations: 20
+    description: "Plan a trip with a timed itinerary and an interactive map"
+
   # Add your own agents below (or in your gitignored custom_agents.yaml after
   # copying this file). Restart the web service to pick up changes.
 

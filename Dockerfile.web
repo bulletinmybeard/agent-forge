@@ -40,7 +40,7 @@ COPY markdown/ markdown/
 # checkouts have only the package scaffolding). Loaded via AGENTFORGE_TOOL_PLUGINS.
 COPY plugins/ plugins/
 
-RUN mkdir -p /app/data /app/data/uploads
+RUN mkdir -p /app/data /app/data/uploads /app/data/trips
 
 # Run Alembic migrations for chat + prompt_lab before starting the process.
 # Workers reuse this image; their command is overridden in compose and still

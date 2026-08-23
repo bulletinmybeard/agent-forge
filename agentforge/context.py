@@ -51,6 +51,7 @@ class PipelineContext:
     # Agent-loop nudge flags (one-shot retries for empty / fabricated answers).
     _empty_nudge_sent: bool = False
     _fabrication_nudge_sent: bool = False
+    _plan_fragment_nudge_sent: bool = False
 
     # -- convenience helpers ------------------------------------------------
 

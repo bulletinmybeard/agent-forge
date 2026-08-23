@@ -259,6 +259,17 @@ if [ "${CONFIG_ONLY}" = true ]; then
         "${PROJECT_ROOT}/custom_agents.yaml" "${PROJECT_ROOT}/custom_agents.local.yaml" \
         "${PROJECT_ROOT}/skills.yaml" \
         "${SSH_HOST}:${REMOTE_DIR}/"
+    # Optional private overlays (may be absent on some machines).
+    for _opt in tool_routing.local.yaml; do
+        if [ -f "${PROJECT_ROOT}/${_opt}" ]; then
+            ${SCP_CMD} "${PROJECT_ROOT}/${_opt}" "${SSH_HOST}:${REMOTE_DIR}/"
+        fi
+    done
+    # Private system prompts for custom agents (e.g. markdown/local/afemail.md)
+    if [ -d "${PROJECT_ROOT}/markdown/local" ]; then
+        ${SSH_CMD} "${SSH_HOST}" "mkdir -p ${REMOTE_DIR}/markdown/local"
+        ${SCP_CMD} -r "${PROJECT_ROOT}/markdown/local/." "${SSH_HOST}:${REMOTE_DIR}/markdown/local/"
+    fi
     ${SSH_CMD} "${SSH_HOST}" "rm -rf ${REMOTE_DIR}/profiles && mkdir -p ${REMOTE_DIR}/profiles"
     ${SCP_CMD} -r "${PROJECT_ROOT}/profiles/." "${SSH_HOST}:${REMOTE_DIR}/profiles/"
     echo -e "${GREEN}[OK] config synced${NC}"
