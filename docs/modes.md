@@ -57,10 +57,13 @@ Custom agents are focused presets defined in `custom_agents.yaml` (copy from `cu
 | `@test`     | test-mode      | Run tests, diagnose failures, and suggest fixes                    |
 | `@api`      | api-test       | API endpoint testing, validation, and exploration                  |
 | `@notes`    | notes          | Personal memory assistant: `kb_search` + Apple Reminders + optional local read/web |
+| `@trip`, `@tripplanner` | trip | Timed itinerary + interactive OpenRouteService map (driving-car / walking) |
 
 Add private agents such as `@felix` in your gitignored `custom_agents.yaml` after copying `custom_agents.example.yaml`. See [plugin-authoring.md](plugin-authoring.md).
 
 The `@notes` agent targets AgentForge Notes sessions (`source=notes`) and prefers `reminders_*` tools for system Reminders (due dates, lists, completion) while using `kb_search` for indexed note text. Requires a Mac worker when using split dispatch.
+
+**`@trip`** (alias `@tripplanner`) geocodes origin/destination/stops with OpenRouteService, builds a timed itinerary (`driving-car` or `foot-walking`), and publishes an interactive Leaflet map at `/trips/{uuid}`. Needs `ORS_API_KEY` (or `tools.ors.api_key`). The map re-routes on the server when you toggle a stop — the ORS key never reaches the browser. Place photos come from `wiki_place_image` (Wikipedia REST), not invented URLs. Tools: [tools.md — OpenRouteService](tools.md#openrouteservice-trips). HTTP: [api.md — Trips](api.md#trips).
 
 The chat UI lists whatever agents are currently configured (it reads `GET /api/agents`), so your set may differ from the defaults above.
 

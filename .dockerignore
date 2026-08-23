@@ -5,6 +5,7 @@
 .dockerignore
 .prettierrc
 .prettierignore
+.gitleaks.toml
 
 # Python caches / envs / build artifacts
 __pycache__/
@@ -27,12 +28,20 @@ config.yaml
 *-config.yaml
 secrets/
 deploy.env
+deploy.local.env
+
+# Private agent / routing overlays (bind-mounted at runtime when needed)
+custom_agents.local.yaml
+custom_agents.yaml
+tool_routing.local.yaml
+user_context.md
 
 # Runtime data + bind-mounted dirs (provided at runtime, not at build)
 data/
 profiles/
 
-# Not used by any Dockerfile
+# Not used by any Dockerfile (entire scripts/ tree — no LaunchAgent helpers
+# or deploy scripts baked into images)
 docs/
 sandbox/
 scripts/

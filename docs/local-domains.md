@@ -75,6 +75,7 @@ The variables the scripts read:
 | `SIDECAR_AUTH_TOKEN`         | Shared secret the web/workers send as `X-Sidecar-Token`; sidecar rejects requests without it |
 | `SIDECAR_ALLOW_PRIVATE_URLS` | `1` = let the sidecar fetch private/LAN URLs (otherwise blocked as an SSRF guard)         |
 | `AGENTFORGE_PUBLIC_URL`      | Canonical app origin for OAuth redirects (anti-spoofing; see [connectors.md](connectors.md)) |
+| `ORS_API_KEY`                | OpenRouteService key for `@trip` (geocode, directions, POIs, map re-route). Also `tools.ors.api_key` in `framework-config.yaml`. Compose forwards it into web/workers. |
 
 See [SECURITY.md](SECURITY.md) for what the auth/token stuff protect and a public-deploy checklist.
 
@@ -107,7 +108,7 @@ Add `--rmi` to also remove the built images, `-y` to skip the prompt.
 After deploy you reach:
 
 ```
-Web:    https://agent.example.com        (agent WS + REST)
+Web:    https://agent.example.com        (agent WS + REST + /trips/{uuid} maps)
 API:    https://agent-web.example.com    (RAG index/search)
 Qdrant: https://qdrant.example.com/dashboard
 SAQ:    https://saq.example.com/

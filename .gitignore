@@ -52,6 +52,9 @@ markdown/local/
 plugins/*
 !plugins/__init__.py
 
+# Obsolete path (helper lives in agent-forge-email/scripts/). Keep ignored if a stub remains.
+scripts/enable-mail-api-local-worker.sh
+
 # Private SQL tools (the @sql mode + /api/schemas REST cache). Generic code, but
 # kept private alongside the DB connection config. Loaded via AGENTFORGE_TOOL_PLUGINS.
 agentforge/tools/sql_tools.py

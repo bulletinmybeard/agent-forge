@@ -4572,6 +4572,15 @@ async def websocket_chat(
         """
         nonlocal active_task, cancel_event, last_mode, last_skills, active_job_id
 
+        # Fresh per-request model chain for the run summary "Models:" line.
+        # Must run in this parent context before any to_thread / AIClient work.
+        try:
+            from agentforge.client import reset_models_used
+
+            reset_models_used()
+        except Exception:
+            pass
+
         # Apply the session's per-query provider override (if any) into the
         # ContextVar before any AIClient is constructed downstream. The var
         # propagates through asyncio.create_task and run_in_executor, so all
@@ -5076,6 +5085,7 @@ async def websocket_chat(
             elif msg_type == "query.retry":
                 prompt_text = data.get("prompt_text", "")
                 edited_text = data.get("edited_text")
+                retry_overrides = data.get("overrides")
                 if not session_id:
                     await ws.send_json(protocol.query_retry_error(prompt_text, "not_found"))
                     continue
@@ -5084,8 +5094,8 @@ async def websocket_chat(
                     (active_task is not None and not active_task.done()) or job_store.active_job_count(session_id)
                 )
 
-                async def _resubmit(new_text: str):
-                    await _process_query(new_text, [], None)
+                async def _resubmit(new_text: str, _ov=retry_overrides):
+                    await _process_query(new_text, [], _ov)
 
                 proceeded = await _handle_retry_query(
                     ws=ws,
@@ -5345,7 +5355,6 @@ async def _run_chat(
 
         answer_role = af_settings.ollama.get_role("answer_generation")
         profile_name = answer_role.profile.name
-        model_name = answer_role.profile.model
 
         routed_msg = protocol.agent_routed(
             profile_name,
@@ -5354,27 +5363,28 @@ async def _run_chat(
         )
         await send_and_persist(routed_msg, msg_type="routed")
 
-        config_msg = protocol.agent_config(
-            profile=profile_name,
-            model=model_name,
-            tools=0,
-            session_id=session_id,
-            provider=answer_role.profile.provider,
-            mode="chat",
-        )
-        await send_and_persist(config_msg, msg_type="config")
-
         # --- Step 2: Direct LLM call -------------------------------------
         # Use AIClient so ai.provider_override is honoured — _ollama_client_for_profile
         # is hardcoded to the Ollama SDK and would keep hitting Ollama even when the
         # active provider is DeepInfra / Bedrock / OpenRouter.
         from agentforge.client import AIClient as _AIClient
 
-        _chat_ai_client = _AIClient(profile=profile_name)
+        # Session Profile Overrides (Web UI) + legacy flat model/temperature.
+        _chat_ai_client = _AIClient(profile=profile_name, session_overrides=overrides)
         # Refresh the display fields from the resolved profile so the UI reports
         # the real model + provider (e.g., DeepInfra / Qwen3.5-397B-A17B) even
         # when the role config (config.yaml) still names the role's parent.
         model_name = _chat_ai_client.profile.model
+
+        config_msg = protocol.agent_config(
+            profile=profile_name,
+            model=model_name,
+            tools=0,
+            session_id=session_id,
+            provider=_chat_ai_client.profile.provider,
+            mode="chat",
+        )
+        await send_and_persist(config_msg, msg_type="config")
 
         # Build messages: system prompt + conversation history + user query
         llm_messages: list[dict[str, str]] = [
@@ -5415,15 +5425,12 @@ async def _run_chat(
 
         llm_options: dict[str, Any] = {
             "num_predict": answer_role.options.get("num_predict", 2048),
-            "temperature": answer_role.options.get("temperature", 0.3),
+            "temperature": _chat_ai_client.profile.temperature
+            if overrides
+            else answer_role.options.get("temperature", 0.3),
         }
-
-        # Apply per-session overrides if any
-        if overrides:
-            if overrides.get("model"):
-                model_name = overrides["model"]
-            if overrides.get("temperature") is not None:
-                llm_options["temperature"] = overrides["temperature"]
+        if overrides and overrides.get("temperature") is not None:
+            llm_options["temperature"] = float(overrides["temperature"])
 
         # Notify UI that we're waiting for the LLM response
         if not ws_closed:
@@ -5762,7 +5769,7 @@ async def _run_scheduler(
         # model had an outage it just surfaced the raw 503 to the user.
         from agentforge.client import AIClient as _AIClient
 
-        _ai_client = _AIClient(profile=profile)
+        _ai_client = _AIClient(profile=profile, session_overrides=overrides)
         # Refresh the displayed model name from the resolved profile so
         # the config card reflects what AIClient will actually call.
         model_name = _ai_client.profile.model
@@ -6315,7 +6322,7 @@ async def _run_monitor(
         # DeepInfra / OpenRouter (OpenAI-compatible) or Bedrock.
         from agentforge.client import AIClient as _AIClient
 
-        _llm_client = _AIClient(profile=profile)
+        _llm_client = _AIClient(profile=profile, session_overrides=overrides)
         model_name = _llm_client.profile.model
         provider_name = _llm_client.profile.provider
 
@@ -7266,7 +7273,7 @@ async def _run_web_search(
         web_search_prompt = _inject_user_context(_build_web_search_system_prompt(), rt)
         # Inject skill instructions
         web_search_prompt = _inject_skills(web_search_prompt, overrides, condensed=False)
-        agent_client = AIClient(profile=profile)
+        agent_client = AIClient(profile=profile, session_overrides=overrides)
 
         _agent_event = _make_agent_event_callback(send_sync, db, session_id, total_start)
 
@@ -7367,11 +7374,18 @@ async def _run_web_search(
                 tool_counter[tc["name"]] += 1
 
         n_tools = sum(tool_counter.values())
+        try:
+            from agentforge.client import get_models_used
+
+            _models_chain = get_models_used(agent_client.model)
+        except Exception:
+            _models_chain = [agent_client.model] if agent_client.model else []
         summary_msg = protocol.agent_summary(
             iterations=len(iterations),
             elapsed=total_elapsed,
             tool_calls=n_tools,
             tools=dict(tool_counter),
+            models=_models_chain,
         )
         await send_and_persist(summary_msg, msg_type="summary")
         _persist_token_usage(db, session_id, ctx)
@@ -7565,7 +7579,7 @@ async def _run_log_analysis(
         from agentforge.agent import AgentLoop
         from agentforge.client import AIClient
 
-        agent_client = AIClient(profile=profile)
+        agent_client = AIClient(profile=profile, session_overrides=overrides)
 
         _agent_event = _make_agent_event_callback(send_sync, db, session_id, total_start)
 
@@ -7669,11 +7683,18 @@ async def _run_log_analysis(
                 tool_counter[tc["name"]] += 1
 
         n_tools = sum(tool_counter.values())
+        try:
+            from agentforge.client import get_models_used
+
+            _models_chain = get_models_used(agent_client.model)
+        except Exception:
+            _models_chain = [agent_client.model] if agent_client.model else []
         summary_msg = protocol.agent_summary(
             iterations=len(iterations),
             elapsed=total_elapsed,
             tool_calls=n_tools,
             tools=dict(tool_counter),
+            models=_models_chain,
         )
         await send_and_persist(summary_msg, msg_type="summary")
         _persist_token_usage(db, session_id, ctx)
@@ -8203,7 +8224,7 @@ async def _run_agent(
                 from agentforge.client import AIClient
                 from agentforge.router import ProfileRouter
 
-                router_client = AIClient(profile="tool")
+                router_client = AIClient(profile="tool", session_overrides=overrides)
                 prof_router = ProfileRouter(router_client)
                 route_start = time.perf_counter()
                 route = await asyncio.to_thread(prof_router.select, query)
@@ -8221,7 +8242,8 @@ async def _run_agent(
         from agentforge.agent import AgentLoop
         from agentforge.client import AIClient
 
-        agent_client = AIClient(profile=llm_profile)
+        # Session Profile Overrides from Web UI (overrides.profiles[<role>]).
+        agent_client = AIClient(profile=llm_profile, session_overrides=overrides)
 
         # Select tool subset using tool_profile (may differ from llm_profile
         # in @pipeline mode where tool_profile="pipeline", llm_profile="agent").
@@ -8320,7 +8342,7 @@ async def _run_agent(
                 raise RuntimeError("parallel disabled for @pipeline mode (uses sequential AgentLoop + tool_subset)")
 
             planner_profile = fw_cfg.get("parallel.planner_profile", "fast")
-            planner_client = AIClient(profile=planner_profile)
+            planner_client = AIClient(profile=planner_profile, session_overrides=overrides)
             parallel_runner = ParallelAgentRunner(
                 planner_client,
                 rt.registry,
@@ -8542,6 +8564,13 @@ async def _run_agent(
         )
 
         # --- Step 5: Send summary -----------------------------------------
+        try:
+            from agentforge.client import get_models_used
+
+            _models_chain = get_models_used(getattr(agent_client, "model", None))
+        except Exception:
+            _models_chain = [agent_client.model] if getattr(agent_client, "model", None) else []
+
         if parallel_plan and parallel_plan.get("parallel"):
             # Parallel summary — count shell calls across groups
             parallel_results = ctx.metadata.get("parallel_results", [])
@@ -8553,6 +8582,7 @@ async def _run_agent(
                 elapsed=total_elapsed,
                 tool_calls=total_cmds,
                 tools={"shell": total_cmds},
+                models=_models_chain,
             )
         else:
             # Sequential summary
@@ -8569,6 +8599,7 @@ async def _run_agent(
                 elapsed=total_elapsed,
                 tool_calls=n_tools,
                 tools=dict(tool_counter),
+                models=_models_chain,
             )
         await send_and_persist(summary_msg, msg_type="summary")
         _persist_token_usage(db, session_id, ctx)
@@ -9004,7 +9035,7 @@ async def _run_sql(
 
         # Use cloud-heavy for SQL — small models (devstral) are weak at
         # tool calling with complex schema context.
-        agent_client = AIClient(profile="cloud-heavy")
+        agent_client = AIClient(profile="cloud-heavy", session_overrides=overrides)
 
         # Expose execute_sql + schema extraction for this mode
         tool_subset = ["sql_extract_schema", "execute_sql"]
@@ -9340,8 +9371,8 @@ async def _run_discovery(
         planner_profile = fw_cfg.get("discovery.planner_profile", "default")
         worker_profile = fw_cfg.get("discovery.worker_profile", "fast")
 
-        planner_client = AIClient(profile=planner_profile)
-        worker_client = AIClient(profile=worker_profile)
+        planner_client = AIClient(profile=planner_profile, session_overrides=overrides)
+        worker_client = AIClient(profile=worker_profile, session_overrides=overrides)
 
         # Config message — emitted AFTER planner_client so the provider field
         # reflects the per-session override (deepinfra/bedrock/...) rather than
@@ -9830,7 +9861,7 @@ async def _run_custom_agent(
         from agentforge.agent import AgentLoop
         from agentforge.client import AIClient
 
-        agent_client = AIClient(profile=profile)
+        agent_client = AIClient(profile=profile, session_overrides=overrides)
 
         _agent_event = _make_agent_event_callback(send_sync, db, session_id, total_start)
 
@@ -9935,11 +9966,18 @@ async def _run_custom_agent(
                 tool_counter[tc["name"]] += 1
 
         n_tools = sum(tool_counter.values())
+        try:
+            from agentforge.client import get_models_used
+
+            _models_chain = get_models_used(agent_client.model)
+        except Exception:
+            _models_chain = [agent_client.model] if agent_client.model else []
         summary_msg = protocol.agent_summary(
             iterations=len(iterations),
             elapsed=total_elapsed,
             tool_calls=n_tools,
             tools=dict(tool_counter),
+            models=_models_chain,
         )
         await send_and_persist(summary_msg, msg_type="summary")
         _persist_token_usage(db, session_id, ctx)
@@ -10289,7 +10327,7 @@ async def _run_coding(
         from agentforge.client import AIClient as _AIClient
 
         try:
-            client = _AIClient(profile=profile_name)
+            client = _AIClient(profile=profile_name, session_overrides=overrides)
             model_name = client.profile.model
             provider_name = client.profile.provider
         except Exception as exc:

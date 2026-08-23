@@ -13,7 +13,7 @@ The full stack (`scripts/deploy-local.sh`, the default `full` preset) starts eig
 | `qdrant`                      | `qdrant/qdrant`      | `6333` / `6334` | Vector database (REST + gRPC).                                |
 | `redis`                       | `redis:7-alpine`     | internal        | Tool cache, queues, audit streams, pub/sub, schema cache.     |
 | `agentforge-api`              | `Dockerfile.api`     | `8100`          | RAG indexing + vector search. LAN-only.                       |
-| `agentforge-web`              | `Dockerfile.web`     | `8200`          | Chat WebSocket + REST + agent runners. The public entrypoint. |
+| `agentforge-web`              | `Dockerfile.web`     | `8200`          | Chat WebSocket + REST + agent runners + trip maps. The public entrypoint. |
 | `agentforge-sidecar`          | `Dockerfile.sidecar` | `8300`          | Hardened Firefox extraction for stealthy web fetches.         |
 | `agentforge-worker-saq`       | web image            | n/a             | SAQ worker for agent jobs (`settings_shared`).                |
 | `agentforge-worker-saq-tools` | web image            | n/a             | SAQ worker for tool jobs (`settings_tools`).                  |
@@ -47,7 +47,7 @@ Pick a preset with `scripts/deploy-local.sh --preset light` (or `AGENTFORGE_PRES
 The stack runs two FastAPI apps with different exposure:
 
 - **`agentforge-api`** (`app/main.py`, `:8100`): the indexing + search API (`/indexer/*`, `/search/*`). Kept on the LAN. Not meant to face the internet.
-- **`agentforge-web`** (`web/server/app.py`, `:8200`): the chat WebSocket (`/ws/chat`, `/ws/botty`), the REST API, and every agent runner. This is the service you put behind a proxy. It also serves a built React SPA if one is present at the client-dist path. This repo ships none, so bring your own client.
+- **`agentforge-web`** (`web/server/app.py`, `:8200`): the chat WebSocket (`/ws/chat`, `/ws/botty`), the REST API, every agent runner, and **trip maps** (`GET /trips/{uuid}`). This is the service you put behind a proxy. It also serves a built React SPA if one is present at the client-dist path. This repo ships none, so bring your own client. Trip routes are registered **before** the SPA catch-all.
 
 WebSocket endpoints don't appear in `/openapi.json` or `/docs`. OpenAPI has no representation for them.
 That is expected, not a missing route.
@@ -68,6 +68,7 @@ That is expected, not a missing route.
 | Qdrant            | Document vectors, the semantic conversation-memory collection, and the personal Knowledge Database (`knowledge_entries`). |
 | Redis             | Tool-result cache, SAQ queues, audit streams, session pub/sub, schema cache.                       |
 | SQLite (`./data`) | Chat history, extracted facts, scheduler/monitor jobs, and the Canvas / Prompt Lab / Botty stores. |
+| JSON files (`./data/trips`) | Published `@trip` itineraries. One `{uuid}.json` per trip (`AGENTFORGE_TRIPS_DIR` override). The map page is rendered from that JSON; the ORS key never goes to the browser. |
 
 ## Worker locality (SAQ)
 
@@ -90,13 +91,14 @@ A chat message takes this path:
 
 ## Optional web features
 
-These ship with `agentforge-web` but are independent of core chat/RAG. Each has its own SQLite tables under `./data/` (Canvas shares the chat DB file).
+These ship with `agentforge-web` but are independent of core chat/RAG. Canvas / Botty / Prompt Lab use SQLite tables under `./data/` (Canvas shares the chat DB file). Trips are JSON files under `./data/trips`.
 
 | Feature      | Toggle / surface                         | Purpose                                                                 |
 | ------------ | ---------------------------------------- | ----------------------------------------------------------------------- |
 | **Canvas**   | `canvas.enabled` (default `true`)        | Per-session scratch pad: auto-collects URLs, `#tags`, and attachments. REST at `/api/canvas/*`; `session.init` reports `canvas_enabled`. |
 | **Botty**    | `botty.enabled` (default `true`)         | Proactive session-awareness companion on `/ws/botty` (nudges, recall). Disable to drop the WebSocket route entirely. |
 | **Prompt Lab** | `prompt_lab.enabled` (default `true`)  | Multi-profile prompt comparison for developers/UI: `/api/prompt-lab/*` (separate `prompt_lab.db`). Uses opening-prompt refinement when `prompt_refinement.enabled` is set. |
+| **Trips**    | `ORS_API_KEY` / `tools.ors.api_key`    | `@trip` published maps at `GET /trips/{uuid}`; re-route on stop toggle via `POST /api/trips/{uuid}/route`. JSON under `data/trips`. Needs an OpenRouteService key. |
 
 **Session namespacing.** `chat_sessions.source` tags which client created a session (`web` for the Agent Chat UI, `kb` for the Knowledge Base SPA, etc.). The tag is stamped once at creation from `overrides.source`, the WebSocket `?source=` query param, or the active worker job's overrides. `GET /api/sessions?source=web` (the default) keeps external sessions out of the Agent Chat sidebar.
 

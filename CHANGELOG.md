@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.15.0 - 2026-08-23
+
+### Added
+
+- **`@trip` / `@tripplanner` custom agent**: plans A→B drives or city walking tours with timed stops, then publishes an interactive Leaflet map. OpenRouteService for geocode / directions / POIs (`ORS_API_KEY` or `tools.ors.api_key`). Map at `GET /trips/{uuid}`; toggling a stop re-routes via `POST /api/trips/{uuid}/route` (the key never reaches the browser). Optional detours over +45 min / +50 km vs origin→destination are disabled on publish. See [docs/modes.md](docs/modes.md), [docs/tools.md](docs/tools.md#openrouteservice-trips), [docs/api.md](docs/api.md#trips)
+- OpenRouteService + trip tools: `ors_geocode`, `ors_reverse`, `ors_route`, `ors_pois`, `trip_publish`, `trip_get`, `wiki_place_image` (Wikipedia REST thumbnail; never invent image URLs). Routed `remote` in `tool_routing.yaml`
+- Trip JSON store under `data/trips` (`AGENTFORGE_TRIPS_DIR` override). FastAPI trip routes registered before the SPA catch-all
+- Session profile overrides: Web UI `overrides.profiles[<role>]` (`model` / `temperature` / `max_tokens`) applied in `AIClient` for agent, chat, custom-agent, search, logs, SQL, discovery, coding, scheduler, and monitor
+- Fence-aware `<think>` stripping (`agentforge/backends/_thinking.py`) so quoted tags inside fenced/inline code survive. Ollama native `message.thinking` is read instead of dropped
+- Agent loop: empty-content / native-thinking nudge, plan-fragment detection after tools, salvage leftover thinking only after a nudge. Backends no longer promote thinking as the final answer (that cut multi-step runs short)
+- `agent.summary` `models` chain filled from the runner's `AIClient` (not only the request-scoped contextvar)
+- `GET /api/memory/schemas` returns `schema_tool_available` and never 503s when the private SQL plugin is missing
+- Compose: `ORS_API_KEY`; bind-mount `markdown/local` and `plugins/`; `deploy-remote.sh` copies those overlays on `--config-only`
+- Tests: trip service/API/ORS tools, session overrides, Ollama thinking, inline `<think>` strip, models-used
+
+### Changed
+
+- `mail_api_tools` is private: `plugins.mail_api_tools:register_mail_api_tools` via `AGENTFORGE_TOOL_PLUGINS`. Public `agentforge.tools.mail_api_tools` raises `ImportError`
+- `.dockerignore` excludes private overlays (`custom_agents.yaml`, `tool_routing.local.yaml`, `deploy.local.env`, …) and the `scripts/` tree; `plugins/` is still COPY'd so private plugins bake on a private build host
+- `Dockerfile.web` creates `/app/data/trips`
+- Agent prompt: put the full answer in response content, not only in a private thinking channel; copy tool-result code verbatim
+
+### Fixed
+
+- Naive `<think>` regex no longer destroys quoted examples inside fenced/inline code
+- Memory schemas endpoints 503'd the whole Memory modal when `sql_schema_tool` was absent
+- Custom-agent / search / logs summaries omitted the models chain
+
 ## [0.14.0] - 2026-07-30
 
 ### Added

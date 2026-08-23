@@ -145,8 +145,9 @@ The agent has no separate `mode` field. You select behaviour inline, inside `tex
 | `@coding`, `@code` | Coding mode (plan, edit, dry-run, undo)             |
 | `@scheduler`       | Create/list/delete recurring jobs                   |
 | `@monitor`         | Create/list/delete website-change monitors          |
+| `@trip`, `@tripplanner` | Timed itinerary + Leaflet map (`/trips/{uuid}`) |
 
-Custom agents add more aliases (`@docker`, `@security`, ...); they are defined in `custom_agents.yaml` (copy from `custom_agents.example.yaml`). Connectors add their own (`@google`, `@gitlab`, `@github`, or `@conn`).
+Custom agents add more aliases (`@docker`, `@security`, `@trip`, ...); they are defined in `custom_agents.yaml` (copy from `custom_agents.example.yaml`). Connectors add their own (`@google`, `@gitlab`, `@github`, or `@conn`).
 Without a prefix the server classifies the prompt for you.
 
 ### `#source` (anywhere in the prompt)
@@ -180,6 +181,19 @@ Putting them together (all inside `text`):
 
 # query a specific database
 {"type":"query","text":"@sql #mydb how many rows are in each table?"}
+
+# trip planner (needs ORS_API_KEY); the agent replies with /trips/{uuid}
+{"type":"query","text":"@trip Drive from Berlin to Hamburg tomorrow, leave 09:00, lunch in Magdeburg"}
+```
+
+After `trip_publish`, fetch the map or JSON (same origin as chat):
+
+```bash
+curl -sS "$WEB/api/trips/<uuid>" | jq '{title, profile, stops: [.stops[].name]}'
+# Re-route with a subset of stops
+curl -sS -X POST "$WEB/api/trips/<uuid>/route" \
+  -H 'Content-Type: application/json' \
+  -d '{"enabled_stop_ids":["lunch"]}'
 ```
 
 The same intent over the `:8100` REST search is expressed as JSON fields instead of tokens: `#git` becomes `"source_name": "git"`, `--type=endpoints` becomes `"chunk_type": "endpoints"`, `--limit=5` becomes `"limit": 5`. The `@mode` / `#` / `--` DSL itself is parsed by the chat WebSocket, not by `/search*`.

@@ -12,6 +12,7 @@ from chalkbox.logging.bridge import get_logger
 from ollama import AsyncClient, Client
 
 from ..typing_utils import callable_name
+from ._thinking import strip_inline_think
 from .base import Backend
 
 if TYPE_CHECKING:
@@ -168,14 +169,27 @@ class OllamaBackend(Backend):
         from ..client import ChatResponse  # noqa: PLC0415  — avoid circular at import time
 
         content = raw.message.content or ""
-        thinking: str | None = None
+        if not isinstance(content, str):
+            content = str(content) if content else ""
 
-        # Strip <think> blocks when profile says to
+        # Ollama thinking models (DeepSeek, Qwen3, …) put the CoT in
+        # message.thinking when think is on (default for those models). Older
+        # paths only looked for inline <think> tags and dropped the native
+        # field — empty content after tools then salvaged raw tool dumps.
+        thinking: str | None = None
+        native_thinking = getattr(raw.message, "thinking", None)
+        if isinstance(native_thinking, str) and native_thinking.strip():
+            thinking = native_thinking.strip()
+
+        # Strip real CoT <think> blocks when profile says to — fence-aware so
+        # quoted examples in code (e.g. this method's own regex) survive.
         if self._profile.parse_thinking and content:
-            match = re.search(r"<think>(.*?)</think>", content, re.DOTALL)
-            if match:
-                thinking = match.group(1).strip()
-                content = re.sub(r"<think>.*?</think>\s*", "", content, flags=re.DOTALL).strip()
+            content, tag_thinking = strip_inline_think(content)
+            if tag_thinking:
+                if thinking and tag_thinking not in thinking:
+                    thinking = f"{thinking}\n{tag_thinking}"
+                elif not thinking:
+                    thinking = tag_thinking
 
         # Extract tool calls (native or fallback from JSON content)
         tool_calls = None

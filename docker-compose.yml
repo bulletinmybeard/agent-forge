@@ -50,6 +50,7 @@ x-app-env: &app-env
   # env is checked first by get_redactor() and survives stale singletons only
   # after process restart. Set false while coding-with-whole-file is the norm.
   SECRET_REDACTION_ENABLED: "${SECRET_REDACTION_ENABLED:-false}"
+  ORS_API_KEY: "${ORS_API_KEY:-}"
 
 x-app-volumes: &app-volumes
   - ./framework-config.yaml:/app/framework-config.yaml:ro
@@ -58,6 +59,12 @@ x-app-volumes: &app-volumes
   - ./profiles:/app/profiles:ro
   - ./custom_agents.yaml:/app/custom_agents.yaml:ro
   - ./custom_agents.local.yaml:/app/custom_agents.local.yaml:ro
+  # Private custom-agent prompts (e.g. markdown/local/afemail.md)
+  - ./markdown/local:/app/markdown/local:ro
+  # Private plugins (mail_api_tools, cloud, hub) — hot-reload on recreate without image rebuild
+  - ./plugins:/app/plugins:ro
+  - ./tool_routing.yaml:/app/tool_routing.yaml:ro
+  - ./tool_routing.local.yaml:/app/tool_routing.local.yaml:ro
   - ./data:/app/data
   - ./secrets:/app/secrets
 

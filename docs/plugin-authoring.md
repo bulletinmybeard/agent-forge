@@ -42,7 +42,7 @@ You do not edit the package.
 Environment variable `AGENTFORGE_TOOL_PLUGINS`: comma-separated `module:function` specs:
 
 ```bash
-AGENTFORGE_TOOL_PLUGINS=plugins.cloud_tools:register_cloud_tools,plugins.hub_tools:register_hub_tools
+AGENTFORGE_TOOL_PLUGINS=plugins.cloud_tools:register_cloud_tools,plugins.hub_tools:register_hub_tools,plugins.mail_api_tools:register_mail_api_tools
 ```
 
 Entry-point group `agentforge.tools`: for installed packages, exposed via your package metadata.
@@ -121,7 +121,7 @@ The published repo ships generic examples. Your private copy never gets committe
 | `custom_agents.yaml`       | Live custom-agent definitions (private tools, deployment agents). Template: `custom_agents.example.yaml`.                       |
 | `tool_routing.local.yaml`  | Extra routing. Its `rules` are prepended (checked first). `roles`/`modes` are merged.                                           |
 | `markdown/local/`          | Private agent prompt files referenced from `custom_agents.yaml`.                                                                |
-| `plugins/*`                | Private tool modules. Only `plugins/__init__.py` is committed. The rest is gitignored and loaded via `AGENTFORGE_TOOL_PLUGINS`. |
+| `plugins/*`                | Private tool modules. Only `plugins/__init__.py` is committed. The rest is gitignored and loaded via `AGENTFORGE_TOOL_PLUGINS`. Mail API tools live here (`plugins.mail_api_tools:register_mail_api_tools`); the public `agentforge.tools.mail_api_tools` module is a stub that raises `ImportError`. |
 | `secrets/`                 | Connector tokens and credential files (e.g., `client_secret.json`).                                                              |
 | `deploy.env`               | Deploy settings. The published example is `deploy.example.env`.                                                                 |
 

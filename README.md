@@ -32,8 +32,8 @@ These projects use AgentForge as their backend and don't run without it:
 ## Features
 
 - **Backends**: Ollama (local + cloud relay), AWS Bedrock, and any OpenAI-compatible API (DeepInfra, OpenRouter, ...). Selected per role via named profiles. Switch the whole stack with one `provider_override`.
-- **Agent loop**: think -> act -> observe with tool calling, error recovery, and optional web-search escalation.
-- **Tools**: filesystem, shell, system info, Docker, Git, SSH, archives, network diagnostics, web search/fetch/render, media, code editing, macOS notifications, **Apple Reminders** (list/create/edit/complete/delete via `remindctl`), and more. Shell/SSH commands can be gated by allowlist, denylist, or confirm policy (config + runtime API).
+- **Agent loop**: think -> act -> observe with tool calling, error recovery, optional web-search escalation, and per-session profile overrides (`overrides.profiles`). Thinking models: fence-aware `<think>` strip + native Ollama thinking; empty/plan-fragment answers get one nudge instead of ending the run.
+- **Tools**: filesystem, shell, system info, Docker, Git, SSH, archives, network diagnostics, web search/fetch/render, media, code editing, macOS notifications, **Apple Reminders** (list/create/edit/complete/delete via `remindctl`), **OpenRouteService trips** (`@trip` / `@tripplanner`: geocode, driving/walking directions, POIs, published Leaflet map), and more. Shell/SSH commands can be gated by allowlist, denylist, or confirm policy (config + runtime API).
 - **RAG**: index OpenAPI/SQL schemas, source code, docs, and transcripts into Qdrant. Query with refinement, reranking, and dedup.
 - **Knowledge Database**: personal store for notes, references, documentation, attached documents, cheatsheets, and snippets. One-call ingest, semantic search, tag faceting, and smart updates (re-embeds only when content changes). Multi-collection routing (`X-Knowledge-Collection` header) separates the KB SPA, AgentForge Notes, and AgentForge Email into independent Qdrant collections. Original attachment files (PDFs, etc.) are stored alongside extracted text and downloadable via the API.
 - **Direct tool run**: IDE clients (e.g. IntelliJ Quality) can call allowlisted tools (`linter_run`, `test_runner`, …) over REST without an agent/LLM loop, on the same tools worker as chat.
@@ -47,7 +47,7 @@ These projects use AgentForge as their backend and don't run without it:
 Operator guides live in [`docs/`](docs/README.md):
 
 - [Stack architecture](docs/architecture.md): how the containers fit together: services, ports, worker localities, data stores, request flow, and **SQLite Alembic migrations**. **Start here.**
-- [HTTP API](docs/api.md): REST + the `/ws/chat` agent WebSocket, memory endpoints, the Knowledge Database (`/knowledge/*`), session recap, direct tool-run, and the live OpenAPI spec.
+- [HTTP API](docs/api.md): REST + the `/ws/chat` agent WebSocket, memory endpoints, the Knowledge Database (`/knowledge/*`), session recap, direct tool-run, **trip maps** (`/trips/{uuid}`), and the live OpenAPI spec.
 - [Modes](docs/modes.md): the `@mode` prefixes (built-in modes, custom agents, connectors) and when to use each.
 - [Tools](docs/tools.md): every built-in agent tool by category, plus locality and confirmation gates.
 - [Chunking and indexing into Qdrant](chunking/README.md): the mappers (OpenAPI, SQL/tbls, live DB, code, CLI docs, Markdown), the index pipeline, the `/indexer/*` + `/search/*` endpoints, and dedup/drift QA.
@@ -96,7 +96,7 @@ The full stack (default `full` preset). The [light preset](#light-mode) runs onl
 
 | Service                 | Port     | Role                                                     |
 | ----------------------- | -------- | -------------------------------------------------------- |
-| `agentforge-web`        | `8200`   | Chat WebSocket + REST + agent runners (the entrypoint).  |
+| `agentforge-web`        | `8200`   | Chat WebSocket + REST + agent runners + trip maps (the entrypoint).  |
 | `agentforge-api`        | `8100`   | RAG indexing + vector search (LAN-only).                 |
 | `agentforge-sidecar`    | `8300`   | Hardened browser extraction for stealthy web fetches.    |
 | `qdrant`                | `6333`   | Vector database.                                         |
