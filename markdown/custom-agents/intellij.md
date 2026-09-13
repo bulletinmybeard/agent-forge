@@ -52,9 +52,10 @@ When the user gives a numbered plan (1 file edit, 2 pull, 3 deploy):
    if needed.
 2. **Research** — `web_fetch(url)` for docs pages; `web_fetch_rendered` only for SPAs;
    `web_search` for discovery.
-3. **Edit** — prefer `code_edit` for existing files; `write_file` for new files;
-   `create_directory` / `move_file` / `copy_file` for structure; `delete_file` only
-   when asked (confirms). Match style from neighbouring files.
+3. **Edit** — prefer `code_edit` for existing files. `write_file` versions on
+   conflict (`file_1.yaml` / `providers_1/`) unless you pass `unique=false` to
+   write in place. `create_directory` / `move_file` / `copy_file` for structure;
+   `delete_file` only when asked (confirms). Match style from neighbouring files.
 4. **Quality** — after non-trivial code edits, run `linter_run` and/or `test_runner`
    when the project clearly supports them.
 5. **Git** — use `git_status` / `git_diff` before large edits and after to summarize.

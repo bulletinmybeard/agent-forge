@@ -103,6 +103,7 @@ ty = ">=0.0.55,<0.1"
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+exclude = ["sandbox/scripts/tmp"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
@@ -151,6 +152,7 @@ include = ["agentforge", "chunking", "sidecar", "sandbox", "tests"]
 exclude = [
     "app",
     "web",
+    "sandbox/scripts/tmp",
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",

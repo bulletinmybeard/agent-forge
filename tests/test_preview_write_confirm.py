@@ -27,8 +27,8 @@ class _Reg:
 
 
 def _loop(reg: _Reg) -> AgentLoop:
-    agent = AgentLoop(client=SimpleNamespace(), registry=reg)  # type: ignore[arg-type]
-    agent._dispatch_tool = lambda name, args, **kw: f"Wrote 12 chars to {args.get('path')}"  # type: ignore[method-assign]
+    agent = AgentLoop(client=SimpleNamespace(), registry=reg)  # ty: ignore[invalid-argument-type]
+    agent._dispatch_tool = lambda name, args, **kw: f"Wrote 12 chars to {args.get('path')}"  # ty: ignore[invalid-assignment]
     return agent
 
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeGuard
 
 from chalkbox.logging.bridge import get_logger
 
@@ -206,7 +206,7 @@ def run_plan(
     return ctx
 
 
-def _looks_like_hits(val: Any) -> bool:
+def _looks_like_hits(val: Any) -> TypeGuard[list[dict[str, Any]]]:
     """True when *val* is a list of hit dicts with a ``file`` key."""
     return isinstance(val, list) and bool(val) and all(isinstance(h, dict) and "file" in h for h in val)
 

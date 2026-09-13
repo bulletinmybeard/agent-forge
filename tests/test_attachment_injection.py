@@ -71,7 +71,7 @@ def test_pdf_without_sidecar_is_dropped_as_text(tmp_path):
 
     pdf = tmp_path / "doc.pdf"
     pdf.write_bytes(b"%PDF-1.4\x00\x01 binary junk \xff\xfe")
-    att = Attachment(path=str(pdf), name="doc.pdf")
+    att = Attachment(path=pdf, name="doc.pdf")
     assert att.as_context_text() is None
 
 
