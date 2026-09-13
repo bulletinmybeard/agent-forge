@@ -23,10 +23,7 @@ def test_apply_intent_from_follow_up_after_review():
 
 
 def test_apply_intent_from_coding_plus_review_doc():
-    q = (
-        "@coding Apply the proposed code changes to fix issues from this review "
-        "document: /tmp/reviews/review-feat.md"
-    )
+    q = "@coding Apply the proposed code changes to fix issues from this review document: /tmp/reviews/review-feat.md"
     assert is_review_apply_intent(q, forced_mode="coding")
     assert parse_review_document_path(q) == "/tmp/reviews/review-feat.md"
 
@@ -129,9 +126,7 @@ def test_resolve_uses_original_review_not_later_wrong_one():
     messages = [
         {
             "type": "query",
-            "content": (
-                "branch `feat-healthcheck` (/opt/api) store in ~/Downloads"
-            ),
+            "content": ("branch `feat-healthcheck` (/opt/api) store in ~/Downloads"),
         },
         {"type": "result", "content": "# Review\n\n## Worth fixing\n\n1. Drop the NOTE.\n"},
         {"type": "result", "content": "# Review\n\n**Scope:** Large feature branch — router.py\n"},
@@ -158,8 +153,7 @@ def test_unreadable_review_md_tells_agent_to_read_the_path():
         {"type": "result", "content": "# Review\n\n## Worth fixing\n\n1. x\n"},
     ]
     got = resolve_review_apply(
-        "@coding Apply the proposed code changes from this review document: "
-        "/tmp/review-missing.md",
+        "@coding Apply the proposed code changes from this review document: /tmp/review-missing.md",
         forced_mode="coding",
         messages=messages,
     )

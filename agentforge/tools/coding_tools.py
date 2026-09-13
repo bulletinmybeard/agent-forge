@@ -108,10 +108,7 @@ def _confine_to_cwd(file_path: str) -> tuple[Path | None, str | None]:
             return resolved, None
         except ValueError:
             continue
-    return None, (
-        f"path {file_path!r} resolves outside allowed roots "
-        f"{[str(r) for r in roots]} — refusing for safety"
-    )
+    return None, (f"path {file_path!r} resolves outside allowed roots {[str(r) for r in roots]} — refusing for safety")
 
 
 # ---------------------------------------------------------------------------

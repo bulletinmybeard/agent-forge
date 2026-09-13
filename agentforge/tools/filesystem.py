@@ -720,9 +720,7 @@ def write_file(path: str, content: str, unique: bool | None = None) -> str:
         Suffixed siblings are intentional versioned outputs.
     """
     try:
-        use_unique = _write_file_unique_default() if unique is None else _coerce_bool(
-            unique, default=True
-        )
+        use_unique = _write_file_unique_default() if unique is None else _coerce_bool(unique, default=True)
         p = Path(path).expanduser().resolve()
         if use_unique:
             p = _resolve_parent(p)

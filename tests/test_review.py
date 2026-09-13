@@ -80,18 +80,14 @@ def test_tilde_path_expands():
 
 def test_review_target_prefers_repo_over_downloads_save_path():
     q = parse_review_query(
-        "second opinion on branch `feat-healthcheck` "
-        "(/opt/api) versus master "
-        "and store the response in ~/Downloads"
+        "second opinion on branch `feat-healthcheck` (/opt/api) versus master and store the response in ~/Downloads"
     )
     assert q.target == "/opt/api"
     assert q.branch == "feat-healthcheck"
 
 
 def test_parenthesized_repo_path_strips_trailing_paren():
-    q = parse_review_query(
-        "@review branch `feat-healthcheck` (/opt/api) versus master"
-    )
+    q = parse_review_query("@review branch `feat-healthcheck` (/opt/api) versus master")
     assert q.target == "/opt/api"
     assert q.branch == "feat-healthcheck"
 
@@ -222,10 +218,7 @@ def test_review_settings_defaults():
 
 
 def test_parse_output_path_from_store_in_downloads():
-    q = (
-        "second opinion on /opt/api versus master "
-        "and store the response/review results in ~/Downloads"
-    )
+    q = "second opinion on /opt/api versus master and store the response/review results in ~/Downloads"
     assert parse_review_output_path(q, target="/opt/api") == "~/Downloads"
 
 

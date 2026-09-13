@@ -121,9 +121,7 @@ def run_verify_retry(
         # retry rewrites the helper. If every surviving line is something we
         # just added, the first pass already succeeded.
         if _surviving_are_new_code(surviving, current_applied):
-            logger.info(
-                "[coding.retry] surviving sites are lines this burst added — skipping retry"
-            )
+            logger.info("[coding.retry] surviving sites are lines this burst added — skipping retry")
             return out
         is_final = out.attempts == max_retries - 1
         use_profile = retry_profile if is_final else base_profile

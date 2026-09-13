@@ -14,9 +14,33 @@ from web.server.confirm import (
 
 def test_unanswered_confirm_request_skips_answered():
     messages = [
-        type("M", (), {"type": "confirm_prompt", "metadata": {"type": "confirm.request", "request_id": "cr_old", "prompt": "old"}, "content": "old"})(),
-        type("M", (), {"type": "confirm_answer", "metadata": {"type": "confirm_answer", "request_id": "cr_old", "confirmed": True}, "content": ""})(),
-        type("M", (), {"type": "confirm_prompt", "metadata": {"type": "confirm.request", "request_id": "cr_new", "prompt": "Apply edit to models.py?"}, "content": "Apply edit to models.py?"})(),
+        type(
+            "M",
+            (),
+            {
+                "type": "confirm_prompt",
+                "metadata": {"type": "confirm.request", "request_id": "cr_old", "prompt": "old"},
+                "content": "old",
+            },
+        )(),
+        type(
+            "M",
+            (),
+            {
+                "type": "confirm_answer",
+                "metadata": {"type": "confirm_answer", "request_id": "cr_old", "confirmed": True},
+                "content": "",
+            },
+        )(),
+        type(
+            "M",
+            (),
+            {
+                "type": "confirm_prompt",
+                "metadata": {"type": "confirm.request", "request_id": "cr_new", "prompt": "Apply edit to models.py?"},
+                "content": "Apply edit to models.py?",
+            },
+        )(),
     ]
     got = unanswered_confirm_request(messages)
     assert got == {
@@ -28,8 +52,20 @@ def test_unanswered_confirm_request_skips_answered():
 
 def test_unanswered_confirm_request_none_when_all_answered():
     messages = [
-        type("M", (), {"type": "confirm_prompt", "metadata": {"request_id": "cr_1", "prompt": "x", "type": "confirm.request"}, "content": "x"})(),
-        type("M", (), {"type": "confirm_answer", "metadata": {"request_id": "cr_1", "type": "confirm_answer"}, "content": ""})(),
+        type(
+            "M",
+            (),
+            {
+                "type": "confirm_prompt",
+                "metadata": {"request_id": "cr_1", "prompt": "x", "type": "confirm.request"},
+                "content": "x",
+            },
+        )(),
+        type(
+            "M",
+            (),
+            {"type": "confirm_answer", "metadata": {"request_id": "cr_1", "type": "confirm_answer"}, "content": ""},
+        )(),
     ]
     assert unanswered_confirm_request(messages) is None
 

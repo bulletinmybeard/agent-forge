@@ -24,7 +24,7 @@ from agentforge.backends.ollama import OllamaBackend
 def _backend(*, parse_thinking: bool = True) -> OllamaBackend:
     """Build a backend without opening a real Ollama client."""
     b = object.__new__(OllamaBackend)
-    b._profile = types.SimpleNamespace(  # ty: ignore[invalid-assignment]
+    b._profile = types.SimpleNamespace(
         parse_thinking=parse_thinking,
         model="deepseek-v4-flash:0731-cloud",
     )
@@ -203,7 +203,7 @@ def test_leaked_reasoning_ignores_structured_edit():
 
 def _params_backend(*, parse_thinking: bool, extra_body: dict | None = None) -> OllamaBackend:
     b = object.__new__(OllamaBackend)
-    b._profile = types.SimpleNamespace(  # ty: ignore[invalid-assignment]
+    b._profile = types.SimpleNamespace(
         parse_thinking=parse_thinking,
         model="glm-5.3-flash:cloud",
         temperature=0.2,
