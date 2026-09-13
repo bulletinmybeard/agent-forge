@@ -171,24 +171,15 @@ def read_file(path: str) -> str:
 
 
 @tool
-def write_file(path: str, content: str) -> str:
+def write_file(path: str, content: str, unique: bool | None = None) -> str:
     """Write content to a file, creating it if it doesn't exist.
 
-    If the file is inside a sub-folder that already contains files from a
-    previous run, a new folder with a numeric suffix (folder_1/) is created.
-    For single files in well-known directories, the file is suffixed instead.
+    unique (default true): suffix file/folder on conflict instead of overwrite.
     """
     try:
-        from pathlib import Path
+        from agentforge.tools.filesystem import write_file as _real_write
 
-        from agentforge.tools.filesystem import _resolve_parent, _unique_path
-
-        p = Path(path).expanduser().resolve()
-        p = _resolve_parent(p)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p = _unique_path(p)
-        p.write_text(content, encoding="utf-8")
-        return f"Wrote {len(content)} chars to {p}"
+        return _real_write(path, content, unique=unique)
     except Exception as exc:
         return f"Error writing file: {exc}"
 

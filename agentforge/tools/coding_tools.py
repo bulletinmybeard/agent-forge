@@ -40,33 +40,78 @@ ProposedChange = dict  # {file, before_hash, unified_diff, error?}
 
 
 # ---------------------------------------------------------------------------
-# Path confinement — every write must stay at-or-below cwd. Mirrors the
-# _validate_root check in coding/named_ops/_sg.py. Guards both the
-# planner-supplied change["file"] and the Redis-sourced snapshot path,
-# which we treat as untrusted (the key can be tampered with).
+# Path confinement — writes stay under cwd, the file's git root, or
+# coding.allowed_roots. The worker cwd is AgentForge itself; @coding is
+# routinely aimed at a sibling repo (github-traffic-vault, …). Git-root
+# is allowed only when it is not ``/`` and not ``$HOME`` so a plan cannot
+# retarget ``~/.ssh``. Redis snapshot paths are untrusted the same way.
 # ---------------------------------------------------------------------------
 
 
-def _confine_to_cwd(file_path: str) -> tuple[Path | None, str | None]:
-    """Resolve ``file_path`` and assert it stays within cwd.
+def _nearest_git_root(path: Path) -> Path | None:
+    """Walk *path* and its parents for a ``.git`` file or directory."""
+    cur = path if path.is_dir() else path.parent
+    for parent in (cur, *cur.parents):
+        if (parent / ".git").exists():
+            return parent
+    return None
 
-    Returns ``(resolved_path, None)`` on success, or ``(None, reason)`` if
-    the target escapes cwd or a path component is a symlink pointing
-    outside the root. ``resolve()`` follows symlinks, so a symlinked
-    parent/target that lands outside cwd fails the ``relative_to`` check.
+
+def _allowed_write_roots(target: Path) -> list[Path]:
+    """Roots a coding write may land in."""
+    roots = [Path.cwd().resolve()]
+    home = Path.home().resolve()
+    git_root = _nearest_git_root(target)
+    if git_root is not None:
+        resolved_git = git_root.resolve()
+        if resolved_git not in (Path("/"), home):
+            roots.append(resolved_git)
+    try:
+        from agentforge.config import get_config
+
+        extra = get_config().get("coding.allowed_roots") or []
+        if isinstance(extra, str):
+            extra = [extra]
+        for item in extra:
+            if not item:
+                continue
+            roots.append(Path(str(item)).expanduser().resolve())
+    except Exception:
+        logger.debug("[coding] allowed_roots lookup failed", exc_info=True)
+    # Dedup while preserving order
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for r in roots:
+        if r not in seen:
+            seen.add(r)
+            out.append(r)
+    return out
+
+
+def _confine_to_cwd(file_path: str) -> tuple[Path | None, str | None]:
+    """Resolve ``file_path`` and assert it stays within an allowed write root.
+
+    Returns ``(resolved_path, None)`` on success, or ``(None, reason)``.
+    ``resolve()`` follows symlinks, so a link that lands outside every
+    allowed root fails the ``relative_to`` check.
     """
     if not file_path:
         return None, "empty path"
-    cwd = Path.cwd().resolve()
     try:
         resolved = Path(file_path).expanduser().resolve()
     except OSError as exc:
         return None, f"path resolve failed: {exc}"
-    try:
-        resolved.relative_to(cwd)
-    except ValueError:
-        return None, f"path {file_path!r} resolves outside project root {cwd} — refusing for safety"
-    return resolved, None
+    roots = _allowed_write_roots(resolved)
+    for root in roots:
+        try:
+            resolved.relative_to(root)
+            return resolved, None
+        except ValueError:
+            continue
+    return None, (
+        f"path {file_path!r} resolves outside allowed roots "
+        f"{[str(r) for r in roots]} — refusing for safety"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -191,8 +236,8 @@ def _contiguous_head(entries: list[tuple[int, str]], anchor: int) -> list[tuple[
 
 def code_find(
     pattern: str,
-    glob: str,
     path: str,
+    glob: str = "",
     context: int = 10,
 ) -> list[Hit]:
     """Find ``pattern`` in ``path`` restricted by ``glob``, with N lines of context.
@@ -319,7 +364,11 @@ def code_narrow(
 # ---------------------------------------------------------------------------
 
 
-_DIFF_BLOCK_RE = re.compile(r"```diff\s*\n(.*?)```", re.DOTALL)
+_DIFF_BLOCK_RE = re.compile(r"```(?:diff|patch)\s*\n(.*?)```", re.DOTALL)
+_UNFENCED_DIFF_RE = re.compile(
+    r"(?:^|\n)((?:--- [^\n]+\n\+\+\+ [^\n]+\n)?@@ [^\n]+@@.*)",
+    re.DOTALL,
+)
 
 
 def _load_transform_prompt() -> str:
@@ -328,16 +377,19 @@ def _load_transform_prompt() -> str:
 
 
 def _extract_unified_diff(response: str) -> str:
-    """Pull the unified diff out of a fenced ```diff …``` block.
+    """Pull a unified diff out of a model response.
 
-    The prompt instructs the model to emit nothing outside that block, but
-    real models drift. We extract the first fenced block and return its
-    contents (possibly empty — meaning the model decided no change applies).
+    Prefers a fenced ``diff`` / ``patch`` block (empty fence = model declined
+    the edit). Falls back to an unfenced ``---`` / ``@@`` hunk if the model
+    skipped the fence. Anything else is unparseable.
     """
-    m = _DIFF_BLOCK_RE.search(response)
-    if not m:
-        return ""
-    return m.group(1).strip("\n")
+    m = _DIFF_BLOCK_RE.search(response or "")
+    if m:
+        return m.group(1).strip("\n")
+    m = _UNFENCED_DIFF_RE.search(response or "")
+    if m:
+        return m.group(1).strip("\n")
+    return ""
 
 
 def _normalise_hit_texts(hits: list[Hit]) -> list[str]:
@@ -533,9 +585,11 @@ def _group_hits_by_file(hits: list[Hit]) -> dict[str, list[Hit]]:
     """Group hits by their ``file`` field, preserving source order within each group."""
     grouped: dict[str, list[Hit]] = defaultdict(list)
     for h in hits:
+        if not isinstance(h, dict):
+            continue
         grouped[h.get("file", "")].append(h)
     for f in grouped:
-        grouped[f].sort(key=lambda h: h.get("line", 0))
+        grouped[f].sort(key=lambda h: h.get("line", 0) or 0)
     return dict(grouped)
 
 

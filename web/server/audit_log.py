@@ -65,6 +65,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -504,3 +505,30 @@ def init_audit_log(
     global _instance
     _instance = AuditLog(redis_url=redis_url, max_entries=max_entries)
     return _instance
+
+
+def ensure_audit_log() -> AuditLog | None:
+    """Return the audit singleton, initialising it from config.yaml if needed.
+
+    SAQ workers construct ``SearchRuntime()`` without going through
+    ``init_runtime()``, so they never called ``_init_audit_log``. Write hooks
+    then saw ``get_audit_log() is None`` and skipped Redis. Call this from
+    worker startup and from write hooks.
+    """
+    if _instance is not None:
+        return _instance
+    try:
+        import yaml
+
+        config_path = Path(__file__).resolve().parent.parent.parent / "config.yaml"
+        al_cfg: dict[str, Any] = {}
+        if config_path.exists():
+            cfg = yaml.safe_load(config_path.read_text()) or {}
+            al_cfg = (cfg.get("memory") or {}).get("audit_log") or {}
+        if not al_cfg.get("enabled", False):
+            logger.info("Audit log disabled (memory.audit_log.enabled=false)")
+            return None
+        return init_audit_log(max_entries=int(al_cfg.get("max_entries", _DEFAULT_MAX_ENTRIES)))
+    except Exception as exc:
+        logger.warning("Audit log init failed: %s — audit logging disabled", exc)
+        return None

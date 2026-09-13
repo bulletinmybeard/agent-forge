@@ -46,14 +46,13 @@ from app.models.knowledge import KnowledgeSearchRequest
 from app.services.knowledge_registry import (
     collection_for_session_source,
     get_knowledge_service,
-    notes_collection,
     resolve_collection,
     set_request_knowledge_collection,
 )
 
 from . import protocol
 from .agent_bridge import AgentBridge
-from .confirm import ConfirmationBroker
+from .confirm import ConfirmationBroker, unanswered_confirm_request
 from .database import ChatDatabase
 from .mode_routing import CONNECTOR_ALIASES as _CONNECTOR_ALIASES
 from .mode_routing import STICKY_MODES as _STICKY_MODES
@@ -785,26 +784,77 @@ class SearchRuntime:
             async def kb_search(query: str, parent_id: str = "") -> str:
                 """Search the user's personal Knowledge Base -- their saved notes, documentation, code snippets, man pages, and reference docs."""
 
-                req = KnowledgeSearchRequest(query=query, limit=8, parent_id=parent_id or None)
+                coll = resolve_collection()
+                req = KnowledgeSearchRequest(query=query, limit=12, parent_id=parent_id or None)
                 try:
-                    svc = get_knowledge_service(resolve_collection())
+                    svc = get_knowledge_service(coll)
                     data = await asyncio.to_thread(svc.search, req)
                 except Exception as exc:  # noqa: BLE001
-                    return f"kb_search failed: {exc}"
+                    return f"kb_search failed ({coll}): {exc}"
 
                 results = data.get("results", [])
                 if not results:
                     scope = f" within document {parent_id}" if parent_id else ""
-                    return f"No Knowledge Base results for {query!r}{scope}."
+                    return (
+                        f"No results in collection {coll!r} for {query!r}{scope}. "
+                        "Do not invent code; say the catalog has no matching snippet."
+                    )
 
-                lines = [f"Found {len(results)} Knowledge Base result(s) for {query!r}:", ""]
+                lines = [f"Found {len(results)} result(s) in collection {coll!r} for {query!r}:", ""]
                 for i, r in enumerate(results, 1):
-                    content = (r.get("content") or "").strip()[:800]
-                    lines.append(f"{i}. [{r.get('content_type', '')}] {r.get('title', '')} (id={r.get('id', '')})")
+                    meta = r.get("metadata") if isinstance(r.get("metadata"), dict) else {}
+                    path_hint = meta.get("path_hint") or ""
+                    role = meta.get("role") or ""
+                    kind = meta.get("kind") or ""
+                    framework = meta.get("framework") or ""
+                    lines.append(f"{i}. {r.get('title', '')}")
+                    lines.append(f"   id: {r.get('id', '')}")
+                    if path_hint:
+                        lines.append(f"   path_hint: {path_hint}")
+                    bits = []
+                    if role:
+                        bits.append(f"role={role}")
+                    if kind:
+                        bits.append(f"kind={kind}")
+                    if r.get("language"):
+                        bits.append(f"language={r['language']}")
+                    if framework:
+                        bits.append(f"framework={framework}")
+                    if bits:
+                        lines.append(f"   {' '.join(bits)}")
+                    recipes = meta.get("recipes") or []
+                    if isinstance(recipes, list):
+                        for rec in recipes:
+                            if not isinstance(rec, dict):
+                                continue
+                            state = "complete" if rec.get("complete") else "incomplete"
+                            req = ",".join(rec.get("required_roles") or [])
+                            missing = rec.get("missing_roles") or []
+                            miss = f" missing={','.join(missing)}" if missing else ""
+                            lines.append(f"   recipe: {rec.get('title', '')} [{state}] required={req}{miss}")
+                    placeholders = meta.get("placeholders") or []
+                    if isinstance(placeholders, list) and placeholders:
+                        bits_ph = []
+                        for p in placeholders:
+                            if isinstance(p, dict) and p.get("name"):
+                                token = "{{" + str(p["name"]) + "}}"
+                                ex = str(p.get("example") or "").strip()
+                                bits_ph.append(f"{token} example={ex}" if ex else token)
+                            elif isinstance(p, str):
+                                bits_ph.append("{{" + p + "}}")
+                        if bits_ph:
+                            lines.append(
+                                "   placeholders: "
+                                + ", ".join(bits_ph)
+                                + " (fill from user prompt when given; else leave unsubstituted)"
+                            )
                     if r.get("tags"):
                         lines.append(f"   tags: {', '.join(r['tags'])}")
+                    content = (r.get("content") or "").strip()
                     if content:
-                        lines.append(f"   {content}")
+                        lines.append("   ---")
+                        for cline in content.splitlines():
+                            lines.append(f"   {cline}")
                     lines.append("")
                 return "\n".join(lines).rstrip()
 
@@ -2105,7 +2155,7 @@ def _resolve_connector_agent(query: str, rt: SearchRuntime) -> tuple[str, str | 
 
     Resolution order:
     1. **Hashtag** — ``#label`` anywhere in the query matches a connection by
-       label slug (e.g., ``#gitlab-com``, ``#hello-rschu-me``). The hashtag is
+       label slug (e.g., ``#gitlab-com``, ``#my-gitlab``). The hashtag is
        stripped from the query before execution.
     2. **Keyword matching** — email/inbox → gmail, file/folder → drive,
        merge/pipeline → gitlab. Picks the first matching connection of that type.
@@ -2342,6 +2392,12 @@ def _classify_mode_heuristic(
     if forced_mode == "coding":
         logger.info("Mode classifier: coding (explicit prefix)")
         return ("coding", "high")
+    if forced_mode == "plan":
+        logger.info("Mode classifier: plan (explicit prefix)")
+        return ("plan", "high")
+    if forced_mode == "build":
+        logger.info("Mode classifier: build (explicit prefix)")
+        return ("build", "high")
 
     # If the query has an unrecognised @-prefix (e.g., @cooding typo, or
     # a deprecated source like @myapi / @changelog), surface that loudly
@@ -2893,25 +2949,9 @@ def _init_tool_cache() -> None:
 
 def _init_audit_log() -> None:
     """Initialise the Redis Streams audit log."""
-    try:
-        import yaml
+    from .audit_log import ensure_audit_log
 
-        config_path = Path(__file__).resolve().parent.parent.parent / "config.yaml"
-        cfg: dict = {}
-        if config_path.exists():
-            with open(config_path) as f:
-                cfg = yaml.safe_load(f) or {}
-
-        al_cfg = cfg.get("memory", {}).get("audit_log", {})
-        if not al_cfg.get("enabled", False):
-            logger.info("Audit log disabled (memory.audit_log.enabled=false)")
-            return
-
-        from .audit_log import init_audit_log
-
-        init_audit_log(max_entries=al_cfg.get("max_entries", 50_000))
-    except Exception as exc:
-        logger.warning("Audit log init failed: %s — audit logging disabled", exc)
+    ensure_audit_log()
 
 
 def _init_classifier_audit() -> None:
@@ -4117,7 +4157,7 @@ def _persist_token_usage(
             db.add_token_usage(session_id, prompt, completion)
             logger.debug(
                 "Token usage persisted for session %s: +%d prompt, +%d completion",
-                session_id[:12],
+                session_id,
                 prompt,
                 completion,
             )
@@ -4143,7 +4183,7 @@ def _persist_token_usage_raw(
             db.add_token_usage(session_id, prompt_tokens, completion_tokens)
             logger.debug(
                 "Token usage persisted for session %s: +%d prompt, +%d completion",
-                session_id[:12],
+                session_id,
                 prompt_tokens,
                 completion_tokens,
             )
@@ -4215,7 +4255,7 @@ async def _compact_session(
         full_response = " | ".join(msg.content[:300] for msg in db_messages if msg.type == "result" and msg.content)
         n_facts = extract_and_store_facts(db, session_id, full_query[:1500], full_response[:2000])
         if n_facts:
-            logger.info("Compact: extracted %d fact(s) before compaction for session %s", n_facts, session_id[:12])
+            logger.info("Compact: extracted %d fact(s) before compaction for session %s", n_facts, session_id)
     except Exception as exc:
         logger.warning("Compact: fact extraction before compaction failed: %s", exc)
 
@@ -4261,6 +4301,8 @@ _WORKER_MODES = frozenset(
         "review",
         "research",
         "coding",
+        "plan",
+        "build",
     )
 )
 
@@ -4402,6 +4444,33 @@ async def websocket_chat(
     # Thread-safe sender for agent callbacks
     def send_sync(msg: dict) -> None:
         asyncio.run_coroutine_threadsafe(ws.send_json(msg), loop)
+        if msg.get("type") == "confirm.request" and session_id:
+            try:
+                db.add_message(
+                    session_id=session_id,
+                    role="assistant",
+                    msg_type="confirm_prompt",
+                    content=str(msg.get("prompt") or ""),
+                    metadata=msg,
+                )
+            except Exception:
+                pass
+        if msg.get("type") == "confirm.timeout" and session_id:
+            try:
+                db.add_message(
+                    session_id=session_id,
+                    role="assistant",
+                    msg_type="confirm_answer",
+                    content=str(msg.get("prompt") or ""),
+                    metadata={
+                        "type": "confirm_answer",
+                        "request_id": msg.get("request_id"),
+                        "confirmed": False,
+                        "timed_out": True,
+                    },
+                )
+            except Exception:
+                pass
 
     broker.set_sender(send_sync)
     secret_broker.set_sender(send_sync)
@@ -4425,6 +4494,7 @@ async def websocket_chat(
 
     if session_id:
         state.active_ws[session_id] = ws
+        broker.session_id = session_id
 
     # Send active instructions so the client can show the badge on reconnect.
     if session_id:
@@ -4464,20 +4534,37 @@ async def websocket_chat(
                         last_mode = "scheduler"
                     elif "@monitor mode" in routed_reason or "monitor" in routed_reason.lower():
                         last_mode = "monitor"
+                    elif (msg.metadata or {}).get("profile") == "review" or "code review" in routed_reason.lower():
+                        last_mode = "review"
+                    elif (msg.metadata or {}).get("profile") == "builder" or (msg.metadata or {}).get("mode") in (
+                        "plan",
+                        "build",
+                    ):
+                        last_mode = (msg.metadata or {}).get("mode") or "plan"
                     else:
                         last_mode = "agent"
                     break
                 if msg.type == "tool_calls":
                     last_mode = "agent"
                     break
-                if msg.type in ("result", "query"):
-                    # Check if this was a query with a mode prefix
-                    if msg.type == "query" and msg.metadata:
-                        qmode = msg.metadata.get("mode", "")
-                        if qmode in ("logs", "web_search", "agent", "scheduler", "monitor", "research"):
-                            last_mode = qmode
-                            break
-                    break  # hit a result/query before any routing → search
+                if msg.type == "result" and msg.metadata and msg.metadata.get("plan_path"):
+                    last_mode = "plan"
+                    break
+                if msg.type == "query" and msg.metadata:
+                    qmode = msg.metadata.get("mode", "")
+                    if qmode in (
+                        "logs",
+                        "web_search",
+                        "agent",
+                        "scheduler",
+                        "monitor",
+                        "research",
+                        "review",
+                        "plan",
+                        "build",
+                    ):
+                        last_mode = qmode
+                        break
         except Exception:
             pass  # keep default "search"
 
@@ -4534,10 +4621,17 @@ async def websocket_chat(
             _NO_REPLAY = {
                 "confirm.request",
                 "confirm.response",
+                "confirm.timeout",
                 "secret.request",
                 "secret.response",
             }
             buffered = [e for e in buffered if e.get("type") not in _NO_REPLAY]
+            try:
+                pending_confirm = unanswered_confirm_request(db.get_messages(session_id) if db else [])
+                if pending_confirm:
+                    await ws.send_json(pending_confirm)
+            except Exception:
+                logger.debug("Pending confirm rehydrate failed for %s", session_id, exc_info=True)
             if buffered:
                 logger.info(
                     "Replaying %d buffered UI events for session %s",
@@ -4600,8 +4694,9 @@ async def websocket_chat(
         set_request_provider_override(_session_provider)
         # Notes app sessions search kb_note_entries; KB SPA sessions use the default collection.
         _knowledge_collection = collection_for_session_source(_session_source)
-        if _knowledge_collection is None and (overrides or {}).get("source") == "notes":
-            _knowledge_collection = notes_collection()
+        if _knowledge_collection is None:
+            _ov_source = (overrides or {}).get("source")
+            _knowledge_collection = collection_for_session_source(str(_ov_source) if _ov_source else None)
         set_request_knowledge_collection(_knowledge_collection)
         # Carry the session id so a tool dispatched to a worker can prompt the
         # user (e.g., for a sudo password) back through this session's WS.
@@ -4638,7 +4733,69 @@ async def websocket_chat(
         clean_text, forced_mode = _strip_mode_prefix(text)
 
         # Classify: search or agent?
+        prev_mode = last_mode
         mode = await _classify_mode(text, rt, last_mode=last_mode, db=db, session_id=session_id)
+
+        # Apply-from-review is @agent work (writes). @coding cannot plan from a
+        # review markdown, and sticky @review is read-only.
+        review_apply = None
+        history_msgs = None
+        try:
+            from agentforge.review.apply import resolve_review_apply
+
+            if db and session_id:
+                try:
+                    history_msgs = [m.to_dict() for m in db.get_messages(session_id)]
+                except Exception:
+                    history_msgs = None
+            review_apply = resolve_review_apply(
+                text,
+                last_mode=prev_mode,
+                forced_mode=forced_mode,
+                classified_mode=mode,
+                messages=history_msgs,
+            )
+        except Exception:
+            logger.debug("Review-apply resolve failed", exc_info=True)
+            review_apply = None
+        if review_apply:
+            logger.info(
+                "Review apply → agent (target=%s branch=%s)",
+                review_apply.target or "?",
+                review_apply.branch or "?",
+            )
+            mode = "agent"
+
+        if not review_apply:
+            try:
+                from agentforge.builder.intent import is_approve_plan
+                from web.server.builder import _plan_path_from_messages, plan_path_from_message_list
+
+                has_plan = prev_mode in ("plan", "build") or forced_mode in ("plan", "build")
+                if not has_plan:
+                    has_plan = bool(plan_path_from_message_list(history_msgs))
+                if not has_plan and db and session_id:
+                    has_plan = bool(_plan_path_from_messages(db, session_id))
+                if is_approve_plan(text) and has_plan:
+                    logger.info(
+                        "Plan approve → build (prev_mode=%s forced=%s)",
+                        prev_mode,
+                        forced_mode,
+                    )
+                    mode = "build"
+                else:
+                    from agentforge.builder.intent import is_redo_build, is_undo_build
+
+                    if has_plan and (is_undo_build(text) or is_redo_build(text)):
+                        logger.info(
+                            "Build %s (prev_mode=%s)",
+                            "undo" if is_undo_build(text) else "redo",
+                            prev_mode,
+                        )
+                        mode = "build"
+            except Exception:
+                logger.exception("plan-approve intercept failed")
+
         last_mode = mode  # remember for sticky follow-ups
         logger.info("Query mode: %s — %r", mode, text[:80])
 
@@ -4659,7 +4816,7 @@ async def websocket_chat(
             built_in = (
                 "@chat, @agent, @qdrant/@docs/@find, @search/@web, @logs, "
                 "@discover, @sql, @pipeline, @scheduler, @monitor, "
-                "@review, @research, @coding/@code"
+                "@review, @research, @coding/@code, @plan, @build"
             )
             custom_aliases = sorted(("@" + a) for a in (getattr(rt, "custom_agents", {}) or {}).keys())
             custom_str = ", ".join(custom_aliases) if custom_aliases else "(none)"
@@ -4702,7 +4859,9 @@ async def websocket_chat(
 
         # Use cleaned text (prefix stripped) for execution.
         # For custom agents, strip the custom alias from the query.
-        if mode.startswith("custom:"):
+        if review_apply:
+            exec_text = review_apply.query
+        elif mode.startswith("custom:"):
             exec_text, _ = _strip_custom_prefix(text, rt)
         else:
             exec_text = clean_text if forced_mode else text
@@ -4856,12 +5015,24 @@ async def websocket_chat(
             worker_overrides["_conversation_history"] = worker_history
             if _worker_incognito:
                 worker_overrides["_incognito_history"] = True
+            if mode in ("plan", "build"):
+                try:
+                    from web.server.builder import plan_path_from_message_list
+
+                    _pp_msgs = [m.to_dict() if hasattr(m, "to_dict") else m for m in db.get_messages(session_id)]
+                    _pp = plan_path_from_message_list(_pp_msgs)
+                    if _pp:
+                        worker_overrides["_plan_path"] = _pp
+                except Exception:
+                    logger.debug("could not pass _plan_path to builder job", exc_info=True)
             # Cross-process bridge: the SAQ worker has its own ConfigManager
             # singleton in a separate memory space, so the WS-side ContextVar
             # doesn't propagate. Stuff the session's override into the JSON
             # payload; the worker re-applies it via set_request_provider_override.
             if _session_provider:
                 worker_overrides["_provider_override"] = _session_provider
+            if _knowledge_collection:
+                worker_overrides["_knowledge_collection"] = _knowledge_collection
             # Same cross-process bridge for per-app role overrides
             # (app_provider_role_mapping). Compute {role: concrete} for this
             # session's source + provider and pass it; the worker re-applies via
@@ -4920,6 +5091,30 @@ async def websocket_chat(
 
             async def _wait_and_store(sid, jid, _db, _ws, _skip_mem=_skip_memory):
                 await _wait_job_done(sid, jid)
+                try:
+                    await _ws.send_json(protocol.run_idle())
+                except Exception:
+                    logger.debug("run.idle after worker job failed", exc_info=True)
+                try:
+                    _job = job_store.get_job(jid)
+                    if _job and _job.status == JobStatus.ERROR:
+                        err = (_job.error or "Worker job failed").strip()
+                        err_msg = protocol.agent_error(err, recoverable=True)
+                        _db.add_message(
+                            session_id=sid,
+                            role="assistant",
+                            msg_type="error",
+                            content=err,
+                            metadata=err_msg,
+                            is_incognito=(overrides or {}).get("incognito", False),
+                        )
+                        try:
+                            await _ws.send_json(err_msg)
+                            await _ws.send_json(protocol.agent_summary(iterations=0, elapsed=0, tool_calls=0, tools={}))
+                        except Exception:
+                            logger.debug("could not send worker-error card", exc_info=True)
+                except Exception:
+                    logger.debug("worker-error card failed", exc_info=True)
                 if not _skip_mem:
                     # Run memory storage in a thread to avoid blocking the event loop
                     # (embed() and fact extraction LLM calls are synchronous)
@@ -5079,6 +5274,7 @@ async def websocket_chat(
                     from . import state
 
                     state.active_ws[session_id] = ws
+                    broker.session_id = session_id
 
                 await _process_query(text, attachments, overrides)
 
@@ -5195,6 +5391,10 @@ async def websocket_chat(
                 # Enable auto-accept for remainder of this agent run
                 if confirmed and auto_accept:
                     broker.auto_accept = True
+                    if session_id:
+                        from . import state as _st
+
+                        _st.session_auto_accept.add(session_id)
                     logger.info("Auto-accept enabled for session %s", session_id)
                 # Also store for worker polling via HttpConfirmationBroker.
                 # The worker cannot receive WS messages directly, so it polls
@@ -5206,6 +5406,23 @@ async def websocket_chat(
                     "confirmed": confirmed,
                     "auto_accept": auto_accept,
                 }
+                if session_id:
+                    try:
+                        db.add_message(
+                            session_id=session_id,
+                            role="assistant",
+                            msg_type="confirm_answer",
+                            content=str(data.get("prompt") or ""),
+                            metadata={
+                                "type": "confirm_answer",
+                                "request_id": request_id,
+                                "confirmed": confirmed,
+                                "timed_out": False,
+                                "auto_accepted": bool(auto_accept),
+                            },
+                        )
+                    except Exception:
+                        pass
 
             elif msg_type == "secret.response":
                 request_id = data.get("request_id", "")
@@ -8101,9 +8318,9 @@ async def _run_agent(
     """Run the AgentLoop with system tools and stream events to the client.
 
     Used for operational queries (Docker, SSH, system commands, file ops).
-    When ``forced=True`` (user used @tooling/@agent prefix), skip the
-    ProfileRouter and use the 'agent' profile directly — the user explicitly
-    chose tool mode and shouldn't be downgraded to a weaker model.
+    When ``forced=True`` (user used @tooling/@agent prefix), the tool set
+    stays ``agent``. Intensity (agent-light / agent / agent-heavy) is still
+    classified — @agent locks the family, not the model.
 
     ``_profile_override`` lets callers (e.g., _run_pipeline) force a specific
     profile name (e.g., "pipeline") which selects the matching tool subset from
@@ -8216,21 +8433,21 @@ async def _run_agent(
                 llm_profile,
                 _profile_override,
             )
-        elif forced:
-            reason = "Explicit @tooling/@agent prefix — using agent profile"
-            logger.info("Skipping ProfileRouter — forced agent mode")
         else:
+            # @agent locks the tool set to agent, not the model. Intensity
+            # hop still runs (agent-light / agent / agent-heavy).
             try:
                 from agentforge.client import AIClient
-                from agentforge.router import ProfileRouter
+                from agentforge.router import ROUTER_PROFILE, ProfileRouter
 
-                router_client = AIClient(profile="tool", session_overrides=overrides)
-                prof_router = ProfileRouter(router_client)
+                router_client = AIClient(profile=ROUTER_PROFILE, session_overrides=overrides)
+                prof_router = ProfileRouter(router_client, fallback="agent")
                 route_start = time.perf_counter()
-                route = await asyncio.to_thread(prof_router.select, query)
+                route = await asyncio.to_thread(prof_router.select, query, capability="agent")
                 route_elapsed = time.perf_counter() - route_start
                 llm_profile = route.profile
-                tool_profile = route.profile
+                if route.profile in rt.agent_profiles:
+                    tool_profile = route.profile
                 reason = route.reason
             except Exception:
                 logger.debug("ProfileRouter unavailable — defaulting to 'agent'")
@@ -8319,6 +8536,29 @@ async def _run_agent(
             query=query,
         )
 
+        # Attachments arrive as overrides["_attachments"] on the worker.
+        # Inject once here so the parallel planner AND the sequential loop
+        # see PDF sidecar text. Building Attachment(path=pdf) without the
+        # sidecar silently drops binary PDFs (UnicodeDecodeError).
+        _n_atts = len((overrides or {}).get("_attachments") or [])
+        history_messages = list(conversation_history or [])
+        history_messages.append({"role": "user", "content": query})
+        history_messages = _inject_attachments(agent_client, history_messages, overrides)
+        user_content = history_messages[-1]["content"] if history_messages else query
+        if _n_atts and user_content == query:
+            logger.warning(
+                "Agent: %d attachment(s) produced no prompt text "
+                "(PDF sidecar missing or path unreadable) session_id=%s",
+                _n_atts,
+                session_id,
+            )
+        elif user_content != query:
+            logger.info(
+                "Injected attachment text into agent query (%d extra chars) session_id=%s",
+                len(user_content) - len(query),
+                session_id,
+            )
+
         # --- Step 2b: Try parallel planning (optional) --------------------
         # For queries that involve multiple independent tasks (e.g., "reinstall
         # deps in project-a and project-b"), ask a fast model to decompose
@@ -8351,8 +8591,8 @@ async def _run_agent(
             plan_start = time.perf_counter()
             parallel_plan = await asyncio.to_thread(
                 parallel_runner.plan,
-                query,
-                conversation_history,
+                user_content,
+                history_messages[:-1],
             )
             plan_elapsed = time.perf_counter() - plan_start
 
@@ -8492,36 +8732,7 @@ async def _run_agent(
             # ---- SEQUENTIAL PATH (original AgentLoop) ----
             bridge.setup_registry(rt.registry)
 
-            # Build conversation context with history
             from agentforge.context import PipelineContext
-
-            # Extract attachments from worker overrides
-            raw_atts = (overrides or {}).pop("_attachments", None)
-            _att_images = None
-            _att_documents = None
-            user_content = query  # what the model sees; may get document text appended
-            if raw_atts:
-                from agentforge.attachments import Attachment
-
-                agent_attachments = [Attachment(path=a["path"], name=a["name"]) for a in raw_atts if a.get("path")]
-                # Apply attachments via provider-aware logic. Keep `query` pristine
-                # (it feeds ctx.query + title generation); only the message the model
-                # receives gets the appended document text / images.
-                _temp_msgs = agent_client._apply_attachments([{"role": "user", "content": query}], agent_attachments)
-                if _temp_msgs:
-                    user_content = _temp_msgs[0].get("content", query)
-                    _att_images = _temp_msgs[0].get("images")
-                    _att_documents = _temp_msgs[0].get("documents")
-
-            history_messages = conversation_history or []
-            history_messages.append({"role": "user", "content": user_content})
-            # Inject attachment data onto the user message
-            if raw_atts:
-                user_msg = history_messages[-1]
-                if _att_images:
-                    user_msg["images"] = _att_images
-                if _att_documents:
-                    user_msg["documents"] = _att_documents
 
             ctx = PipelineContext(query=query)
             ctx.messages = history_messages
@@ -10115,16 +10326,7 @@ _REVIEW_SUB_AGENTS = [
     ("code_quality", "Code Quality", "code_quality.md", "Dead code, DRY violations, complexity, naming, architecture"),
 ]
 
-_REVIEW_TOOLS = [
-    "read_file",
-    "find_files",
-    "grep_text",
-    "git_diff",
-    "git_log",
-    "git_status",
-    "git_blame",
-    "shell",
-]
+from agentforge.review.tools import REVIEW_TOOLS as _REVIEW_TOOLS
 
 
 def _load_review_prompt(filename: str) -> str:
@@ -10137,39 +10339,7 @@ def _load_review_prompt(filename: str) -> str:
     return "You are a code review specialist. Review the code thoroughly."
 
 
-def _extract_review_target(query: str) -> tuple[str, str]:
-    """Extract the target path and clean query from a review prompt.
-
-    Handles patterns like:
-        @review Review changes in /path/to/project
-        @review /path/to/project check for bugs
-        Review all unpushed changes in /home/user/project for branch main
-    """
-    # Strip @review prefix
-    clean = re.sub(r"^@review\s*", "", query, flags=re.IGNORECASE).strip()
-
-    # Look for absolute paths
-    path_match = re.search(r"(/[^\s]+)", clean)
-    target = ""
-    if path_match:
-        candidate = path_match.group(1).rstrip(".,;:!?")
-        # Only accept if it looks like a real directory path
-        if "/" in candidate and len(candidate) > 3:
-            target = candidate
-            # Remove the path from the clean query
-            clean = clean.replace(path_match.group(0), "").strip()
-
-    # Also check for ~/paths
-    if not target:
-        home_match = re.search(r"(~/[^\s]+)", clean)
-        if home_match:
-            target = os.path.expanduser(home_match.group(1).rstrip(".,;:!?"))
-            clean = clean.replace(home_match.group(0), "").strip()
-
-    if not clean:
-        clean = "Review all current and unpushed changes"
-
-    return target, clean
+# Review target / --single --deep --classic flags: agentforge.review.parse_review_query
 
 
 # ---------------------------------------------------------------------------
@@ -10233,22 +10403,17 @@ async def _run_coding(
             is_incognito=(overrides or {}).get("incognito", False),
         )
 
-        # --- Auto-title (early — burst runs are long, WS may close) --
-        try:
-            session = db.get_session(session_id)
-            if session and session.title == "New chat":
-                title = await asyncio.to_thread(_generate_title, query)
-                db.update_session(session_id, title=title)
-                if not ws_closed:
-                    await ws.send_json(protocol.session_title(session_id, title))
-        except Exception:
-            logger.debug("Coding auto-title failed", exc_info=True)
-
-        # --- Undo branch (handled before normal pipeline) --------------
-        # Matches `undo <burst-id>` or `revert <burst-id>`. Keeps the
-        # rollback UX inside the same mode so users don't have to learn
-        # a separate @coding-undo alias.
-        undo_match = re.match(r"^\s*(?:undo|revert)\s+([A-Za-z0-9]{6,32})\s*$", query)
+        # --- Undo branch first -----------------------------------------
+        # Matches `undo <burst-id>` / `revert <burst-id>`, with or without
+        # a leftover @coding/@code prefix. Must run BEFORE auto-title: the
+        # worker's get_session stub often reports "New chat", which used to
+        # fire an LLM title call on "undo <id>" and made undo look hung
+        # even though the files had already reverted.
+        undo_match = re.match(
+            r"^\s*(?:@coding|@code)?\s*(?:undo|revert)\s+([A-Za-z0-9]{6,32})\s*$",
+            query,
+            flags=re.IGNORECASE,
+        )
         if undo_match:
             burst_id = undo_match.group(1)
             await send_and_persist(protocol.agent_routing(), msg_type="routing")
@@ -10298,6 +10463,17 @@ async def _run_coding(
             )
             return
 
+        # --- Auto-title (after undo — burst runs are long, WS may close)
+        try:
+            session = db.get_session(session_id)
+            if session and session.title == "New chat":
+                title = await asyncio.to_thread(_generate_title, query)
+                db.update_session(session_id, title=title)
+                if not ws_closed:
+                    await ws.send_json(protocol.session_title(session_id, title))
+        except Exception:
+            logger.debug("Coding auto-title failed", exc_info=True)
+
         # --- Route -----------------------------------------------------
         await send_and_persist(protocol.agent_routing(), msg_type="routing")
 
@@ -10311,15 +10487,30 @@ async def _run_coding(
         planner_profile = str(_fw.get("coding.planner_profile", "agent-heavy"))
         extractor_profile = str(_fw.get("coding.extractor_profile", "cloud-light"))
         burst_profile = str(_fw.get("coding.burst_profile", "coding"))
+        route_elapsed = 0.0
+        reason = f"@coding mode — planner={planner_profile} · extractor={extractor_profile} · bursts={burst_profile}"
+        try:
+            from agentforge.client import AIClient as _RouteClient
+            from agentforge.router import ROUTER_PROFILE as _ROUTER_PROFILE
+            from agentforge.router import ProfileRouter as _ProfileRouter
+
+            router_client = _RouteClient(profile=_ROUTER_PROFILE, session_overrides=overrides)
+            prof_router = _ProfileRouter(router_client, fallback="coder")
+            route_start = time.perf_counter()
+            route = await asyncio.to_thread(prof_router.select, query, capability="coder")
+            route_elapsed = time.perf_counter() - route_start
+            burst_profile = route.profile
+            reason = route.reason or reason
+        except Exception:
+            logger.debug("coding intensity router unavailable — burst_profile=%s", burst_profile)
 
         # The route + config cards display the BURST profile — that's
         # the one that produces the actual diffs and does the bulk of
         # the work. Planner / extractor profiles are operational and
         # logged for diagnostics but don't clutter the UI.
         profile_name = burst_profile
-        reason = f"@coding mode — planner={planner_profile} · extractor={extractor_profile} · bursts={burst_profile}"
         await send_and_persist(
-            protocol.agent_routed(profile_name, reason, 0.0),
+            protocol.agent_routed(profile_name, reason, route_elapsed),
             msg_type="routed",
         )
 
@@ -10990,17 +11181,12 @@ async def _run_review(
     cancel_event: threading.Event | None = None,
     secret_broker: "SecretBroker | None" = None,
 ) -> None:
-    """Run parallel multi-agent code review.
+    """Run @review.
 
-    Launches 4 specialised sub-agents concurrently — each reviews the same
-    code changes through a different lens.  Results are collected and merged
-    into a single structured report.
-
-    Sub-agents:
-        1. Error Handling — swallowed exceptions, silent failures
-        2. Type Design   — type safety, broad types, missing annotations
-        3. Test Coverage  — untested paths, missing edge cases
-        4. Code Quality   — dead code, DRY, complexity, naming
+    Styles (prompt flag overrides ``review.style`` in config):
+        single  (default) — one large-context reviewer, Grok-shaped report
+        deep              — 4 specialists, then a merge / nit-filter pass
+        classic           — 4 specialists concatenated (previous behaviour)
     """
     total_start = time.perf_counter()
     ws_closed = False
@@ -11055,42 +11241,67 @@ async def _run_review(
             is_incognito=(overrides or {}).get("incognito", False),
         )
 
-        # --- Routing messages ---------------------------------------------
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        from agentforge.agent import AgentLoop
+        from agentforge.client import AIClient
+        from agentforge.config import get_config as _get_framework_config
+        from agentforge.review.gather import gather_review_context
+        from agentforge.review.loop import extract_agent_loop_output
+        from agentforge.review.output import (
+            parse_review_output_path,
+            resolve_review_output_file,
+            usable_branch_name,
+            write_review_output,
+        )
+        from agentforge.review.report import build_classic_report, specialist_extra_rules
+        from agentforge.review.style import parse_review_query, resolve_review_max_workers, style_reason
+        from app.config import settings as _af_settings
+
+        review_cfg = _af_settings.review
+        parsed = parse_review_query(query, default_style=review_cfg.style)
+        target_path = parsed.target
+        clean_query = parsed.instruction
+        style = parsed.style
+
         routing_msg = protocol.agent_routing()
         await send_and_persist(routing_msg, msg_type="routing")
 
-        routed_msg = protocol.agent_routed(
-            "review",
-            "Parallel code review — 4 specialised sub-agents",
-            0.0,
-        )
+        routed_msg = protocol.agent_routed("review", style_reason(style), 0.0)
         await send_and_persist(routed_msg, msg_type="routed")
 
-        # --- Parse target path from query ---------------------------------
-        target_path, clean_query = _extract_review_target(query)
+        try:
+            session = db.get_session(session_id)
+            if session and session.title == "New chat":
+                title = await asyncio.to_thread(_generate_title, query)
+                db.update_session(session_id, title=title)
+                if not ws_closed:
+                    try:
+                        await ws.send_json(protocol.session_title(session_id, title))
+                    except (WebSocketDisconnect, RuntimeError):
+                        ws_closed = True
+        except Exception:
+            logger.debug("Review auto-title failed", exc_info=True)
 
-        # --- Resolve cloud-heavy ahead of the config message so the UI (and
-        # the audit log) report the actual model + provider that's going to
-        # run — not the literal role name. Without this, the agent.config
-        # event shows "Provider: ollama" (protocol default) even when
-        # provider_override has rewired cloud-heavy to DeepInfra / Bedrock /
-        # OpenRouter via the override map.
-        from agentforge.config import get_config as _get_framework_config
+        profile_key = review_cfg.reviewer_profile if style == "single" else review_cfg.specialist_profile
+        try:
+            _resolved_profile = _get_framework_config().get_profile(profile_key)
+        except Exception:
+            logger.warning("review profile %r not resolvable — falling back to cloud-heavy", profile_key)
+            profile_key = "cloud-heavy"
+            _resolved_profile = _get_framework_config().get_profile(profile_key)
 
-        _resolved_profile = _get_framework_config().get_profile("cloud-heavy")
-
-        # --- Config message -----------------------------------------------
+        n_tools = 1 if style == "single" else len(_REVIEW_SUB_AGENTS)
         config_msg = protocol.agent_config(
             profile="review",
             model=_resolved_profile.model,
-            tools=len(_REVIEW_SUB_AGENTS),
+            tools=n_tools,
             session_id=session_id,
             provider=_resolved_profile.provider,
             mode="review",
         )
         await send_and_persist(config_msg, msg_type="config")
 
-        # --- Hooks: run started -------------------------------------------
         from ._hooks import hooks_run_started
 
         await hooks_run_started(
@@ -11101,202 +11312,215 @@ async def _run_review(
             query=query[:100],
         )
 
-        # --- Pre-flight: gather git context once, share with all sub-agents --
-        # Each sub-agent independently ran git status/diff before — wasteful.
-        # Run the orientation commands once here and inject results so agents
-        # skip straight to their speciality without duplicating setup work.
-        import subprocess
-
-        def _run_git(cmd: str) -> str:
-            """Run a git command in target_path and return stdout+stderr."""
-            try:
-                cwd = target_path if target_path and os.path.isdir(target_path) else None
-                r = subprocess.run(
-                    cmd,
-                    shell=True,
-                    cwd=cwd,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                out = r.stdout.strip()
-                err = r.stderr.strip()
-                return (out + ("\n" + err if err else "")).strip() or "(empty)"
-            except Exception as exc:
-                return f"(could not run: {exc})"
-
-        git_status = _run_git("git status")
-        git_branch = _run_git("git branch --show-current")
-        git_log = _run_git("git log @{u}..HEAD --oneline 2>/dev/null || git log -10 --oneline")
-        changed_files = _run_git(
-            "git diff --name-only @{u}..HEAD 2>/dev/null || git diff --name-only HEAD~1..HEAD 2>/dev/null || git status --short"
+        gathered = gather_review_context(
+            target_path,
+            instruction=clean_query,
+            max_bytes=review_cfg.gather_max_bytes,
         )
-
-        # --- Build context preamble for all sub-agents --------------------
-        context_preamble = f"""## Review Target
-
-Target directory: `{target_path or "(current working directory)"}`
-Current branch: `{git_branch}`
-User instruction: {clean_query}
-
-## Pre-gathered Git Context (do NOT re-run these — results already below)
-
-### git status
-```
-{git_status}
-```
-
-### Changed files vs remote
-```
-{changed_files}
-```
-
-### Unpushed commits
-```
-{git_log}
-```
-
-## Your Task
-
-Focus your review on the changed files listed above. Use `read_file`, `grep_text`, and `git_diff` (or `git_blame`) to read and analyse the actual code. Do NOT re-run `git status` or `git branch` — the output is already provided above.
-"""
-
-        # Append uploaded document text so every review sub-agent sees it
-        # (review is a worker mode — attachments arrive via overrides).
-        context_preamble += _attachment_text_block(overrides)
-
-        # --- Run 4 sub-agents in parallel ---------------------------------
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        from agentforge.agent import AgentLoop
-        from agentforge.client import AIClient
-
-        agent_client = AIClient(profile="cloud-heavy")
+        context_preamble = gathered.preamble + _attachment_text_block(overrides)
+        extra_rules = specialist_extra_rules(style, max_findings=review_cfg.max_findings)
 
         sub_results: dict[str, dict[str, Any]] = {}
         errors: dict[str, str] = {}
+        _review_prompt_tokens = 0
+        _review_completion_tokens = 0
 
-        def _run_sub_agent(
-            agent_id: str, label: str, prompt_file: str, description: str
+        def _run_named_agent(
+            agent_id: str,
+            system_prompt: str,
+            client: AIClient,
         ) -> tuple[str, str, list, dict]:
-            """Run a single sub-agent in its own thread. Returns (agent_id, result_text, tool_calls, token_usage)."""
             try:
-                prompt_text = _load_review_prompt(prompt_file)
-                full_prompt = f"{prompt_text}\n\n{context_preamble}"
-
                 sub_agent = AgentLoop(
-                    agent_client,
+                    client,
                     rt.registry,
-                    system_prompt=full_prompt,
+                    system_prompt=system_prompt,
                     tools=_REVIEW_TOOLS,
                     max_iterations=15,
                     verbose=False,
                     cancel_event=cancel_event,
-                    deep_think=bool(agent_client.profile.thinking_budget),
+                    deep_think=bool(client.profile.thinking_budget),
                 )
                 ctx = sub_agent.run(clean_query)
-                # AgentLoop.run() returns a PipelineContext — extract .result string
-                sub_tokens: dict[str, int] = {}
-                if ctx is not None:
-                    result_text = ctx.result if hasattr(ctx, "result") and isinstance(ctx.result, str) else str(ctx)
-                    sub_tokens = (ctx.metadata or {}).get("token_usage", {})
-                else:
-                    result_text = ""
-                tool_calls = []
-                for it in sub_agent._iterations if hasattr(sub_agent, "_iterations") else []:
-                    for tc in it.get("tool_calls", []):
-                        tool_calls.append({"name": tc.get("name", "?"), "args": tc.get("args", {})})
-
-                return agent_id, result_text or "(no findings)", tool_calls, sub_tokens
+                result_text, tool_calls, sub_tokens = extract_agent_loop_output(ctx)
+                return agent_id, result_text, tool_calls, sub_tokens
             except Exception as e:
                 logger.exception("Review sub-agent '%s' failed", agent_id)
                 return agent_id, f"ERROR: {e}", [], {}
 
-        # Send progress: starting sub-agents
-        progress_msg = {
-            "type": "review.progress",
-            "phase": "starting",
-            "sub_agents": [{"id": sa[0], "label": sa[1], "description": sa[3]} for sa in _REVIEW_SUB_AGENTS],
-        }
-        if not ws_closed:
+        async def _emit_progress(msg: dict) -> None:
+            nonlocal ws_closed
+            if ws_closed:
+                return
             try:
-                await ws.send_json(progress_msg)
+                await ws.send_json(msg)
             except (WebSocketDisconnect, RuntimeError):
                 ws_closed = True
 
-        # Launch all sub-agents in parallel
-        from app.config import settings as _af_settings
+        async def _run_specialists(client: AIClient) -> None:
+            nonlocal _review_prompt_tokens, _review_completion_tokens
+            await _emit_progress(
+                {
+                    "type": "review.progress",
+                    "phase": "starting",
+                    "style": style,
+                    "sub_agents": [{"id": sa[0], "label": sa[1], "description": sa[3]} for sa in _REVIEW_SUB_AGENTS],
+                }
+            )
+            timeout = review_cfg.subagent_timeout_seconds
+            workers = resolve_review_max_workers(review_cfg.max_workers)
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="review") as executor:
+                futures = {}
+                for sa_id, sa_label, sa_file, sa_desc in _REVIEW_SUB_AGENTS:
+                    prompt_text = _load_review_prompt(sa_file)
+                    full_prompt = f"{prompt_text}\n{extra_rules}\n\n{context_preamble}"
+                    futures[executor.submit(_run_named_agent, sa_id, full_prompt, client)] = sa_id
+                for future in as_completed(futures):
+                    agent_id = futures[future]
+                    try:
+                        aid, result_text, tool_calls, sub_tokens = future.result(timeout=timeout)
+                        sub_results[aid] = {"text": result_text, "tool_calls": tool_calls}
+                        _review_prompt_tokens += sub_tokens.get("prompt_tokens", 0)
+                        _review_completion_tokens += sub_tokens.get("completion_tokens", 0)
+                        await _emit_progress(
+                            {
+                                "type": "review.progress",
+                                "phase": "completed",
+                                "agent_id": aid,
+                                "findings_preview": result_text[:200],
+                            }
+                        )
+                    except Exception as e:
+                        errors[agent_id] = str(e)
 
-        _review_subagent_timeout = _af_settings.review.subagent_timeout_seconds
-        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="review") as executor:
-            futures = {
-                executor.submit(_run_sub_agent, sa_id, sa_label, sa_file, sa_desc): sa_id
-                for sa_id, sa_label, sa_file, sa_desc in _REVIEW_SUB_AGENTS
-            }
-
-            _review_prompt_tokens = 0
-            _review_completion_tokens = 0
-            for future in as_completed(futures):
-                agent_id = futures[future]
-                try:
-                    aid, result_text, tool_calls, sub_tokens = future.result(timeout=_review_subagent_timeout)
-                    sub_results[aid] = {
-                        "text": result_text,
-                        "tool_calls": tool_calls,
+        if style == "single":
+            await _emit_progress(
+                {
+                    "type": "review.progress",
+                    "phase": "starting",
+                    "style": style,
+                    "sub_agents": [
+                        {
+                            "id": "reviewer",
+                            "label": "Review",
+                            "description": "Whole-diff review: contract, failures, tests",
+                        }
+                    ],
+                }
+            )
+            reviewer_client = AIClient(profile=profile_key)
+            prompt_text = _load_review_prompt("whole_review.md")
+            full_prompt = f"{prompt_text}\n\nCap Worth fixing at {review_cfg.max_findings} items.\n\n{context_preamble}"
+            aid, result_text, tool_calls, sub_tokens = await asyncio.to_thread(
+                _run_named_agent, "reviewer", full_prompt, reviewer_client
+            )
+            sub_results[aid] = {"text": result_text, "tool_calls": tool_calls}
+            _review_prompt_tokens += sub_tokens.get("prompt_tokens", 0)
+            _review_completion_tokens += sub_tokens.get("completion_tokens", 0)
+            await _emit_progress(
+                {
+                    "type": "review.progress",
+                    "phase": "completed",
+                    "agent_id": aid,
+                    "findings_preview": result_text[:200],
+                }
+            )
+            combined_report = result_text
+        else:
+            specialist_client = AIClient(profile=profile_key)
+            await _run_specialists(specialist_client)
+            if style == "deep":
+                await _emit_progress(
+                    {
+                        "type": "review.progress",
+                        "phase": "aggregating",
+                        "sub_agents_completed": len(sub_results),
+                        "sub_agents_failed": len(errors),
                     }
-                    _review_prompt_tokens += sub_tokens.get("prompt_tokens", 0)
-                    _review_completion_tokens += sub_tokens.get("completion_tokens", 0)
-                    # Send progress: sub-agent completed
-                    if not ws_closed:
-                        try:
-                            await ws.send_json(
-                                {
-                                    "type": "review.progress",
-                                    "phase": "completed",
-                                    "agent_id": aid,
-                                    "findings_preview": result_text[:200],
-                                }
-                            )
-                        except (WebSocketDisconnect, RuntimeError):
-                            ws_closed = True
-                except Exception as e:
-                    errors[agent_id] = str(e)
+                )
+                findings_parts = []
+                for sa_id, sa_label, _sa_file, _sa_desc in _REVIEW_SUB_AGENTS:
+                    sr = sub_results.get(sa_id)
+                    if sr:
+                        findings_parts.append(f"### {sa_label}\n\n{sr['text']}")
+                    elif sa_id in errors:
+                        findings_parts.append(f"### {sa_label}\n\nSub-agent failed: {errors[sa_id]}")
+                findings_text = "\n\n---\n\n".join(findings_parts)
+                agg_template = _load_review_prompt("aggregator.md")
+                agg_prompt = (
+                    agg_template.replace("{instruction}", clean_query)
+                    .replace("{findings}", findings_text)
+                    .replace("{max_findings}", str(review_cfg.max_findings))
+                )
+                try:
+                    from agentforge.backends._retry import retry_call
 
-        # --- Build combined report ----------------------------------------
+                    aggregator_client = AIClient(profile=review_cfg.aggregator_profile)
+
+                    def _agg_call():
+                        return aggregator_client.chat(
+                            messages=[
+                                {"role": "system", "content": agg_prompt},
+                                {"role": "user", "content": "Produce the merged review now."},
+                            ],
+                            temperature=0.2,
+                        )
+
+                    agg_resp = retry_call(_agg_call, max_attempts=3, context="review-aggregator")
+                    _review_prompt_tokens += getattr(agg_resp, "prompt_tokens", 0) or 0
+                    _review_completion_tokens += getattr(agg_resp, "completion_tokens", 0) or 0
+                    combined_report = _strip_wrapping_fence((agg_resp.content or "").strip())
+                    if not combined_report:
+                        raise ValueError("empty aggregator output")
+                except Exception:
+                    logger.exception("Review aggregator failed — concatenating specialist output")
+                    combined_report = build_classic_report(
+                        target=target_path,
+                        elapsed_s=time.perf_counter() - total_start,
+                        sub_agents=_REVIEW_SUB_AGENTS,
+                        sub_results=sub_results,
+                        errors=errors,
+                    )
+            else:
+                combined_report = build_classic_report(
+                    target=target_path,
+                    elapsed_s=time.perf_counter() - total_start,
+                    sub_agents=_REVIEW_SUB_AGENTS,
+                    sub_results=sub_results,
+                    errors=errors,
+                )
+
         elapsed = time.perf_counter() - total_start
-        total_tools = sum(len(sr["tool_calls"]) for sr in sub_results.values())
-
-        report_parts = []
-        report_parts.append("# Code Review Report")
-        if target_path:
-            report_parts.append(f"\n**Target**: `{target_path}`")
-        report_parts.append(
-            f"**Duration**: {elapsed:.1f}s | **Sub-agents**: {len(sub_results)}/{len(_REVIEW_SUB_AGENTS)} | **Tool calls**: {total_tools}"
-        )
-        report_parts.append("")
-
         all_tool_calls = []
-        for sa_id, sa_label, sa_file, sa_desc in _REVIEW_SUB_AGENTS:
-            sr = sub_results.get(sa_id)
-            if sr:
-                report_parts.append(f"---\n\n## {sa_label}")
-                report_parts.append(f"*{sa_desc}*\n")
-                report_parts.append(sr["text"])
-                report_parts.append("")
-                all_tool_calls.extend(sr["tool_calls"])
-            elif sa_id in errors:
-                report_parts.append(f"---\n\n## {sa_label}")
-                report_parts.append(f"⚠️ Sub-agent failed: {errors[sa_id]}\n")
+        for sr in sub_results.values():
+            all_tool_calls.extend(sr.get("tool_calls") or [])
+        total_tools = len(all_tool_calls)
 
-        combined_report = "\n".join(report_parts)
+        output_dest = parse_review_output_path(query, target=target_path)
+        if output_dest:
+            dest_file = resolve_review_output_file(
+                output_dest,
+                branch=usable_branch_name(gathered.branch, parsed.branch),
+            )
+            try:
+                write_note = write_review_output(dest_file, combined_report)
+            except Exception as exc:
+                logger.exception("Review output write failed")
+                write_note = f"Could not write review to {dest_file}: {exc}"
+            combined_report = combined_report.rstrip() + f"\n\n---\n{write_note}\n"
 
         # --- Send result + summary ----------------------------------------
         result_msg = protocol.agent_result(combined_report, elapsed)
+        review_branch = usable_branch_name(gathered.branch, parsed.branch)
+        if target_path:
+            result_msg["review_target"] = target_path
+        if review_branch:
+            result_msg["review_branch"] = review_branch
         await send_and_persist(
             result_msg,
             msg_type="result",
             content=combined_report,
-            tool_calls=all_tool_calls[:50],  # cap persisted tool calls
+            tool_calls=all_tool_calls if all_tool_calls else None,
         )
 
         summary_data = {
@@ -11498,6 +11722,7 @@ async def _run_research(
         # =====================================================================
         from agentforge.agent import AgentLoop
         from agentforge.client import AIClient
+        from agentforge.review.loop import extract_agent_loop_output
 
         planner_prompt = _load_prompt("research_planner")
         # Use cloud-heavy for planning — reliable structured JSON with 3-8 sub-agents.
@@ -11710,19 +11935,8 @@ async def _run_research(
                 )
 
                 ctx = sub_agent.run(spec["strategy"])
-                sub_tokens: dict[str, int] = {}
-                if ctx is not None:
-                    result_text = ctx.result if hasattr(ctx, "result") and isinstance(ctx.result, str) else str(ctx)
-                    sub_tokens = (ctx.metadata or {}).get("token_usage", {})
-                else:
-                    result_text = ""
-
-                tool_calls = []
-                for it in sub_agent._iterations if hasattr(sub_agent, "_iterations") else []:
-                    for tc in it.get("tool_calls", []):
-                        tool_calls.append({"name": tc.get("name", "?"), "args": tc.get("args", {})})
-
-                return agent_id, result_text or "(no findings)", tool_calls, sub_tokens
+                result_text, tool_calls, sub_tokens = extract_agent_loop_output(ctx)
+                return agent_id, result_text, tool_calls, sub_tokens
             except Exception as e:
                 logger.exception("Research sub-agent '%s' failed", agent_id)
                 return agent_id, f"ERROR: {e}", [], {}
@@ -11944,7 +12158,7 @@ async def _run_research(
             result_msg,
             msg_type="result",
             content=combined_report,
-            tool_calls=all_tool_calls[:50],
+            tool_calls=all_tool_calls if all_tool_calls else None,
         )
 
         summary_data = {

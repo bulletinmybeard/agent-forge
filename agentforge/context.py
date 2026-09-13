@@ -52,6 +52,8 @@ class PipelineContext:
     _empty_nudge_sent: bool = False
     _fabrication_nudge_sent: bool = False
     _plan_fragment_nudge_sent: bool = False
+    _length_nudge_sent: bool = False
+    _reasoning_nudge_sent: bool = False
 
     # -- convenience helpers ------------------------------------------------
 

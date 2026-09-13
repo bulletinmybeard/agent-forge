@@ -174,7 +174,13 @@ def secret_request(request_id: str, label: str, prompt: str) -> dict:
     return {"type": "secret.request", "request_id": request_id, "label": label, "prompt": prompt}
 
 
-def confirm_request(request_id: str, prompt: str, *, auto_accepted: bool = False) -> dict:
+def confirm_request(
+    request_id: str,
+    prompt: str,
+    *,
+    auto_accepted: bool = False,
+    kind: str | None = None,
+) -> dict:
     msg: dict[str, Any] = {
         "type": "confirm.request",
         "request_id": request_id,
@@ -182,7 +188,13 @@ def confirm_request(request_id: str, prompt: str, *, auto_accepted: bool = False
     }
     if auto_accepted:
         msg["auto_accepted"] = True
+    if kind:
+        msg["kind"] = kind
     return msg
+
+
+def confirm_timeout(request_id: str) -> dict:
+    return {"type": "confirm.timeout", "request_id": request_id}
 
 
 def result_chunk(token: str) -> dict:
@@ -220,8 +232,9 @@ def file_diff(
     Carries the unified diff, file path, and hash envelope so the client can
     render a syntax-highlighted file diff card under the tool call panel.
 
-    ``action`` is one of ``"edited"`` | ``"reverted"`` | ``"written"`` and
-    controls the accent colour + verb shown in the UI header.
+    ``action`` is one of ``"proposed"`` | ``"edited"`` | ``"reverted"`` |
+    ``"written"`` | ``"compared"``. ``proposed`` is a pre-confirm preview
+    (empty ``post_hash``); the others are post-apply receipts.
     """
     return {
         "type": "file.diff",

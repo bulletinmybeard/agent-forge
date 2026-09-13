@@ -66,7 +66,11 @@ rules:
 # so the per-tool map never sees those calls. `@coding` runs its
 # code_find/narrow/transform driver directly, so the ENTIRE job must execute on
 # the host that owns the target files. Pin it to `local` and the whole run lands
-# on your machine's worker (which also picks up agent jobs). Only consulted in
-# `split` mode; ignored under `in_process`.
+# on your machine's worker (which also picks up agent jobs). `@review` gathers
+# git + writes the report to ~/Downloads, so it needs the same host. Only
+# consulted in `split` mode; ignored under `in_process`.
 modes:
   coding: local
+  review: local
+  plan: local
+  build: local

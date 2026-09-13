@@ -36,9 +36,17 @@ profiles:
 
 # Map only the tiers you want Bedrock to serve; the rest fall back to Ollama.
 provider_override_map:
-  general:  bedrock-claude-sonnet
-  heavy:    bedrock-claude-sonnet
-  light:    bedrock-claude-haiku
-  coder:    bedrock-claude-sonnet
-  visual:   bedrock-claude-sonnet
-  embed:    bedrock-cohere-embed-v4
+  general:         bedrock-claude-sonnet
+  heavy:           bedrock-claude-sonnet
+  light:           bedrock-claude-haiku
+  visual:          bedrock-claude-sonnet
+  embed:           bedrock-cohere-embed-v4
+  agent-light:     bedrock-claude-haiku
+  coder-light:     bedrock-claude-haiku
+  coder:           bedrock-claude-sonnet
+  coder-heavy:     bedrock-claude-sonnet
+  worker-light:    bedrock-claude-haiku
+  worker:          bedrock-claude-haiku
+  worker-heavy:    bedrock-claude-sonnet
+  reasoner:        bedrock-claude-sonnet
+  reasoner-heavy:  bedrock-claude-sonnet

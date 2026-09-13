@@ -14,7 +14,7 @@ Run::
     saq -v web.server.queue.settings_shared.settings
 
 Set ``AGENTFORGE_WORKER_ROLE`` so cross-role tool dispatch knows where this
-worker lives (``mac``, ``ally``, ...).
+worker lives (``local``, ``remote``, ...).
 """
 
 from __future__ import annotations
@@ -23,6 +23,11 @@ import logging
 
 from saq import CronJob
 
+from agentforge.session_logging import (
+    bind_session_from_job,
+    clear_session_binding,
+    configure_session_logging,
+)
 from web.server.queue.jobs_saq import (
     execute_tool_saq,
     prune_memory_saq,
@@ -33,6 +38,7 @@ from web.server.queue.jobs_saq import (
 from web.server.queue.queues import get_queue
 
 logger = logging.getLogger(__name__)
+configure_session_logging()
 
 
 async def startup(ctx: dict) -> None:
@@ -47,9 +53,11 @@ async def startup(ctx: dict) -> None:
     role = my_role()
     logger.info("Shared SAQ worker starting up (role=%s) — pre-loading SearchRuntime", role)
     try:
+        from web.server.audit_log import ensure_audit_log
         from web.server.ws_endpoint import SearchRuntime
 
         ctx["runtime"] = SearchRuntime()
+        ensure_audit_log()
         logger.info("Shared SAQ worker ready (role=%s, SearchRuntime preloaded)", role)
     except Exception as exc:
         logger.warning("SearchRuntime preload failed (jobs will lazy-load): %s", exc)
@@ -62,13 +70,17 @@ async def shutdown(ctx: dict) -> None:
 async def before_process(ctx: dict) -> None:
     job = ctx.get("job")
     if job:
+        bind_session_from_job(job)
         logger.info("Starting job: %s (key=%s)", job.function, job.key)
 
 
 async def after_process(ctx: dict) -> None:
-    job = ctx.get("job")
-    if job:
-        logger.info("Completed job: %s (status=%s)", job.function, job.status)
+    try:
+        job = ctx.get("job")
+        if job:
+            logger.info("Completed job: %s (status=%s)", job.function, job.status)
+    finally:
+        clear_session_binding()
 
 
 settings = {

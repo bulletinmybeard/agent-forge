@@ -45,6 +45,8 @@ MODE_TIERS: dict[str, MemoryTier] = {
     "agent": MemoryTier.SESSION,
     "research": MemoryTier.SESSION,
     "review": MemoryTier.SESSION,
+    "plan": MemoryTier.SESSION,
+    "build": MemoryTier.SESSION,
     "sql": MemoryTier.SESSION,
     "logs": MemoryTier.SESSION,
     "discover": MemoryTier.SESSION,

@@ -70,7 +70,7 @@ Rules:
    genuinely matches what the user asked for. Do NOT stretch or reinterpret
    field names — for example, if the user asks for endpoints with an
    "opportunity ID" in the path, only include endpoints whose path literally
-   contains {opportunity_id}, not {account_id} or {salesforce_account_id}.
+   contains {opportunity_id}, not {account_id}.
    When in doubt, leave it out.
 10. If only one or a few results truly match, say so. Do not pad your answer
     with loosely related endpoints just to make the list longer.
@@ -85,7 +85,7 @@ OPENAPI_EXAMPLES_ADDENDUM = """
 12. Include a curl example for each relevant endpoint. Use short code blocks
     for curl examples and payload samples. For curl examples, ALWAYS use
     "https://api.example.com" as the base URL — never guess or invent a
-    real domain name (e.g., do NOT use api.salesforce.com, api.domain.net, etc.).
+    real domain name (e.g., do NOT use api.example.com, api.domain.net, etc.).
 """
 
 OPENAPI_NO_EXAMPLES_ADDENDUM = """

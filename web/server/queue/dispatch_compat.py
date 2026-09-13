@@ -254,6 +254,7 @@ async def _saq_tool_apply(
     args_json: str,
     *,
     session_id: str | None = None,
+    knowledge_collection: str | None = None,
     timeout: float = _SAQ_TOOL_TIMEOUT,
 ) -> str:
     """Enqueue a tool call on the role's tools queue and await its string result."""
@@ -264,9 +265,16 @@ async def _saq_tool_apply(
     queue = get_tool_queue_for_role(target_role)
     # session_id lets the worker prompt the user (e.g., for sudo) back through
     # this session's WebSocket; None when there's no session context.
+    kwargs = {
+        "tool_name": tool_name,
+        "args_json": args_json,
+        "session_id": session_id,
+    }
+    if knowledge_collection:
+        kwargs["knowledge_collection"] = knowledge_collection
     job = Job(
         function="execute_tool_saq",
-        kwargs={"tool_name": tool_name, "args_json": args_json, "session_id": session_id},
+        kwargs=kwargs,
         timeout=timeout,
         retries=0,  # tool calls are not retried
     )
@@ -290,6 +298,13 @@ def saq_dispatch_tool(
     from agentforge.config import get_request_session_id
 
     session_id = get_request_session_id()
+    knowledge_collection = None
+    try:
+        from app.services.knowledge_registry import get_request_knowledge_collection
+
+        knowledge_collection = get_request_knowledge_collection()
+    except Exception:
+        knowledge_collection = None
     logger.info(
         "[cross_dispatch] Dispatching '%s' to %s worker (args=%s)",
         tool_name,
@@ -298,7 +313,14 @@ def saq_dispatch_tool(
     )
     try:
         result = _run_coro_sync(
-            _saq_tool_apply(target_role, tool_name, args_json, session_id=session_id, timeout=timeout)
+            _saq_tool_apply(
+                target_role,
+                tool_name,
+                args_json,
+                session_id=session_id,
+                knowledge_collection=knowledge_collection,
+                timeout=timeout,
+            )
         )
     except Exception as exc:
         logger.error(

@@ -107,12 +107,17 @@ profiles:
 # Base tier -> concrete map. Every key here MUST reference a profile defined
 # above (or the load fails). This is the fallback layer for all providers.
 provider_override_map:
-  light:       ollama-ministral-3
-  general:     ollama-devstral-small
-  heavy:       ollama-mistral-large
-  coder:       ollama-qwen3-coder
-  visual:      ollama-gemma4
-  reasoner:    ollama-kimi-thinking
-  worker:      ollama-kimi-k2
-  agent-light: ollama-kimi-k2-6
-  embed:       ollama-embed
+  light:           ollama-ministral-3
+  general:         ollama-devstral-small
+  heavy:           ollama-mistral-large
+  visual:          ollama-gemma4
+  embed:           ollama-embed
+  agent-light:     ollama-kimi-k2-6
+  coder-light:     ollama-qwen3-coder
+  coder:           ollama-qwen3-coder
+  coder-heavy:     ollama-mistral-large
+  worker-light:    ollama-ministral-3
+  worker:          ollama-kimi-k2
+  worker-heavy:    ollama-qwen3-coder
+  reasoner:        ollama-kimi-thinking
+  reasoner-heavy:  ollama-mistral-large

@@ -54,9 +54,9 @@ async def hooks_run_started(
 ) -> None:
     """Fire at the start of every runner — audit log + session event."""
     try:
-        from .audit_log import get_audit_log
+        from .audit_log import ensure_audit_log
 
-        audit = get_audit_log()
+        audit = ensure_audit_log()
         if audit:
             await audit.log_agent_run(
                 session_id=session_id,
@@ -108,9 +108,9 @@ async def hooks_run_completed(
     independent of the memory tier.
     """
     try:
-        from .audit_log import get_audit_log
+        from .audit_log import ensure_audit_log
 
-        audit = get_audit_log()
+        audit = ensure_audit_log()
         if audit:
             await audit.log_agent_run(
                 session_id=session_id,
@@ -183,9 +183,9 @@ async def hooks_run_error(
 ) -> None:
     """Fire on error — audit log + session event."""
     try:
-        from .audit_log import get_audit_log
+        from .audit_log import ensure_audit_log
 
-        audit = get_audit_log()
+        audit = ensure_audit_log()
         if audit:
             await audit.log_agent_run(
                 session_id=session_id,
@@ -222,9 +222,9 @@ async def hooks_run_cancelled(
 ) -> None:
     """Fire on cancellation — audit log + session event."""
     try:
-        from .audit_log import get_audit_log
+        from .audit_log import ensure_audit_log
 
-        audit = get_audit_log()
+        audit = ensure_audit_log()
         if audit:
             await audit.log_agent_run(
                 session_id=session_id,
@@ -272,9 +272,9 @@ async def hooks_log_tools(
 
     # Audit log — one entry per tool call
     try:
-        from .audit_log import get_audit_log
+        from .audit_log import ensure_audit_log
 
-        audit = get_audit_log()
+        audit = ensure_audit_log()
         if audit:
             for tc in tool_calls:
                 try:
@@ -282,8 +282,8 @@ async def hooks_log_tools(
                         session_id=session_id,
                         tool_name=tc.get("name", "unknown"),
                         args=tc.get("args", {}),
-                        result=None,  # not available post-hoc
-                        status="success",
+                        result=tc.get("result"),
+                        status=tool_audit_status(tc.get("result")),
                         mode=mode,
                         model=model,
                     )
@@ -340,7 +340,29 @@ _ERROR_RESULT_PREFIXES = (
     "failed:",
     "usage:",  # tool called with bad args
     "traceback",  # raw exception surfaced by the worker
+    "operation cancelled",
+    "(cancelled",
+    "write not confirmed",
 )
+
+_CANCELLED_RESULT_PREFIXES = (
+    "operation cancelled",
+    "(cancelled",
+    "write not confirmed",
+)
+
+
+def tool_audit_status(result: Any) -> str:
+    """Map a tool result string to an audit status."""
+    if result is None:
+        return "success"
+    text = result if isinstance(result, str) else str(result)
+    head = text.lstrip()[:64].lower()
+    if any(head.startswith(p) for p in _CANCELLED_RESULT_PREFIXES):
+        return "cancelled"
+    if _is_tool_failure(text):
+        return "error"
+    return "success"
 
 
 def _is_tool_failure(result_text: str) -> bool:
@@ -476,9 +498,9 @@ async def hooks_post_write(
 
     # Audit log entry carrying the verified hashes
     try:
-        from .audit_log import get_audit_log
+        from .audit_log import ensure_audit_log
 
-        audit = get_audit_log()
+        audit = ensure_audit_log()
         if audit:
             await audit.log_tool_execution(
                 session_id=session_id,

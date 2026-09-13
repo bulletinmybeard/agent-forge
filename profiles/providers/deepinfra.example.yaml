@@ -43,10 +43,17 @@ profiles:
 # Map only the tiers you want DeepInfra to serve. `embed` is intentionally
 # omitted -> embeddings fall back to the Ollama base (local embedding model).
 provider_override_map:
-  general:  deepinfra-claude-haiku-4-5
-  light:    deepinfra-claude-haiku-4-5
-  coder:    deepinfra-qwen3-coder-480b
-  heavy:    deepinfra-claude-haiku-4-5
-  reasoner: deepinfra-qwen3-235b-a22b-thinking-2507
+  general:         deepinfra-claude-haiku-4-5
+  light:           deepinfra-claude-haiku-4-5
+  heavy:           deepinfra-claude-haiku-4-5
+  agent-light:     deepinfra-claude-haiku-4-5
+  coder-light:     deepinfra-claude-haiku-4-5
+  coder:           deepinfra-qwen3-coder-480b
+  coder-heavy:     deepinfra-qwen3-235b-a22b-thinking-2507
+  worker-light:    deepinfra-claude-haiku-4-5
+  worker:          deepinfra-claude-haiku-4-5
+  worker-heavy:    deepinfra-qwen3-coder-480b
+  reasoner:        deepinfra-qwen3-235b-a22b-thinking-2507
+  reasoner-heavy:  deepinfra-qwen3-235b-a22b-thinking-2507
   # Role-keyed direct-selects also work (take precedence over tier keys), e.g.:
   # agent:  deepinfra-claude-haiku-4-5

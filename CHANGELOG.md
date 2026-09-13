@@ -6,7 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.15.0 - 2026-08-23
+## [0.16.0] - 2026-09-13
+
+### Added
+
+- **`@plan` / `@build`**: investigate a repo, write a markdown plan under `~/agent-forge/plans/`, wait for Approve / Keep drafting, then run queued workers. Plan is read-only. Build writes in place (`write_file unique=false`). Pin to the `local` worker in split mode. See [docs/modes.md](docs/modes.md)
+- Build apply bundle next to the plan (`*.apply.json.gz`): **undo the build** restores pre-build files; **apply the changes again** / `@build redo` writes the recorded bytes back without an LLM
+- **`@review`** styles: `single` (default, one large-context reviewer), `deep` (specialists + merge), `classic`. Read-only (no `write_file` / `code_edit`). Report written to disk with a timestamped name. Apply-from-review is `@agent`, not `@coding` or `@review`
+- Session debug bundle: `GET /api/debug/sessions/{uuid}` (SQLite + audit; optional Loki when `LOKI_URL` is set). Script: `scripts/debug-session.sh`
+- Plan-approval confirm `kind=plan`: ignores Yes-all / session auto-accept; UI shows Approve / Keep drafting
+- `file.diff` write/edit receipts (`action=written|edited` + `post_hash`) after a successful confirm
+- Session title generation and token totals for `@plan` / `@build` / `@review`
+
+### Changed
+
+- Ollama `extra_body` only forwards keys `Client.chat()` accepts. `reasoning_effort: max` / `think: "max"` map to `think: "high"` (the Python client rejects `max` and unknown kwargs, which used to fall coder over to heavy)
+- Agent summary tool map counts real calls, not `{name: 1}`
+- Confirm broker fail-closed on timeout (deny, not fail-open)
+
+### Fixed
+
+- Plan confirm no longer auto-starts `@build` from leftover Yes-all
+- Tool calls persist from `ctx.metadata["agent_iterations"]` (AgentLoop has no `_iterations`)
+- Write-file unique remapping of occupied parents (`foo` → `foo_1/`) skipped for plan/build in-place writes
+
+## [0.15.0] - 2026-08-23
 
 ### Added
 

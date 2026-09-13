@@ -174,11 +174,7 @@ def _infer_action_type(endpoint: EndpointInfo) -> ActionType:
 
 
 def _clean_schema_display_name(name: str) -> str:
-    """Clean module-qualified schema names.
-
-    'intranet_api__schema__finance__read__Contract' → 'Contract (finance, read)'
-    'DemarcationDetails' → 'DemarcationDetails'
-    """
+    """Clean module-qualified schema names."""
     if "__" in name:
         parts = name.split("__")
         # Last part is the actual name, middle parts are qualifiers

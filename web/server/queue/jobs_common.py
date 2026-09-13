@@ -23,6 +23,9 @@ from typing import Any
 
 import httpx
 
+from web.server.confirm import CONFIRM_TIMEOUT_SECONDS, ConfirmDecision
+from web.server.protocol import confirm_timeout
+
 logger = logging.getLogger(__name__)
 
 # Silence httpx's per-request INFO logs ("HTTP Request: POST … 200 OK").
@@ -158,6 +161,9 @@ class HttpCallbackSocket:
             "agent.thinking",
             "research.progress",
             "research.activity",
+            "review.progress",
+            "session.title",
+            "file.diff",
             "context.usage",  # ephemeral token-usage update — never stored
         }
     )
@@ -224,23 +230,36 @@ class HttpConfirmationBroker:
         # "Yes (all)" click; subsequent requests are auto-confirmed.
         self.auto_accept: bool = False
 
-    async def request(self, prompt: str) -> bool:
+    async def request(
+        self,
+        prompt: str,
+        *,
+        ignore_auto_accept: bool = False,
+        kind: str | None = None,
+    ) -> ConfirmDecision:
         """Broadcast a confirm.request to the browser and poll for the answer."""
         request_id = f"cr_{_uuid.uuid4().hex[:8]}"
         msg: dict = {"type": "confirm.request", "request_id": request_id, "prompt": prompt}
+        if kind:
+            msg["kind"] = kind
 
-        if self.auto_accept:
-            msg["auto_accepted"] = True
-            await self._broadcast(msg)
-            return True
+        if not ignore_auto_accept:
+            if not self.auto_accept:
+                self.auto_accept = await self._session_auto_accept()
+
+            if self.auto_accept:
+                msg["auto_accepted"] = True
+                await self._broadcast(msg)
+                await self._persist_confirm("confirm_prompt", msg, prompt)
+                return ConfirmDecision(confirmed=True, auto_accepted=True)
 
         await self._broadcast(msg)
+        await self._persist_confirm("confirm_prompt", msg, prompt)
 
         # Poll for the user's response.
-        # 290s deadline is intentionally shorter than make_sync_confirm_handler's
-        # outer 300s timeout so this always returns explicitly before fail-open.
+        # Deadline matches ConfirmationBroker so both paths fail-closed the same way.
         poll_url = f"/internal/sessions/{self._session_id}/confirm/{request_id}"
-        deadline = time.monotonic() + 290
+        deadline = time.monotonic() + CONFIRM_TIMEOUT_SECONDS
         _warned_404 = False
         while time.monotonic() < deadline:
             await asyncio.sleep(0.5)
@@ -273,7 +292,7 @@ class HttpConfirmationBroker:
                         request_id,
                         "confirmed" if confirmed else "denied",
                     )
-                    return confirmed
+                    return ConfirmDecision(confirmed=confirmed)
 
             except Exception as exc:
                 logger.debug("[confirm] Poll error: %s", exc)
@@ -283,7 +302,40 @@ class HttpConfirmationBroker:
             self._session_id,
             request_id,
         )
-        return False  # timeout -> deny (fail-closed)
+        await self._broadcast(confirm_timeout(request_id))
+        await self._persist_confirm(
+            "confirm_answer",
+            {
+                "type": "confirm_answer",
+                "request_id": request_id,
+                "prompt": prompt,
+                "confirmed": False,
+                "timed_out": True,
+            },
+            prompt,
+        )
+        return ConfirmDecision(confirmed=False, timed_out=True)
+
+    async def _session_auto_accept(self) -> bool:
+        try:
+            resp = await _get_async_http().get(f"/internal/sessions/{self._session_id}/auto-accept")
+            return bool(resp.json().get("auto_accept"))
+        except Exception:
+            return False
+
+    async def _persist_confirm(self, msg_type: str, msg: dict, prompt: str) -> None:
+        try:
+            await _get_async_http().post(
+                f"/internal/sessions/{self._session_id}/event",
+                json={
+                    "role": "assistant",
+                    "msg_type": msg_type,
+                    "msg": msg,
+                    "content": prompt,
+                },
+            )
+        except Exception as exc:
+            logger.debug("[confirm] persist %s failed: %s", msg_type, exc)
 
     async def _broadcast(self, msg: dict) -> None:
         try:

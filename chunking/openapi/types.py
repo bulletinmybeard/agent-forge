@@ -90,7 +90,7 @@ class EndpointInfo:
 class SchemaInfo:
     """All extracted data for a single schema from components.schemas."""
 
-    name: str  # original name, e.g., "intranet_api__schema__finance__read__Contract"
+    name: str  # original name
     title: str = ""
     description: str = ""
     schema_type: str = "object"  # "object", "string" (for enums), etc.
@@ -125,4 +125,4 @@ class OpenApiSpec:
     schemas: list[SchemaInfo] = field(default_factory=list)
     # Derived
     source_filename: str = ""
-    api_name_slug: str = ""  # e.g., "intranet-api"
+    api_name_slug: str = ""

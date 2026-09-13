@@ -3,9 +3,9 @@
 Guides for running and extending AgentForge.
 
 - [architecture.md](architecture.md): how the Docker stack fits together: the services, ports, worker localities, data stores, request flow, and **Alembic chat-DB migrations**. Start here.
-- [api.md](api.md): the HTTP + WebSocket API: search/index endpoints, the Knowledge Database (`/knowledge/*`, Notes + Email collections), the `/ws/chat` agent protocol, memory endpoints, session recap, direct tool-run (`/api/tools/run*`), command permissions (`/api/permissions/*`), **trip maps** (`/trips/{uuid}`, `/api/trips/*`), and where the live OpenAPI spec lives.
+- [api.md](api.md): the HTTP + WebSocket API: search/index endpoints, the Knowledge Database (`/knowledge/*`, Notes + Email collections), the `/ws/chat` agent protocol, memory endpoints, session recap, session debug (`/api/debug/sessions/{id}`), direct tool-run (`/api/tools/run*`), command permissions (`/api/permissions/*`), **trip maps** (`/trips/{uuid}`, `/api/trips/*`), and where the live OpenAPI spec lives.
 - [api-examples.md](api-examples.md): runnable `curl` + `websocat` recipes, from a first prompt to processing the response, plus the in-prompt `@mode` / `#source` / `--flag` DSL.
-- [modes.md](modes.md): the `@mode` prefixes (built-in modes + custom agents + connectors), what each does, and when to use it, plus the **playbooks** that seed `@discover` with curated commands.
+- [modes.md](modes.md): the `@mode` prefixes (built-in modes including `@plan` / `@build` / `@review`, custom agents, connectors), what each does, and when to use it, plus the **playbooks** that seed `@discover` with curated commands.
 - [tools.md](tools.md): every built-in agent tool, grouped by category, plus locality, confirmation gates, shell/SSH command policy, and how plugins add more.
 - [SECURITY.md](SECURITY.md): auth, sidecar/internal tokens, interactive sudo, SSRF and read-only guards, and **shell/SSH command permissions**.
 - [model-catalog.md](model-catalog.md): comparing models across providers to find equivalents (`/api/model-catalog/*`), the per-provider catalog it draws on (`/api/catalog/*`), the `data/catalogs/*.json` files, the `catalog:*` Redis cache, and the `--with-catalog` deploy flow.

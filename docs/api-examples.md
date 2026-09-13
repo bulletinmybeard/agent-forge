@@ -140,7 +140,9 @@ The agent has no separate `mode` field. You select behaviour inline, inside `tex
 | `@logs`            | Log analysis                                        |
 | `@discover`        | Multi-area system discovery                         |
 | `@pipeline`        | Typed multi-step pipeline                           |
-| `@review`          | Parallel code review                                |
+| `@review`          | Read-only code review (`single` / `deep` / `classic`) |
+| `@plan`            | Investigate a repo, write a markdown plan, wait for Approve |
+| `@build`           | Execute an approved plan; undo/redo from the apply bundle |
 | `@research`        | Multi-agent research                                |
 | `@coding`, `@code` | Coding mode (plan, edit, dry-run, undo)             |
 | `@scheduler`       | Create/list/delete recurring jobs                   |

@@ -492,13 +492,35 @@ class AgentSettings(BaseSettings):
 
 
 class ReviewSettings(BaseSettings):
-    """@review mode — parallel multi-agent code review."""
+    """@review mode — single-reviewer default, optional specialist fan-out."""
 
     model_config = SettingsConfigDict(env_prefix="REVIEW_")
 
+    # Default style when the prompt has no --single/--deep/--classic flag.
+    style: str = Field(
+        default=str(_yaml.get("review", {}).get("style", "single")),
+    )
     # How long to wait for each review sub-agent before giving up on it.
     subagent_timeout_seconds: int = Field(
         default=int(_yaml.get("review", {}).get("subagent_timeout_seconds", 300)),
+    )
+    max_workers: int = Field(
+        default=int(_yaml.get("review", {}).get("max_workers", 4)),
+    )
+    gather_max_bytes: int = Field(
+        default=int(_yaml.get("review", {}).get("gather_max_bytes", 400000)),
+    )
+    max_findings: int = Field(
+        default=int(_yaml.get("review", {}).get("max_findings", 5)),
+    )
+    reviewer_profile: str = Field(
+        default=str(_yaml.get("review", {}).get("reviewer_profile", "coder")),
+    )
+    specialist_profile: str = Field(
+        default=str(_yaml.get("review", {}).get("specialist_profile", "cloud-heavy")),
+    )
+    aggregator_profile: str = Field(
+        default=str(_yaml.get("review", {}).get("aggregator_profile", "cloud-heavy")),
     )
 
 
@@ -581,6 +603,10 @@ class KnowledgeSettings(BaseSettings):
     )
     # AgentForge Email macOS app — mail chunks only (X-Knowledge-Collection header).
     mail_collection_name: str = Field(default=_yaml.get("knowledge", {}).get("mail_collection_name", "kb_mail_entries"))
+    # Snippet Base macOS app — code snippets/recipes (X-Knowledge-Collection header).
+    snippet_collection_name: str = Field(
+        default=_yaml.get("knowledge", {}).get("snippet_collection_name", "snippet_entries")
+    )
     dedup_threshold: float = Field(default=_yaml.get("knowledge", {}).get("dedup_threshold", 0.92))
     composite_template: str = Field(
         default=_yaml.get("knowledge", {}).get("composite_template", "{title}\n{notes}\n{content}")

@@ -29,6 +29,33 @@ class RetryResult:
     file_diff_events: list[dict] = field(default_factory=list)
 
 
+def _added_line_texts(applied: list[dict]) -> set[str]:
+    """Text of ``+`` lines from applied unified diffs (no ``+++`` headers)."""
+    out: set[str] = set()
+    for entry in applied:
+        diff = entry.get("combined_diff") or entry.get("unified_diff") or ""
+        for line in str(diff).splitlines():
+            if line.startswith("+") and not line.startswith("+++"):
+                text = line[1:].strip()
+                if text:
+                    out.add(text)
+    return out
+
+
+def _surviving_are_new_code(surviving: list[dict], applied: list[dict]) -> bool:
+    """True when every surviving verify hit is a line this burst inserted."""
+    added = _added_line_texts(applied)
+    if not added or not surviving:
+        return False
+    for site in surviving:
+        text = (site.get("text") or "").strip()
+        if not text:
+            return False
+        if not any(text in line or line in text for line in added):
+            return False
+    return True
+
+
 def _build_retry_hits(surviving_sites: list[dict]) -> list[dict]:
     return [
         {
@@ -89,6 +116,15 @@ def run_verify_retry(
             return out
 
         surviving = verify["surviving_sites"]
+        # Additive edits: planner used the NEW identifier as reverify_pattern
+        # (e.g. `def can_reach_github_api`). Verify then "fails" forever and
+        # retry rewrites the helper. If every surviving line is something we
+        # just added, the first pass already succeeded.
+        if _surviving_are_new_code(surviving, current_applied):
+            logger.info(
+                "[coding.retry] surviving sites are lines this burst added — skipping retry"
+            )
+            return out
         is_final = out.attempts == max_retries - 1
         use_profile = retry_profile if is_final else base_profile
 

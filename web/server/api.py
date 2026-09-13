@@ -27,12 +27,13 @@ from pydantic import BaseModel
 
 from agentforge.client import AIClient
 from agentforge.config import get_config as get_fw_config
-from agentforge.router import ProfileRouter
+from agentforge.router import ProfileRouter, capability_for_mode
 from app.config import settings as af_settings
 
 from . import state
 from .audit_log import get_audit_log
 from .database import ChatDatabase
+from .debug_sessions import build_debug_bundle
 from .mode_routing import STICKY_MODES, strip_mode_prefix
 from .monitor_service import get_monitor_service
 from .prompt_refiner import refine_prompt
@@ -457,11 +458,11 @@ async def create_recap(session_id: str) -> RecapResponse:
         # and it renders literally in the recap block.
         text = strip_markdown(resp.content or "")
     except Exception as exc:  # noqa: BLE001 — a failed recap must not break the chat
-        logger.warning("recap: generation failed for session %s: %s", session_id[:12], exc)
+        logger.warning("recap: generation failed for session %s: %s", session_id, exc)
         return RecapResponse(recap=previous, created=False, reason="generation_failed")
 
     if not text:
-        logger.warning("recap: empty summary for session %s", session_id[:12])
+        logger.warning("recap: empty summary for session %s", session_id)
         return RecapResponse(recap=previous, created=False, reason="empty_summary")
 
     covered = RecapCovered(
@@ -481,7 +482,7 @@ async def create_recap(session_id: str) -> RecapResponse:
     )
     logger.info(
         "recap: session %s — %d message(s), sequence %d-%d",
-        session_id[:12],
+        session_id,
         covered.messages,
         covered.from_sequence,
         covered.to_sequence,
@@ -666,6 +667,7 @@ _BROADCAST_NO_REPLAY_TYPES = frozenset(
     {
         "confirm.request",
         "confirm.response",
+        "confirm.timeout",
         # Masked sudo-password prompt — interactive, must never replay on reload
         # (and the value must never hit the buffer).
         "secret.request",
@@ -699,6 +701,11 @@ async def broadcast_worker_event(session_id: str, body: dict = Body(...)):
             await ws.send_json(body)
         except Exception:
             state.active_ws.pop(session_id, None)
+    elif body.get("type") == "confirm.request":
+        logger.warning(
+            "[confirm] no live WebSocket for session %s — confirm.request dropped",
+            session_id,
+        )
 
     # Fire-and-forget buffer record — never blocks or fails the broadcast.
     # Skip the types that shouldn't replay (see comment above).
@@ -762,6 +769,21 @@ async def poll_confirm_response(session_id: str, request_id: str):
     if response is None:
         return {"ready": False}
     return {"ready": True, "confirmed": response["confirmed"], "auto_accept": response.get("auto_accept", False)}
+
+
+@internal.get("/sessions/{session_id}/auto-accept", status_code=200)
+async def get_session_auto_accept(session_id: str):
+    """Whether the user picked 'This session' for confirms in this chat."""
+    return {"auto_accept": session_id in state.session_auto_accept}
+
+
+@internal.post("/sessions/{session_id}/auto-accept", status_code=200)
+async def set_session_auto_accept(session_id: str, body: dict = Body(...)):
+    if body.get("auto_accept"):
+        state.session_auto_accept.add(session_id)
+    else:
+        state.session_auto_accept.discard(session_id)
+    return {"ok": True, "auto_accept": session_id in state.session_auto_accept}
 
 
 @internal.get("/sessions/{session_id}/secret/{request_id}", status_code=200)
@@ -1161,6 +1183,31 @@ async def list_agents():
             ),
             "example": "@coding in /path/to/repo find all <Grid> with no props and add size={{ xs: 12 }}",
             "profile": "coding",
+        },
+        {
+            "id": "plan",
+            "type": "built-in",
+            "aliases": ["@plan"],
+            "title": "Plan — Draft a build plan",
+            "description": (
+                "Writes a markdown plan to ~/agent-forge/plans/ on the Mac worker and stops "
+                "for approval. Discuss changes in the same chat; say approve the plan or "
+                "use @build to execute."
+            ),
+            "example": "@plan add a healthcheck in /path/to/repo",
+            "profile": "coder",
+        },
+        {
+            "id": "build",
+            "type": "built-in",
+            "aliases": ["@build"],
+            "title": "Build — Execute an approved plan",
+            "description": (
+                "Runs queued workers against the approved plan's target repository. "
+                "Independent tasks fan out up to the provider worker cap; writes still confirm."
+            ),
+            "example": "@build",
+            "profile": "coder",
         },
     ]
 
@@ -1686,6 +1733,16 @@ async def upload_files(
         logger.info("Saved upload: %s (%d bytes) → %s", safe_name, len(content), dest)
 
     return {"files": saved}
+
+
+@router.get("/debug/sessions/{session_id}")
+async def debug_session(session_id: str):
+    """SQLite + audit + Loki bundle for one chat session."""
+    db = get_db()
+    try:
+        return await build_debug_bundle(session_id, db)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Session not found") from None
 
 
 # -- Audit log endpoints -------------------------------------------------------
@@ -2725,34 +2782,23 @@ async def dry_run(body: DryRunRequest):
             }
         )
         try:
-            if forced_mode == "agent" or final_mode.startswith("custom:"):
+            if final_mode.startswith("custom:"):
                 profile_result["profile"] = "agent"
-                if forced_mode == "agent":
-                    profile_result["reason"] = "Explicit @agent prefix — skipping ProfileRouter"
-                    profile_sub_steps.append(
-                        {
-                            "id": "prefix_bypass",
-                            "label": "Prefix Bypass",
-                            "status": "active",
-                            "detail": "@agent prefix detected — skip ProfileRouter, use agent profile directly",
-                        }
-                    )
-                else:
-                    profile_result["reason"] = f"Custom agent mode ({custom_agent_name}) — using agent profile"
-                    profile_sub_steps.append(
-                        {
-                            "id": "custom_bypass",
-                            "label": "Custom Agent Bypass",
-                            "status": "active",
-                            "detail": f"Custom agent '{custom_agent_name}' — skip ProfileRouter",
-                        }
-                    )
+                profile_result["reason"] = f"Custom agent mode ({custom_agent_name}) — using agent profile"
+                profile_sub_steps.append(
+                    {
+                        "id": "custom_bypass",
+                        "label": "Custom Agent Bypass",
+                        "status": "active",
+                        "detail": f"Custom agent '{custom_agent_name}' — skip ProfileRouter",
+                    }
+                )
                 profile_sub_steps.append(
                     {
                         "id": "profile_router",
                         "label": "ProfileRouter LLM",
                         "status": "skipped",
-                        "detail": "Bypassed — not needed",
+                        "detail": "Bypassed — custom agent pins its own profile",
                     }
                 )
             else:
@@ -2765,9 +2811,12 @@ async def dry_run(body: DryRunRequest):
                     }
                 )
                 try:
-                    router_client = AIClient(profile="tool")
-                    prof_router = ProfileRouter(router_client)
-                    route = await asyncio.to_thread(prof_router.select, query)
+                    from agentforge.router import ROUTER_PROFILE
+
+                    router_client = AIClient(profile=ROUTER_PROFILE)
+                    cap = capability_for_mode(base_mode)
+                    prof_router = ProfileRouter(router_client, fallback=cap)
+                    route = await asyncio.to_thread(prof_router.select, query, capability=cap)
                     profile_result["profile"] = route.profile
                     profile_result["reason"] = route.reason
                     profile_sub_steps.append(

@@ -114,12 +114,12 @@ def extract_and_store_facts(
                 logger.debug("Failed to upsert fact %r: %s", fact.get("key"), exc)
 
         if stored:
-            logger.info("Extracted %d fact(s) from session %s", stored, session_id[:12])
+            logger.info("Extracted %d fact(s) from session %s", stored, session_id)
         if dropped_for_secrets:
             logger.info(
                 "Dropped %d fact(s) containing secret material (session %s)",
                 dropped_for_secrets,
-                session_id[:12],
+                session_id,
             )
         return stored
 
