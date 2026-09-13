@@ -191,7 +191,7 @@ class ConversationMemory:
                 collection_name=self._collection,
                 points=[PointStruct(id=point_id, vector=vector, payload=payload)],
             )
-            logger.info("Stored exchange in conversation_memory (session=%s, id=%s)", session_id[:12], point_id[:12])
+            logger.info("Stored exchange in conversation_memory (session=%s, id=%s)", session_id, point_id[:12])
         except Exception as exc:
             logger.warning("Failed to store conversation exchange: %s", exc, exc_info=True)
 
@@ -318,7 +318,7 @@ class ConversationMemory:
                 collection_name=self._collection,
                 points_selector=PointIdsList(points=[point_id]),
             )
-            logger.info("Deleted conversation_memory exchange (session=%s)", session_id[:12])
+            logger.info("Deleted conversation_memory exchange (session=%s)", session_id)
             return True
         except Exception as exc:
             logger.warning("Failed to delete conversation_memory exchange: %s", exc)

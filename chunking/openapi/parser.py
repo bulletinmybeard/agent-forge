@@ -2,7 +2,7 @@
 
 Reads an OpenAPI 3.x JSON file and extracts structured data into
 intermediate dataclasses (types.py). Handles encoding quirks (BOM),
-$ref resolution, and the structural patterns observed in the Intranet API spec.
+$ref resolution, and the structural patterns observed in the API spec.
 """
 
 from __future__ import annotations
@@ -40,12 +40,8 @@ def _load_json(filepath: Path) -> dict:
 
 
 def _derive_api_name_slug(filepath: Path, title: str) -> str:
-    """Derive an api_name_slug from the filename or info.title.
-
-    openapi-intranet-api.json → "intranet-api"
-    If title is available and filename is generic, prefer title.
-    """
-    stem = filepath.stem  # "openapi-intranet-api"
+    """Derive an api_name_slug from the filename or info.title."""
+    stem = filepath.stem
     # Strip common prefixes
     slug = re.sub(r"^openapi-?", "", stem, flags=re.IGNORECASE)
     if slug:

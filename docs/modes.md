@@ -4,7 +4,7 @@ Every prompt runs in a mode. You pick one with an `@prefix` at the start of the 
 
 Modes also read the in-prompt `#source` filters and `--flags` documented in [api-examples.md](api-examples.md#specify-the-mode-sources-and-flags-per-prompt).
 
-Files uploaded with a prompt (via `/api/upload/{session_id}`) are injected as context for the run. Images go to the model's vision input and text documents are appended to the message. This works in plain chat, `@agent`, and the worker modes (`@search`, `@logs`, `@sql`, `@discover`, `@pipeline`, `@review`, `@research`, `@coding`).
+Files uploaded with a prompt (via `/api/upload/{session_id}`) are injected as context for the run. Images go to the model's vision input and text documents are appended to the message. This works in plain chat, `@agent`, and the worker modes (`@search`, `@logs`, `@sql`, `@discover`, `@pipeline`, `@review`, `@research`, `@coding`, `@plan`, `@build`).
 
 ## Built-in modes
 
@@ -21,7 +21,9 @@ Files uploaded with a prompt (via `/api/upload/{session_id}`) are injected as co
 | `@pipeline`           | pipeline   | Typed multi-step workflow with deterministic tools (no raw shell).                                       |
 | `@scheduler`          | scheduler  | Turn natural language into recurring jobs (APScheduler).                                                 |
 | `@monitor`            | monitor    | Watch a website for changes: snapshot, then poll on a schedule.                                          |
-| `@review`             | review     | Parallel code review: specialist sub-agents merged into one report.                                      |
+| `@review`             | review     | Read-only code review. Default `single` (one large-context pass); `deep` / `classic` still exist. Report written to disk. |
+| `@plan`               | plan       | Investigate a repo, write a markdown plan under `~/agent-forge/plans/`, wait for Approve / Keep drafting. |
+| `@build`              | build      | Execute an approved plan with queued workers. Undo/redo from the apply bundle next to the plan.          |
 | `@research`           | research   | Parallel web research: a planner fans out sub-investigations, then merges a sourced report.              |
 | `@coding`, `@code`    | coding     | Bulk code transforms with diff preview, confirm, snapshots, and undo.                                    |
 | `@conn`, `@connector` | connector  | External account connectors: Google (Gmail, Drive, BigQuery, YouTube), GitLab, and GitHub. See [connectors.md](connectors.md). |
@@ -32,8 +34,9 @@ A few that are worth more than one line:
 - **`@agent`** runs tools in a think-act-observe loop until the task is done. Destructive operations (delete, edit, ...) pause for a confirmation, with a "yes to all" option to auto-approve the rest of the run.
 - **`@sql`** first calls `sql_extract_schema` (cached in Redis) to learn the tables, then generates and runs the query with `execute_sql`. A `#name` tag targets a specific database, and write queries (`INSERT`/`UPDATE`/`DELETE`) require confirmation. This mode needs the optional SQL tools (see [tools.md](tools.md#optional-sql-tools)) plus a `databases` / `sql_databases` entry in `config.yaml`.
 - **`@pipeline`** uses purpose-built tools (`read_file`, `grep_text`, `find_files`, `search_knowledge_base`, `execute_sql`, `save_result` / `load_result`, `git_log` / `git_show`) instead of raw `shell`, and keeps a per-session result cache.
-- **`@review`** spins up specialist sub-agents (error handling, type design, test coverage, code quality) that read the code independently, then merges their findings. Pass a path or it defaults to the current directory.
-- **`@coding`** (alias `@code`) is map-reduce: ripgrep discovery and regex narrowing are deterministic, only the per-file edit runs through an LLM, and those calls fan out in parallel. You get unified-diff preview cards, then a confirm, then verified writes with a snapshot. Undo a whole run with `@coding undo <id>`. A path argument is required.
+- **`@review`** is read-only (no `write_file` / `code_edit`). Default style is `single`: one large-context reviewer. `deep` runs specialists then merges; `classic` is the older concatenated pass. Pass a path and optional branch; the report is written to disk with a timestamped name. To apply findings, stay in chat and ask `@agent` (not `@review` or `@coding`).
+- **`@plan`** investigates with read-only tools, then writes a markdown plan under `~/agent-forge/plans/`. The gate is Approve / Keep drafting (Yes-all does not skip it). `@build` (or Approve) runs the tasks. After a build, **undo the build** restores pre-build files; **apply the changes again** writes the recorded bytes back. The bundle sits next to the plan (`*.apply.json.gz`).
+- **`@coding`** (alias `@code`) is map-reduce: ripgrep discovery and regex narrowing are deterministic, only the per-file edit runs through an LLM, and those calls fan out in parallel. You get unified-diff preview cards, then a confirm, then verified writes with a snapshot. Undo a whole run with `@coding undo <id>`. A path argument is required. Do not send review.md here; use `@agent`.
 
 Some modes depend on services that a [light deployment](architecture.md#deployment-presets-light-vs-full) may not run: `@qdrant` / `@docs` needs Qdrant (off when `AGENTFORGE_QDRANT=off`), and `@search` needs a configured web-search provider key. When the backing service is absent the mode is simply unavailable, not broken.
 

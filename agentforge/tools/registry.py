@@ -228,13 +228,17 @@ class ToolRegistry:
         return self._on_confirm is not None and self._on_file_diff is not None
 
     def run_confirm(self, prompt: str) -> bool:
-        """Ask the wired confirm handler. True (proceed) when none is set."""
+        """Ask the wired confirm handler. True (proceed) when none is set.
+
+        Returns the handler's raw result so callers can inspect ``timed_out``
+        on a ConfirmDecision. Bool-false means do not proceed.
+        """
         if self._on_confirm is None:
             return True
         try:
-            return bool(self._on_confirm(prompt))
+            return self._on_confirm(prompt)
         except Exception:
-            return True  # fail-open, matches _check_confirm
+            return False  # fail-closed — a broken confirm must not write
 
     def emit_file_diff(self, payload: dict) -> None:
         """Send a file-diff preview card if a handler is wired (best-effort)."""

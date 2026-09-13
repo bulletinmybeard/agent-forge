@@ -32,6 +32,7 @@ SERVICE_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVICE_ROOT))
 
+from agentforge.session_logging import configure_session_logging
 from app.config import settings as af_settings
 from app.security import enforce_auth_policy, install_api_key_auth, install_internal_auth
 
@@ -125,6 +126,7 @@ def _init_database() -> ChatDatabase:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_session_logging()
     logger.info("AgentForge Chat server starting on %s:%s", settings.host, settings.port)
 
     # Initialise database

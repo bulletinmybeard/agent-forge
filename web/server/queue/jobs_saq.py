@@ -416,6 +416,19 @@ async def _execute_agent_job(
     # enqueuing; the worker has its own ConfigManager singleton in a separate
     # memory space, so we must set the ContextVar here. Pop so it doesn't
     # leak to the runner as an "unknown" override key.
+    if overrides and "_knowledge_collection" in overrides:
+        from app.services.knowledge_registry import set_request_knowledge_collection
+
+        _kc = overrides.pop("_knowledge_collection") or None
+        set_request_knowledge_collection(_kc)
+        if _kc:
+            logger.info(
+                "SAQ agent job %s: knowledge collection=%s for session %s",
+                job_id[:8],
+                _kc,
+                session_id,
+            )
+
     if overrides and "_provider_override" in overrides:
         _po = overrides.pop("_provider_override") or None
         set_request_provider_override(_po)
@@ -523,6 +536,22 @@ async def _execute_agent_job(
             await _run_research(ws, query, session_id, rt, db, broker, loop, overrides, cancel_event)
         elif mode == "coding":
             await _run_coding(ws, query, session_id, rt, db, broker, loop, overrides, cancel_event)
+        elif mode in ("plan", "build"):
+            from web.server.builder import run_builder
+
+            await run_builder(
+                ws,
+                query,
+                session_id,
+                rt,
+                db,
+                broker,
+                loop,
+                overrides,
+                cancel_event,
+                secret_broker=None,
+                mode=mode,
+            )
         elif mode.startswith("custom:"):
             agent_id = mode.split(":", 1)[1]
             agent_cfg = None
@@ -625,7 +654,52 @@ async def prune_memory_saq(ctx: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-async def execute_tool_saq(ctx: dict, *, tool_name: str, args_json: str, session_id: str | None = None) -> str:
+def _apply_knowledge_scope(session_id: str | None, knowledge_collection: str | None = None) -> None:
+    """Restore knowledge-collection ContextVar on a tools worker.
+
+    Cross-role dispatch loses the WS/agent ContextVar. Prefer an explicit
+    collection from the job payload; otherwise map the session's ``source``
+    (fetched from agentforge-web) to notes/mail/snippets collections.
+    """
+    from agentforge.config import set_request_session_id
+    from app.services.knowledge_registry import (
+        collection_for_session_source,
+        set_request_knowledge_collection,
+    )
+
+    if session_id:
+        set_request_session_id(session_id)
+
+    coll = (knowledge_collection or "").strip() or None
+    if not coll and session_id:
+        try:
+            from web.server.queue.jobs_common import _get_sync_http
+
+            resp = _get_sync_http().get(f"/api/sessions/{session_id}", timeout=5)
+            if resp.status_code == 200:
+                source = (resp.json() or {}).get("source")
+                coll = collection_for_session_source(source)
+                if coll:
+                    logger.info(
+                        "[execute_tool_saq] collection=%s from session source=%s",
+                        coll,
+                        source,
+                    )
+        except Exception:
+            logger.debug("session source lookup failed for %s", session_id, exc_info=True)
+
+    if coll:
+        set_request_knowledge_collection(coll)
+
+
+async def execute_tool_saq(
+    ctx: dict,
+    *,
+    tool_name: str,
+    args_json: str,
+    session_id: str | None = None,
+    knowledge_collection: str | None = None,
+) -> str:
     """Execute a single cross-dispatched tool call.
 
     Sources the SearchRuntime from ``ctx["runtime"]`` (preloaded in worker
@@ -634,7 +708,7 @@ async def execute_tool_saq(ctx: dict, *, tool_name: str, args_json: str, session
     tool error rather than a queue error.
 
     Routing is enforced by queue topology — the job is only dispatched to
-    a role's tools queue (e.g., ``agentforge:tools:mac`` or ``agentforge:tools:ally``)
+    a role's tools queue (e.g., ``agentforge:tools:local`` or ``agentforge:tools:remote``)
     where AGENTFORGE_WORKER_ROLE matches what the YAML expects, so by the time
     this runs we know the current worker is the right role for the tool.
 
@@ -644,6 +718,7 @@ async def execute_tool_saq(ctx: dict, *, tool_name: str, args_json: str, session
     handler wired anyway.
     """
     args = json.loads(args_json) if args_json else {}
+    _apply_knowledge_scope(session_id, knowledge_collection)
     logger.info(
         "[execute_tool_saq] Executing '%s' with args=%s",
         tool_name,

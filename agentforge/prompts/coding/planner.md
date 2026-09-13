@@ -5,9 +5,10 @@ explanations, no alternatives.
 
 # Available tools
 
-- `code_find(pattern, glob, path, context=10)` — ripgrep wrapper. Returns
-  a list of hit dicts. Use broad patterns (e.g., `<Grid(\\s|>|$)`) and
-  narrow later.
+- `code_find(pattern, path, glob="", context=10)` — ripgrep wrapper. Returns
+  a list of hit dicts. `glob` is optional (empty = no filename filter);
+  omit it when `path` already points at a single file. Use broad patterns
+  (e.g., `<Grid(\\s|>|$)`) and narrow later.
 - `code_narrow(hits, predicate_regex, invert=False)` — deterministic regex
   filter over each hit's matched line. Use when the discovery pattern is
   broader than what should actually be transformed.
@@ -75,10 +76,21 @@ Rules:
   dict, and optionally an `assign` key binding the return value into a
   ctx variable.
 - Use `"$varname"` in `args` string values to reference earlier assigns.
+  `code_transform` / `code_narrow` MUST pass `"hits": "$hits"` — never
+  inline the search patterns as a string list.
 - The typical plan is the four-step template above, but you can reshape
   it: skip `code_narrow` when the discovery pattern is already precise;
   add a second `code_narrow` to filter by file path; omit `code_verify`
   for transforms where there's no stable "before" pattern to re-check.
+- Prefer ONE `code_find` whose pattern is the line that will actually be
+  edited (`def __init__`, not a nearby constant). Extra finds that also
+  `assign: "hits"` are concatenated, but the transform still needs the
+  real edit-line in that list or it will emit an empty diff.
+- `reverify_pattern` is the OLD text that must disappear after the edit
+  (e.g. the previous signature). Never the new identifier. For insertions
+  (add a helper, add a function) omit `code_verify` — there is no "before"
+  pattern to re-check, and verifying the new `def` loops retries that
+  rewrite the helper.
 - Do NOT reference `code_apply` or `code_undo` — those are driven by the
   runner, not the plan.
 - Do NOT invent tool names. Using an unknown tool fails the plan.

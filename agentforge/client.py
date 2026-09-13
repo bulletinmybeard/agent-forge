@@ -307,9 +307,10 @@ class AIClient:
     ) -> None:
         decision = classify_model_error(exc)
         logger.warning(
-            "AIClient[%s]: %s — falling back to '%s' (%d/%d)",
+            "AIClient[%s]: %s — %s — falling back to '%s' (%d/%d)",
             prev.name,
             decision.reason,
+            exc,
             nxt.name,
             idx,
             total_fallbacks,

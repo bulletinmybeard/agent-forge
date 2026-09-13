@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeGuard
 
 from chalkbox.logging.bridge import get_logger
 
@@ -181,7 +181,7 @@ def run_plan(
     total = len(plan.steps)
     for i, step in enumerate(plan.steps):
         fn = registry[step.tool]  # parse_plan already validated against TOOL_REGISTRY
-        resolved = resolve_args(step.args, ctx)
+        resolved = _sanitize_resolved(step.tool, resolve_args(step.args, ctx), ctx)
         logger.info(
             "[coding.driver] step %d/%d tool=%s assign=%s args=%s",
             i + 1,
@@ -197,13 +197,72 @@ def run_plan(
                 logger.debug("[coding.driver] on_event step_start raised", exc_info=True)
         result = fn(**resolved)
         if step.assign:
-            ctx[step.assign] = result
+            ctx[step.assign] = _bind_assign(ctx.get(step.assign), result)
         if on_event is not None:
             try:
                 on_event("step_done", step=step, step_idx=i, total=total, result=result)
             except Exception:
                 logger.debug("[coding.driver] on_event step_done raised", exc_info=True)
     return ctx
+
+
+def _looks_like_hits(val: Any) -> TypeGuard[list[dict[str, Any]]]:
+    """True when *val* is a list of hit dicts with a ``file`` key."""
+    return isinstance(val, list) and bool(val) and all(isinstance(h, dict) and "file" in h for h in val)
+
+
+def _sanitize_resolved(tool: str, resolved: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Fix planner drift on ``hits``.
+
+    glm-5.2 has been emitting ``code_transform(hits=["def __init__", ...])``
+    — the search patterns as strings — instead of ``hits: "$hits"``. That
+    made ``_group_hits_by_file`` crash with ``'str' object has no attribute
+    'get'``. If the bound ctx already has real hit dicts, use those.
+    """
+    if tool not in ("code_transform", "code_narrow") or "hits" not in resolved:
+        return resolved
+    hits = resolved["hits"]
+    if _looks_like_hits(hits):
+        return resolved
+    fallback = ctx.get("hits")
+    if _looks_like_hits(fallback):
+        logger.info(
+            "[coding.driver] %s hits were %s — using ctx['hits'] (%d sites)",
+            tool,
+            type(hits).__name__,
+            len(fallback),
+        )
+        return {**resolved, "hits": fallback}
+    if isinstance(hits, list):
+        return {**resolved, "hits": [h for h in hits if isinstance(h, dict)]}
+    return {**resolved, "hits": []}
+
+
+def _bind_assign(prev: Any, result: Any) -> Any:
+    """Bind a step result into ctx.
+
+    Consecutive ``code_find`` steps that all ``assign: hits`` used to clobber
+    each other — the planner in this run found ``class GitHubClient``, then
+    ``httpx.Client(``, then ``_DEFAULT_TIMEOUT``, and only the last list
+    reached ``code_transform``. Concatenate lists (dedup by file+line) so
+    every discovery pattern survives.
+    """
+    if isinstance(prev, list) and isinstance(result, list):
+        return _extend_hits(prev, result)
+    return result
+
+
+def _extend_hits(prev: list, new: list) -> list:
+    seen: set[tuple[Any, Any]] = set()
+    out: list = []
+    for h in (*prev, *new):
+        if isinstance(h, dict):
+            key = (h.get("file"), h.get("line"))
+            if key in seen:
+                continue
+            seen.add(key)
+        out.append(h)
+    return out
 
 
 def _preview(v: Any, cap: int = 80) -> Any:

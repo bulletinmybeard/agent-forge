@@ -66,6 +66,39 @@ def test_attachment_text_block_empty():
     assert _attachment_text_block(None) == ""
 
 
+def test_pdf_without_sidecar_is_dropped_as_text(tmp_path):
+    from agentforge.attachments import Attachment
+
+    pdf = tmp_path / "doc.pdf"
+    pdf.write_bytes(b"%PDF-1.4\x00\x01 binary junk \xff\xfe")
+    att = Attachment(path=pdf, name="doc.pdf")
+    assert att.as_context_text() is None
+
+
+def test_inject_pdf_sidecar_into_user_message(tmp_path):
+    pdf = tmp_path / "ticket.pdf"
+    pdf.write_bytes(b"%PDF-1.4\x00 binary")
+    sidecar = tmp_path / "ticket.extracted.md"
+    sidecar.write_text("# TICKET-1\nAccess control notes", encoding="utf-8")
+    overrides = {
+        "_attachments": [
+            {
+                "path": str(pdf),
+                "name": "ticket.pdf",
+                "is_image": False,
+                "extracted_path": str(sidecar),
+            }
+        ]
+    }
+    msgs = _inject_attachments(
+        _FakeClient(),
+        [{"role": "user", "content": "You can find the ticket attached"}],
+        overrides,
+    )
+    assert "TICKET-1" in msgs[-1]["content"]
+    assert "Access control notes" in msgs[-1]["content"]
+
+
 def test_extracted_sidecar_used_for_binary_docs(tmp_path):
     # A PDF (non-UTF-8) would be dropped on the worker path; the pre-extracted
     # sidecar must be read instead so the document text still reaches the model.

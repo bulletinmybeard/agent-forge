@@ -162,6 +162,53 @@ def _looks_like_plan_fragment(text: str) -> bool:
     return bool(re.search(r"(?:\.\.\.|…)\s*$|:\s*$", t)) and len(t) < 280
 
 
+_LENGTH_STOPS = frozenset({"length", "max_tokens", "max_output_tokens", "token_limit"})
+
+_LEAKED_REASONING_OPENERS = re.compile(
+    r"^(?:"
+    r"the user wants\b|"
+    r"let me (?:count|reconstruct|figure|think|read|check|look)\b|"
+    r"i need to figure out\b|"
+    r"hmm\b|"
+    r"wait[,.]|"
+    r"should i (?:include|add|use|set)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+_HAND_NUMBERED_LINE = re.compile(r"^\s*\d+:\s")
+
+
+def _is_length_stop(done_reason: str | None) -> bool:
+    """True when the model hit its output token cap (truncated)."""
+    if not done_reason:
+        return False
+    return done_reason.strip().lower() in _LENGTH_STOPS
+
+
+def _looks_like_leaked_reasoning(text: str) -> bool:
+    """Untagged chain-of-thought dumped as the user-visible answer.
+
+    Thinking models (GLM-5.3-Flash without ``think`` separated) reconstruct
+    files line-by-line and oscillate on options instead of calling tools.
+    Structured edits (``<<<EDIT`` / fenced code) are treated as real output.
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    if "<<<EDIT" in t or "```" in t:
+        return False
+    if _LEAKED_REASONING_OPENERS.search(t):
+        return True
+    numbered = 0
+    for line in t.splitlines():
+        if _HAND_NUMBERED_LINE.match(line):
+            numbered += 1
+            if numbered >= 15:
+                return True
+    return False
+
+
 def _best_answer_from_iterations(
     iterations: list[AgentIteration],
     *,
@@ -257,6 +304,13 @@ this turn proves it did.\
 """
 
 
+def _confirm_refusal_message(decision: object) -> str:
+    """User-facing tool result when a write/edit confirm did not proceed."""
+    if getattr(decision, "timed_out", False):
+        return "Write not confirmed (timed out). File was not saved."
+    return "Operation cancelled by user."
+
+
 @dataclass
 class AgentIteration:
     """Record of a single think → act → observe cycle."""
@@ -306,6 +360,7 @@ class AgentLoop:
         self._max_tool_output = max_tool_output or 16_000
         self._on_event = on_event or (lambda _kind, _data: None)
         self._stream_final = stream_final
+        self._active_query = ""
 
         # Error recovery settings from config
         cfg = get_config()
@@ -340,6 +395,11 @@ class AgentLoop:
         # confirm gate only catches *destructive* commands, so state-changing-but-
         # safe ops (docker build/up, file writes) would otherwise slip past
         # --read-only. Opt-in: only active when the run set read_only.
+        if name == "write_file":
+            from agentforge.tools.filesystem import apply_write_file_unique
+
+            args = apply_write_file_unique(args, getattr(self, "_active_query", "") or "")
+
         if self._read_only:
             from agentforge.tools.readonly_guard import is_read_only_safe
 
@@ -472,7 +532,7 @@ class AgentLoop:
         self._registry.emit_file_diff(
             {
                 "tool": name,
-                "action": "edited",
+                "action": "proposed",
                 "path": parsed["path"],
                 "pre_hash": parsed["pre_hash"],
                 "post_hash": "",
@@ -486,7 +546,7 @@ class AgentLoop:
         confirmed = self._registry.run_confirm(prompt)
         logger.info("[preview_confirm_edit] confirm result=%s for %s", confirmed, parsed["path"])
         if not confirmed:
-            return "Operation cancelled by user."
+            return _confirm_refusal_message(confirmed)
 
         apply_result = str(
             self._dispatch_tool(
@@ -496,42 +556,58 @@ class AgentLoop:
             )
         )
         logger.info("[preview_confirm_edit] apply result (first 200): %s", apply_result[:200])
+        self._registry.emit_file_diff(
+            {
+                "tool": name,
+                "action": "edited",
+                "path": parsed["path"],
+                "pre_hash": parsed["pre_hash"],
+                "post_hash": self._post_hash_from_apply(apply_result),
+                "additions": parsed["additions"],
+                "deletions": parsed["deletions"],
+                "diff_text": parsed["diff_text"],
+            }
+        )
         return apply_result
 
     def _preview_confirm_write(self, tool_name: str, args: dict) -> str:
         """Show a diff card and confirm before write_file/append_file writes."""
+        args = self._remap_dispatcher_home(args)
         target = args.get("path", "")
         content = args.get("content", "")
         if not target:
             return self._dispatch_tool(tool_name, args)
 
-        p = Path(target).expanduser().resolve()
+        display_path = str(target)
+        local = Path(target).expanduser()
         try:
-            original = p.read_text(encoding="utf-8") if p.is_file() else ""
+            original = local.read_text(encoding="utf-8") if local.is_file() else ""
         except Exception:
             original = ""
 
         new_content = (original + content) if tool_name == "append_file" else content
         if new_content == original:
-            return f"No changes to {p}"
+            return f"No changes to {display_path}"
 
         pre_hash = hashlib.sha256(original.encode("utf-8")).hexdigest()
 
-        save_snapshot(pre_hash=pre_hash, path=str(p), content=original, tool=tool_name)
+        save_snapshot(pre_hash=pre_hash, path=display_path, content=original, tool=tool_name)
 
+        shown_name = Path(display_path).name
         old_lines = original.splitlines(keepends=True)
         new_lines = new_content.splitlines(keepends=True)
-        diff_lines = list(difflib.unified_diff(old_lines, new_lines, fromfile=f"a/{p.name}", tofile=f"b/{p.name}"))
+        diff_lines = list(
+            difflib.unified_diff(old_lines, new_lines, fromfile=f"a/{shown_name}", tofile=f"b/{shown_name}")
+        )
         diff_text = "".join(diff_lines)
         additions = sum(1 for ln in diff_lines if ln.startswith("+") and not ln.startswith("+++"))
         deletions = sum(1 for ln in diff_lines if ln.startswith("-") and not ln.startswith("---"))
 
-        action = "edited" if original else "written"
         self._registry.emit_file_diff(
             {
                 "tool": tool_name,
-                "action": action,
-                "path": str(p),
+                "action": "proposed",
+                "path": display_path,
                 "pre_hash": pre_hash,
                 "snapshot_id": pre_hash,
                 "post_hash": "",
@@ -541,12 +617,35 @@ class AgentLoop:
             }
         )
 
-        verb = "Append to" if tool_name == "append_file" else ("Write to" if original else "Write new file")
-        prompt = f"{verb} {p.name}? (+{additions} -{deletions})"
-        if not self._registry.run_confirm(prompt):
-            return "Operation cancelled by user."
+        verb = "Append to" if tool_name == "append_file" else ("Overwrite" if original else "Write new file")
+        prompt = f"{verb} {display_path}? (+{additions} -{deletions})"
+        decision = self._registry.run_confirm(prompt)
+        if not decision:
+            return _confirm_refusal_message(decision)
 
-        return self._dispatch_tool(tool_name, args, internal=True)
+        result = self._dispatch_tool(tool_name, args, internal=True)
+        post_hash = hashlib.sha256(new_content.encode("utf-8")).hexdigest()
+        self._registry.emit_file_diff(
+            {
+                "tool": tool_name,
+                "action": "written",
+                "path": display_path,
+                "pre_hash": pre_hash,
+                "snapshot_id": pre_hash,
+                "post_hash": post_hash,
+                "additions": additions,
+                "deletions": deletions,
+                "diff_text": diff_text,
+            }
+        )
+        return result
+
+    @staticmethod
+    def _post_hash_from_apply(text: str) -> str:
+        for line in (text or "").splitlines():
+            if line.startswith("post_hash="):
+                return line.split("=", 1)[1].strip()
+        return ""
 
     @staticmethod
     def _parse_propose(text: str) -> dict | None:
@@ -588,7 +687,7 @@ class AgentLoop:
         }
 
     @staticmethod
-    def _remap_dispatcher_home(args: dict) -> dict:
+    def _remap_dispatcher_home(args: dict, home: str | None = None) -> dict:
         """Rewrite paths under THIS host's home to '~' before cross-host dispatch.
 
         The agent loop reasons on one host (a container with HOME=/root) while a
@@ -598,7 +697,8 @@ class AgentLoop:
         executor re-resolve it against ITS own home. Anchored at a path boundary
         so '/var/root' and the like are left alone.
         """
-        home = os.path.expanduser("~")
+        if home is None:
+            home = os.path.expanduser("~")
         if not home or home in ("/", "~"):
             return args
         pattern = re.compile(r"(?<![\w/])" + re.escape(home) + r"(?=/|$)")
@@ -717,6 +817,8 @@ class AgentLoop:
         """Run the agent loop."""
         if ctx is None:
             ctx = PipelineContext(query=query or "")
+
+        self._active_query = ctx.query
 
         # Clear per-run caches (e.g., filesystem directory dedup mapping)
         try:
@@ -948,10 +1050,9 @@ class AgentLoop:
 
                 # Cloud models sometimes return empty content with no tool
                 # calls (e.g., after <think> stripping, or native thinking
-                # only).  If we have prior tool results in context, nudge
-                # the model to produce a real answer instead of accepting
-                # empty/mid-plan CoT — but only retry once to avoid loops.
-                if not final_text and i > 1 and not getattr(ctx, "_empty_nudge_sent", False):
+                # only). Nudge once — including iteration 1 — so a thinking
+                # dump is not promoted as the answer before a tool call.
+                if not final_text and not getattr(ctx, "_empty_nudge_sent", False):
                     logger.warning(
                         "[Agent] Empty response with no tool calls at iteration %d "
                         "(thinking_len=%d) — nudging model to summarise",
@@ -1038,6 +1139,90 @@ class AgentLoop:
                             "iteration": i,
                             "category": "plan_fragment",
                             "message": "Model returned a mid-plan fragment — nudging for full answer",
+                        },
+                    )
+                    iteration.duration = time.perf_counter() - iter_start
+                    iterations.append(iteration)
+                    continue
+
+                # Truncated generation (num_predict / max_tokens hit). A
+                # mid-sentence CoT dump is not a final answer.
+                if (
+                    final_text
+                    and _is_length_stop(response.done_reason)
+                    and not getattr(ctx, "_length_nudge_sent", False)
+                ):
+                    logger.warning(
+                        "[Agent] Truncated reply at iteration %d (done_reason=%s, %d chars) "
+                        "— nudging to finish or call a tool",
+                        i,
+                        response.done_reason,
+                        len(final_text),
+                    )
+                    ctx._length_nudge_sent = True
+                    ctx.messages.append({"role": "assistant", "content": final_text})
+                    if thinking_text and thinking_text != final_text:
+                        ctx.messages[-1]["thinking"] = thinking_text
+                    ctx.messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "[System] Your previous reply was cut off "
+                                f"(done_reason={response.done_reason}). "
+                                "Finish the work now: if the user asked for a file change, "
+                                "call the appropriate tool (code_edit / write_file). "
+                                "Do not reconstruct the file with hand-counted line numbers. "
+                                "Do not only think — emit a tool call or the complete answer."
+                            ),
+                        }
+                    )
+                    self._on_event(
+                        "warning",
+                        {
+                            "iteration": i,
+                            "category": "truncated_reply",
+                            "message": "Model hit the output token cap — nudging to finish",
+                        },
+                    )
+                    iteration.duration = time.perf_counter() - iter_start
+                    iterations.append(iteration)
+                    continue
+
+                # Untagged chain-of-thought in content (no tool call).
+                if (
+                    final_text
+                    and (self._tool_names is None or len(self._tool_names) > 0)
+                    and _looks_like_leaked_reasoning(final_text)
+                    and not getattr(ctx, "_reasoning_nudge_sent", False)
+                ):
+                    logger.warning(
+                        "[Agent] Leaked reasoning as final at iteration %d (%d chars) "
+                        "— nudging to call a tool or answer",
+                        i,
+                        len(final_text),
+                    )
+                    ctx._reasoning_nudge_sent = True
+                    ctx.messages.append({"role": "assistant", "content": final_text})
+                    if thinking_text and thinking_text != final_text:
+                        ctx.messages[-1]["thinking"] = thinking_text
+                    ctx.messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "[System] That reply is internal reasoning, not the answer. "
+                                "Do not count source lines by hand and do not dump the plan. "
+                                "If the user asked to change a file, call code_edit or "
+                                "write_file now. Otherwise write the user-visible answer "
+                                "in the response content."
+                            ),
+                        }
+                    )
+                    self._on_event(
+                        "warning",
+                        {
+                            "iteration": i,
+                            "category": "leaked_reasoning",
+                            "message": "Model dumped chain-of-thought as the answer — nudging to act",
                         },
                     )
                     iteration.duration = time.perf_counter() - iter_start

@@ -6,7 +6,7 @@ Usage:
 
 Examples:
     # Map a single file
-    poetry run python -m chunking.openapi.cli data/OpenAPI-Schemas/openapi-intranet-api.json
+    poetry run python -m chunking.openapi.cli data/OpenAPI-Schemas/openapi-test.json
 
     # Map all JSON files in the schemas directory
     poetry run python -m chunking.openapi.cli --all

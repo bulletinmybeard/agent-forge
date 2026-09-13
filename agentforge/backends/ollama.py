@@ -21,6 +21,12 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# Installed ollama.Client.chat() kwargs. extra_body keys outside this set
+# (e.g. OpenAI-style ``reasoning_effort``) must not be forwarded — they raise
+# TypeError and trip the profile fallback chain.
+_OLLAMA_CHAT_KEYS = frozenset(inspect.signature(Client.chat).parameters) - {"self"}
+_EFFORT_TO_THINK = {"low": "low", "medium": "medium", "high": "high", "max": "high"}
+
 
 class OllamaBackend(Backend):
     """Backend that talks to a local or remote Ollama server."""
@@ -152,16 +158,33 @@ class OllamaBackend(Backend):
         if tools:
             params["tools"] = [self._func_to_tool_spec(fn) for fn in tools]
 
-        # Profile escape hatch — a nested `options` dict merges into sampling
-        # options; every other key (e.g., `think`) is set at the top level of
-        # the chat() call.
-        for key, value in self._profile.extra_body.items():
-            if key == "options" and isinstance(value, dict):
-                params["options"].update(value)
-            else:
-                params[key] = value
+        # parse_thinking profiles: ask Ollama to put CoT in message.thinking
+        # so it is not treated as the user-visible answer. extra_body can
+        # override (think: false / "low" / "high").
+        if self._profile.parse_thinking:
+            params["think"] = True
 
+        self._apply_extra_body(params)
         return params
+
+    def _apply_extra_body(self, params: dict[str, Any]) -> None:
+        """Merge profile extra_body into chat() kwargs the client actually accepts."""
+        extra = dict(self._profile.extra_body or {})
+        effort = extra.pop("reasoning_effort", None)
+        nested = extra.pop("options", None)
+        if isinstance(nested, dict):
+            params.setdefault("options", {}).update(nested)
+        for key, value in extra.items():
+            if key not in _OLLAMA_CHAT_KEYS:
+                logger.debug("dropping extra_body key %r — not a Client.chat() argument", key)
+                continue
+            if key == "think" and value == "max":
+                value = "high"
+            params[key] = value
+        if effort is not None and not isinstance(params.get("think"), str):
+            mapped = _EFFORT_TO_THINK.get(str(effort).lower())
+            if mapped and params.get("think") is not False:
+                params["think"] = mapped
 
     # -- response wrapping --------------------------------------------------
 

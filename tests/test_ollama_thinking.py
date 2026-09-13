@@ -14,6 +14,8 @@ from agentforge.agent import (
     AgentIteration,
     _best_answer_from_iterations,
     _coerce_final_text,
+    _is_length_stop,
+    _looks_like_leaked_reasoning,
     _looks_like_plan_fragment,
 )
 from agentforge.backends.ollama import OllamaBackend
@@ -166,3 +168,86 @@ def test_coerce_final_swaps_plan_fragment_for_better_leftover():
         iterations=iters,
     )
     assert "Complete write-up" in text
+
+
+def test_length_stop_reasons():
+    assert _is_length_stop("length")
+    assert _is_length_stop("max_tokens")
+    assert not _is_length_stop("stop")
+    assert not _is_length_stop(None)
+
+
+def test_leaked_reasoning_opener():
+    dump = (
+        "The user wants me to add a new model profile ollama-glm-5-3 "
+        "before ollama-glm-5-3-flash in the YAML file.\n"
+        "The file content I read — I need to figure out the line numbers."
+    )
+    assert _looks_like_leaked_reasoning(dump)
+
+
+def test_leaked_reasoning_hand_numbered_reconstruction():
+    lines = [f"{i}:     provider: ollama" for i in range(1, 21)]
+    assert _looks_like_leaked_reasoning("\n".join(lines))
+
+
+def test_leaked_reasoning_ignores_structured_edit():
+    text = (
+        "The user wants a new profile.\n"
+        "<<<EDIT start_line=161 end_line=0 mode=insert_before>>>\n"
+        "```yaml\n  ollama-glm-5-3:\n    model: x\n```\n"
+        "<<<END>>>"
+    )
+    assert not _looks_like_leaked_reasoning(text)
+
+
+def _params_backend(*, parse_thinking: bool, extra_body: dict | None = None) -> OllamaBackend:
+    b = object.__new__(OllamaBackend)
+    b._profile = types.SimpleNamespace(
+        parse_thinking=parse_thinking,
+        model="glm-5.3-flash:cloud",
+        temperature=0.2,
+        max_tokens=16000,
+        top_p=None,
+        top_k=None,
+        repeat_penalty=None,
+        stop=None,
+        keep_alive=None,
+        extra_body=extra_body or {},
+    )
+    return b
+
+
+def test_parse_thinking_sets_think_true():
+    params = _params_backend(parse_thinking=True)._build_chat_params([], False, None, None, None)
+    assert params["think"] is True
+
+
+def test_extra_body_can_override_think():
+    params = _params_backend(parse_thinking=True, extra_body={"think": False})._build_chat_params(
+        [], False, None, None, None
+    )
+    assert params["think"] is False
+
+
+def test_no_think_when_parse_thinking_off():
+    params = _params_backend(parse_thinking=False)._build_chat_params([], False, None, None, None)
+    assert "think" not in params
+
+
+def test_reasoning_effort_is_not_forwarded_to_chat():
+    params = _params_backend(
+        parse_thinking=True,
+        extra_body={"think": True, "reasoning_effort": "max"},
+    )._build_chat_params([], False, None, None, None)
+    assert "reasoning_effort" not in params
+    assert params["think"] == "high"
+
+
+def test_think_max_coerced_to_high():
+    params = _params_backend(
+        parse_thinking=True,
+        extra_body={"think": "max"},
+    )._build_chat_params([], False, None, None, None)
+    assert params["think"] == "high"
+    assert "reasoning_effort" not in params

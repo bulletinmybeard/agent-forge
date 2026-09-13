@@ -36,6 +36,13 @@ class TestResolveCollection:
             reg.resolve_collection("mystery_collection")
         assert exc.value.status_code == 400
 
+    def test_get_request_knowledge_collection(self):
+        reg.set_request_knowledge_collection(None)
+        assert reg.get_request_knowledge_collection() is None
+        reg.set_request_knowledge_collection("snippet_entries")
+        assert reg.get_request_knowledge_collection() == "snippet_entries"
+        reg.set_request_knowledge_collection(None)
+
     def test_contextvar_used_when_set(self):
         with (
             patch.object(reg.settings.knowledge, "collection_name", "knowledge_entries"),
@@ -60,11 +67,18 @@ class TestResolveCollection:
             patch.object(reg.settings.knowledge, "collection_name", "knowledge_entries"),
             patch.object(reg.settings.knowledge, "notes_collection_name", "kb_note_entries"),
             patch.object(reg.settings.knowledge, "mail_collection_name", "kb_mail_entries"),
+            patch.object(reg.settings.knowledge, "snippet_collection_name", "snippet_entries"),
         ):
             allowed = reg.allowed_collections()
             assert "knowledge_entries" in allowed
             assert "kb_note_entries" in allowed
             assert "kb_mail_entries" in allowed
+            assert "snippet_entries" in allowed
+
+    def test_session_source_snippets(self):
+        with patch.object(reg.settings.knowledge, "snippet_collection_name", "snippet_entries"):
+            assert reg.collection_for_session_source("snippets") == "snippet_entries"
+            assert reg.collection_for_session_source("other") is None
 
 
 class TestGetKnowledgeService:

@@ -115,6 +115,7 @@ knowledge:
   collection_name: "knowledge_entries"               # Knowledge Base SPA (default /knowledge/*)
   notes_collection_name: "kb_note_entries"             # AgentForge Notes macOS app
   mail_collection_name: "kb_mail_entries"              # AgentForge Email macOS app
+  snippet_collection_name: "snippet_entries"           # Snippet Base macOS app
   dedup_threshold: 0.92                              # cosine; higher = stricter near-dup gate
   composite_template: "{title}\n{notes}\n{content}"  # text that gets embedded
   files_dir: "data/knowledge_files"                    # original attachments
@@ -386,9 +387,17 @@ agent:
   condense_tool_prompt: true    # shorter system prompt after iteration 1 (saves tokens)
   max_tool_output: 64000        # cap a single tool's output (chars)
 
-# @review mode — parallel multi-agent code review.
+# @review mode — default is one large-context reviewer. --deep / --classic
+# opt into the 4-specialist fan-out (with and without a merge pass).
 review:
-  subagent_timeout_seconds: 300 # how long to wait for each review sub-agent
+  style: single                 # single | deep | classic
+  subagent_timeout_seconds: 300 # wait per review sub-agent
+  max_workers: 4                # specialist concurrency (queued above this)
+  gather_max_bytes: 400000      # inline file-content cap for the gather step
+  max_findings: 5               # cap for single + deep merge
+  reviewer_profile: coder       # single-reviewer model
+  specialist_profile: cloud-heavy
+  aggregator_profile: cloud-heavy
 
 # Service-level runtime guards.
 service:

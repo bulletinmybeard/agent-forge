@@ -41,6 +41,9 @@ data/
 .idea/
 .vscode/
 
+# Scratch copies under sandbox (not part of the package)
+sandbox/scripts/tmp/
+
 # Helper script (not part of the package)
 remove-nonpublic.sh
 

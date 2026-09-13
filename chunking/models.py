@@ -77,7 +77,7 @@ class ApiSummaryPayload(BaseModel):
     source_name: str = Field(description="Generic source identifier (same as api_name for OpenAPI)")
     chunk_type: ChunkType = ChunkType.API_SUMMARY
     chunk_id: str = Field(description="Deterministic ID: {api_name}:summary")
-    api_name: str = Field(description="Slug derived from filename or info.title, e.g., 'intranet-api'")
+    api_name: str = Field(description="Slug derived from filename or info.title")
     api_title: str = Field(description="Human-readable API title from info.title")
     api_version: str = Field(description="API version from info.version")
     api_description: str = Field(default="", description="API description from info.description")

@@ -13,7 +13,8 @@
 # Flow:
 #   1. Rsync repo to the remote (configs go along; no SPA build, no yq merge)
 #   2. docker compose up -d --build (overlay: Traefik + host Redis)
-#   3. Install / refresh the native local worker (macOS launchd)
+#   3. Prune unused build cache + unused images (containers + volumes kept)
+#   4. Install / refresh the native local worker (macOS launchd)
 #
 # Settings (SSH host, dir, domains, proxy network, host Redis) come from
 # deploy.env — copy deploy.example.env -> deploy.env and fill it in.
@@ -112,7 +113,7 @@ resolve_deploy
 # Vars the compose overlay interpolates — passed through to the remote compose.
 # COMPOSE_PROFILES picks which services run; REMOTE_REDIS_URL stays the authoritative
 # host-Redis knob on the remote (overlay reads it). Host Qdrant only when requested.
-COMPOSE_ENV="COMPOSE_PROFILES='${RESOLVED_COMPOSE_PROFILES}' PUBLIC_DOMAIN='${PUBLIC_DOMAIN}' API_DOMAIN='${API_DOMAIN}' QDRANT_DOMAIN='${QDRANT_DOMAIN}' SAQ_DOMAIN='${SAQ_DOMAIN}' PROXY_NETWORK='${PROXY_NETWORK}' REMOTE_REDIS_URL='${REMOTE_REDIS_URL}' AGENTFORGE_DISPATCH_MODE='${RESOLVED_DISPATCH_MODE}' AGENTFORGE_TOOL_PLUGINS='${AGENTFORGE_TOOL_PLUGINS:-}' AGENTFORGE_ALLOW_INSECURE='${AGENTFORGE_ALLOW_INSECURE:-}' AGENTFORGE_API_KEYS='${AGENTFORGE_API_KEYS:-}' AGENTFORGE_REQUIRE_AUTH='${AGENTFORGE_REQUIRE_AUTH:-}' SIDECAR_AUTH_TOKEN='${SIDECAR_AUTH_TOKEN:-}' AGENTFORGE_INTERNAL_TOKEN='${AGENTFORGE_INTERNAL_TOKEN:-}'"
+COMPOSE_ENV="COMPOSE_PROFILES='${RESOLVED_COMPOSE_PROFILES}' PUBLIC_DOMAIN='${PUBLIC_DOMAIN}' API_DOMAIN='${API_DOMAIN}' QDRANT_DOMAIN='${QDRANT_DOMAIN}' SAQ_DOMAIN='${SAQ_DOMAIN}' PROXY_NETWORK='${PROXY_NETWORK}' REMOTE_REDIS_URL='${REMOTE_REDIS_URL}' AGENTFORGE_DISPATCH_MODE='${RESOLVED_DISPATCH_MODE}' AGENTFORGE_TOOL_PLUGINS='${AGENTFORGE_TOOL_PLUGINS:-}' AGENTFORGE_ALLOW_INSECURE='${AGENTFORGE_ALLOW_INSECURE:-}' AGENTFORGE_API_KEYS='${AGENTFORGE_API_KEYS:-}' AGENTFORGE_REQUIRE_AUTH='${AGENTFORGE_REQUIRE_AUTH:-}' SIDECAR_AUTH_TOKEN='${SIDECAR_AUTH_TOKEN:-}' AGENTFORGE_INTERNAL_TOKEN='${AGENTFORGE_INTERNAL_TOKEN:-}' LOKI_URL='${LOKI_URL:-}'"
 if [ -n "${RESOLVED_QDRANT_HOST}" ]; then
     COMPOSE_ENV="${COMPOSE_ENV} QDRANT_HOST='${RESOLVED_QDRANT_HOST}' QDRANT_PORT='${RESOLVED_QDRANT_PORT}'"
 fi
@@ -207,6 +208,28 @@ ensure_custom_agent_files() {
             printf 'agents: {}\n' > "${PROJECT_ROOT}/custom_agents.local.yaml"
             echo -e "${YELLOW}[i] custom_agents.local.yaml missing — created empty placeholder${NC}"
         fi
+    fi
+}
+
+# Drop unused BuildKit cache + images not referenced by any container.
+# Leaves containers (including exited ones) and volumes alone — stopped stacks
+# stay pinned. Restart-only / config-only paths skip this.
+prune_remote_docker() {
+    echo -e "\n${GREEN}Pruning unused Docker build cache + images (containers/volumes kept)...${NC}"
+    if ! ${SSH_CMD} "${SSH_HOST}" '
+      set +e
+      echo "Before:"
+      docker system df
+      echo
+      docker builder prune -af
+      echo
+      docker image prune -af
+      echo
+      echo "After:"
+      docker system df
+      exit 0
+    '; then
+        echo -e "${YELLOW}[warn] docker prune SSH step failed${NC}"
     fi
 }
 
@@ -328,7 +351,7 @@ else
     ${SSH_CMD} "${SSH_HOST}" "cd ${REMOTE_DIR} && ${COMPOSE_ENV} docker compose ${COMPOSE_FILES} up -d --build"
 fi
 
-# ── Health checks + prune ─────────────────────────────────────────────
+# ── Health checks ─────────────────────────────────────────────────────
 # Only probe services the active preset actually starts.
 # NOTE: web serves no SPA at `/` (404) — probe `/api/health` instead. Using
 # `curl -sf http://localhost:8200/` made the wait look "stuck" / failed under
@@ -370,13 +393,12 @@ if ! ${SSH_CMD} "${SSH_HOST}" "
     docker ps --format '{{.Names}}' | grep -qF \"\$s\" \\
       && echo \"  [OK] \$s\" || echo \"  [WAIT] \$s\"
   done
-  echo ''
-  echo 'Pruning dangling images...'
-  docker image prune -f >/dev/null 2>&1 || true
   exit 0
 "; then
     echo -e "${YELLOW}[warn] health probe SSH step failed — check: ssh ${SSH_HOST} 'docker ps'${NC}"
 fi
+
+prune_remote_docker
 
 setup_local_worker || echo -e "${YELLOW}[warn] setup_local_worker returned non-zero${NC}"
 close_ssh || true

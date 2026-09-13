@@ -32,6 +32,8 @@ VALID_MODES = {
     # `routing.md` documents each one so the LLM can actually pick them.
     "coding",
     "review",
+    "plan",
+    "build",
     "research",
     "sql",
     "scheduler",
@@ -63,6 +65,8 @@ _PREFIX_MAP = {
     "@coding": "coding",
     "@code": "coding",
     "@review": "review",
+    "@plan": "plan",
+    "@build": "build",
     "@research": "research",
     "@sql": "sql",
     "@scheduler": "scheduler",

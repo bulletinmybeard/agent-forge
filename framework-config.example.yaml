@@ -46,6 +46,11 @@ ai:
     worker:      { abstract: true }
     agent-light: { abstract: true }
     embed:       { abstract: true }
+    coder-light:    { abstract: true }
+    coder-heavy:    { abstract: true }
+    worker-light:   { abstract: true }
+    worker-heavy:   { abstract: true }
+    reasoner-heavy: { abstract: true }
 
     # --- Role profiles — the names the framework asks for by role; each
     #     inherits a tier and overrides sampling per use-case.
@@ -81,6 +86,8 @@ agent:
 
 # Tool defaults
 tools:
+  write_file:
+    unique: true              # suffix file/folder (_1) on conflict; false = overwrite in place
   default_search_depth: 0
   docker:
     max_tail_lines: 200
@@ -157,6 +164,13 @@ discovery:
 # Typed multi-step pipeline runner
 pipeline:
   profile: "thinker"
+
+# @review specialist fan-out concurrency (style / profiles live in config.yaml)
+review:
+  max_workers: 4
+  max_workers_by_provider:
+    ollama: 4
+    deepinfra: 8
 
 # Code-transform burst mode
 coding:

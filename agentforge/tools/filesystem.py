@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import shlex
 import subprocess
 from datetime import datetime, timezone
@@ -225,6 +226,20 @@ def _get_default_search_depth() -> int:
 # ---------------------------------------------------------------------------
 
 
+def prefix_line_numbers(text: str, start_line: int = 1) -> str:
+    """Prefix each line with a 1-based ``N │`` marker.
+
+    The box-drawing separator avoids colliding with YAML ``N:`` keys.
+    Trailing newline of *text* is preserved. Empty input is unchanged.
+    """
+    if not text:
+        return text
+    start = max(1, int(start_line))
+    lines = text.split("\n")
+    numbered = [f"{start + i:6d} │ {line}" for i, line in enumerate(lines)]
+    return "\n".join(numbered)
+
+
 @tool
 def read_file(
     path: str,
@@ -244,8 +259,10 @@ def read_file(
             Ignored when offset/limit are used.
         offset — first line to read, 1-indexed (default 0 = start of file).
         limit — number of lines to read from offset (default 0 = all lines).
-    Output: File contents as a string, with a truncation note if cut short.
-        PDF files are converted to text with page markers automatically.
+    Output: File contents as a string with 1-based ``N │`` line prefixes
+        (orientation only — do not copy the prefixes into edits). A
+        truncation note is appended if the read was cut short. PDF files
+        are converted to text with page markers automatically (unnumbered).
     Hint: Use offset + limit to page through large files, e.g.,
         read_file(path, offset=100, limit=100) reads lines 100–199.
     """
@@ -279,7 +296,8 @@ def read_file(
             if output.startswith("Error:"):
                 return output
             total_lines = _run(["wc", "-l", str(p)], timeout=5).split()[0]
-            return output + f"\n\n[Lines {start}–{start + output.count(chr(10))} of {total_lines} total]"
+            numbered = prefix_line_numbers(output, start)
+            return numbered + f"\n\n[Lines {start}–{start + output.count(chr(10))} of {total_lines} total]"
 
         # Use cat for the common case (fast, handles large files well).
         # Fall back to Python only when truncation is needed.
@@ -287,7 +305,7 @@ def read_file(
             output = _run(["cat", str(p)], timeout=10)
             if output.startswith("Error:"):
                 return output
-            return output
+            return prefix_line_numbers(output)
 
         # Check file size first — if under limit, cat it directly
         try:
@@ -299,13 +317,13 @@ def read_file(
             output = _run(["cat", str(p)], timeout=10)
             if output.startswith("Error:"):
                 return output
-            return output
+            return prefix_line_numbers(output)
 
         # File is large — use head -c for truncation + report total size
         output = _run(["head", "-c", str(max_chars), str(p)], timeout=10)
         if output.startswith("Error:"):
             return output
-        return output + f"\n\n... (truncated, {file_size:,} chars total)"
+        return prefix_line_numbers(output) + f"\n\n... (truncated, {file_size:,} chars total)"
     except Exception as exc:
         return f"Error reading file: {exc}"
 
@@ -590,27 +608,126 @@ def _resolve_parent(p: Path) -> Path:
     return actual_parent / p.name
 
 
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    s = str(value).strip().lower()
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def _write_file_unique_default() -> bool:
+    """``tools.write_file.unique`` in config (default True = prefix on conflict)."""
+    try:
+        from agentforge.config import get_config
+
+        raw = get_config()._raw.get("tools", {}).get("write_file", {}).get("unique", True)
+        return _coerce_bool(raw, default=True)
+    except Exception:
+        return True
+
+
+_UPDATE_INTENT = re.compile(
+    r"\b(add|insert|update|edit|modify|change|replace|patch|fix|extend|prepend|revise)\b",
+    re.IGNORECASE,
+)
+_KEEP_UNIQUE_INTENT = re.compile(
+    r"\b(copy|duplicate|don't overwrite|do not overwrite|without overwriting)\b",
+    re.IGNORECASE,
+)
+
+
+def _path_aliases(path: Path) -> list[str]:
+    """Basename and full posix path, plus parent names for folder mentions."""
+    aliases: list[str] = []
+    resolved = path.expanduser()
+    try:
+        resolved = resolved.resolve()
+    except OSError:
+        pass
+    aliases.append(resolved.as_posix())
+    aliases.append(resolved.name)
+    if resolved.parent.name:
+        aliases.append(resolved.parent.as_posix())
+        aliases.append(resolved.parent.name)
+    return [a for a in aliases if a]
+
+
+def wants_in_place_write(query: str, path: str) -> bool:
+    """True when the user asked to update this existing file or its folder.
+
+    Used to flip write_file unique=false so ``providers_1/`` is not created
+    for an in-place edit. Explicit ``unique=true`` still wins at the caller.
+    """
+    q = (query or "").strip()
+    if not q or not path:
+        return False
+    if _KEEP_UNIQUE_INTENT.search(q):
+        return False
+    if not _UPDATE_INTENT.search(q):
+        return False
+    p = Path(path).expanduser()
+    try:
+        p = p.resolve()
+    except OSError:
+        pass
+    q_norm = q.replace("\\", "/")
+    mentioned = any(alias and alias in q_norm for alias in _path_aliases(p))
+    if not mentioned:
+        return False
+    if p.exists():
+        return True
+    # New file inside an existing folder the prompt named
+    return p.parent.exists() and p.parent.is_dir()
+
+
+def apply_write_file_unique(args: dict[str, Any], query: str) -> dict[str, Any]:
+    """Set unique=false when omitted and the prompt is an in-place update.
+
+    Leaves an explicit unique argument unchanged.
+    """
+    out = dict(args)
+    if out.get("unique") is not None and str(out.get("unique")).strip() != "":
+        return out
+    path = str(out.get("path") or "")
+    if wants_in_place_write(query, path):
+        out["unique"] = False
+    return out
+
+
 @tool
-def write_file(path: str, content: str) -> str:
+def write_file(path: str, content: str, unique: bool | None = None) -> str:
     """Write text content to a local file, creating parent directories as needed.
 
-    When to use: Create a new file or completely replace the contents of an
-        existing file — scripts, configs, reports, generated code, etc.
-    When NOT to use: Appending to an existing file (use append_file), making
-        structural edits to an existing file (use code_edit), remote file writes
-        (use ssh + write via shell or scp).
+    When to use: Create a new file or save a full copy of content (scripts,
+        configs, reports, generated code). Prefer code_edit for surgical
+        edits of a few regions in an existing file.
+    When NOT to use: Appending (use append_file), remote writes (ssh/scp).
     Input: path — target file path. content — full text content to write.
+        unique — when true (default), never overwrite: suffix the file
+            (report_1.md) or the parent folder (providers_1/) if the
+            destination already has content. When false, write in place.
+            Omit to use tools.write_file.unique from config, unless the
+            user asked to update this existing file (then unique=false).
     Output: Confirmation with the actual path written and character count.
-        If the requested path already exists, the file is saved with a numeric
-        suffix instead (e.g., report_1.md, report_2.md). The suffixed siblings
-        are intentional versioned outputs — do NOT delete them after writing.
+        Suffixed siblings are intentional versioned outputs.
     """
     try:
+        use_unique = _write_file_unique_default() if unique is None else _coerce_bool(unique, default=True)
         p = Path(path).expanduser().resolve()
-        p = _resolve_parent(p)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        # Final file-level dedup (for files in well-known dirs)
-        p = _unique_path(p)
+        if use_unique:
+            p = _resolve_parent(p)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p = _unique_path(p)
+        else:
+            p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
         return f"Wrote {len(content):,} chars to {p}"
     except Exception as exc:

@@ -43,11 +43,7 @@ def _slugify_path(path: str) -> str:
 
 
 def _slugify_schema_name(name: str) -> str:
-    """Convert a schema name to a filesystem-safe slug.
-
-    'intranet_api__schema__finance__read__Contract' → 'Contract__finance_read'
-    'DemarcationDetails' → 'DemarcationDetails'
-    """
+    """Convert a schema name to a filesystem-safe slug."""
     if "__" in name:
         parts = name.split("__")
         actual_name = parts[-1]

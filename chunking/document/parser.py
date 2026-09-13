@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # Filename patterns → document_type.
 # Checked in order; first match wins.  Patterns use word boundaries
 # so they match both standalone filenames (CHANGELOG.md) and prefixed
-# ones (my-nl-ix_CHANGELOG.md).
+# ones.
 _DOCUMENT_TYPE_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"(?:^|[_\-])changelog", re.IGNORECASE), "changelog"),
     (re.compile(r"(?:^|[_\-])changes", re.IGNORECASE), "changelog"),

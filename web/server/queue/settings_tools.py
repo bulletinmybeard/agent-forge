@@ -10,18 +10,24 @@ on a specific role's queue without spawning a third worker process).
 
 Run::
 
-    AGENTFORGE_WORKER_ROLE=mac  saq -v web.server.queue.settings_tools.settings
-    AGENTFORGE_WORKER_ROLE=ally saq -v web.server.queue.settings_tools.settings
+    AGENTFORGE_WORKER_ROLE=local  saq -v web.server.queue.settings_tools.settings
+    AGENTFORGE_WORKER_ROLE=remote saq -v web.server.queue.settings_tools.settings
 """
 
 from __future__ import annotations
 
 import logging
 
+from agentforge.session_logging import (
+    bind_session_from_job,
+    clear_session_binding,
+    configure_session_logging,
+)
 from web.server.queue.jobs_saq import execute_tool_saq, run_agent_job_saq
 from web.server.queue.queues import get_tool_queue_for_role
 
 logger = logging.getLogger(__name__)
+configure_session_logging()
 
 
 def _build_settings() -> dict:
@@ -39,9 +45,11 @@ def _build_settings() -> dict:
     async def startup(ctx: dict) -> None:
         logger.info("Tools SAQ worker (role=%s) starting up — pre-loading SearchRuntime", role)
         try:
+            from web.server.audit_log import ensure_audit_log
             from web.server.ws_endpoint import SearchRuntime
 
             ctx["runtime"] = SearchRuntime()
+            ensure_audit_log()
             logger.info("Tools SAQ worker (role=%s) ready", role)
         except Exception as exc:
             logger.warning("SearchRuntime preload failed (jobs will lazy-load): %s", exc)
@@ -52,12 +60,16 @@ def _build_settings() -> dict:
     async def before_process(ctx: dict) -> None:
         job = ctx.get("job")
         if job:
+            bind_session_from_job(job)
             logger.info("Starting job: %s (key=%s)", job.function, job.key)
 
     async def after_process(ctx: dict) -> None:
-        job = ctx.get("job")
-        if job:
-            logger.info("Completed job: %s (status=%s)", job.function, job.status)
+        try:
+            job = ctx.get("job")
+            if job:
+                logger.info("Completed job: %s (status=%s)", job.function, job.status)
+        finally:
+            clear_session_binding()
 
     return {
         "queue": queue,

@@ -25,6 +25,11 @@ active_ws: dict[str, "WebSocket"] = {}
 # answer while the worker thread is waiting for confirmation.
 confirm_responses: dict[str, dict] = {}
 
+# Session IDs where the user picked "This session" on a confirm prompt.
+# Survives across agent runs in the same chat; cleared when the WS goes away
+# or via POST /internal/sessions/{id}/auto-accept {"auto_accept": false}.
+session_auto_accept: set[str] = set()
+
 # Maps "{session_id}:{request_id}" -> {"value": str} or {"cancelled": True}.
 # Written by ws_endpoint when the browser sends a secret.response WS message
 # (the masked sudo-password prompt). Read (and consumed once) by the native

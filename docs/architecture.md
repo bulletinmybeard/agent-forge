@@ -77,6 +77,7 @@ The agent loop routes each tool call to a worker on the host that can actually r
 
 - **All-in-Docker (local).** Every container runs on one host, so the workers run role `remote` and execute every tool inside the worker containers. This is what `scripts/deploy-local.sh` gives you, nothing else to set up.
 - **Split-host (remote).** The stack runs on a server while a native worker runs on a second machine (e.g., your MacBook) for tools that need that host's shell, SSH keys, or Docker socket. `scripts/deploy-remote.sh` deploys the stack and installs the native worker. Routing is keyed on `AGENTFORGE_DISPATCH_MODE` / `AGENTFORGE_WORKER_ROLE`.
+- **Mode pin.** `@coding`, `@review`, `@plan`, and `@build` pin the whole job to the `local` role in `tool_routing.yaml` (`modes:`). Those runners call tools in-process on the host that owns the files, so per-tool routing never sees the calls. Only consulted when dispatch is `split`.
 
 ## Request flow
 

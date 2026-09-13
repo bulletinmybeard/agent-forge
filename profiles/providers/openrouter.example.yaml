@@ -41,8 +41,15 @@ profiles:
 # Map only the tiers you want OpenRouter to serve. `embed` is omitted ->
 # embeddings fall back to the Ollama base (OpenRouter has no embedding lane).
 provider_override_map:
-  general:  openrouter-claude-haiku-4-5
-  coder:    openrouter-claude-haiku-4-5
-  light:    openrouter-glm-4-7-flash
-  visual:   openrouter-gemini-3-1-flash-lite
-  worker:   openrouter-claude-haiku-4-5
+  general:         openrouter-claude-haiku-4-5
+  light:           openrouter-glm-4-7-flash
+  visual:          openrouter-gemini-3-1-flash-lite
+  agent-light:     openrouter-claude-haiku-4-5
+  coder-light:     openrouter-glm-4-7-flash
+  coder:           openrouter-claude-haiku-4-5
+  coder-heavy:     openrouter-claude-haiku-4-5
+  worker-light:    openrouter-glm-4-7-flash
+  worker:          openrouter-claude-haiku-4-5
+  worker-heavy:    openrouter-claude-haiku-4-5
+  reasoner:        openrouter-claude-haiku-4-5
+  reasoner-heavy:  openrouter-claude-haiku-4-5

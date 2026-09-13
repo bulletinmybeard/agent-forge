@@ -149,7 +149,7 @@ When a `POST /knowledge/entries` hits a content-hash duplicate and the request i
   "tags": ["deprecated"],           // optional
   "content_type": "note",           // optional
   "before": "2026-01-01T00:00:00Z", // optional ISO8601
-  "project": "Salesforce"           // optional
+  "project": "Test"           // optional
 }
 ```
 
@@ -287,7 +287,7 @@ Response: `{ "results": [ ...EntryResponse ], "count": N }`.
 
 ```jsonc
 {
-  "entry_title": "NL-ix Payslips 2025",
+  "entry_title": "Annual report 2025",
   "total_chunks": 13,
   "passages": [
     {
@@ -381,9 +381,14 @@ Each chat session row carries a `source` tag (write-once at creation) so externa
 | GET    | `/api/sessions/{id}/messages/around` | Window around a timestamp. Query: `ts`, `window`.                      |
 | GET    | `/api/sessions/{id}/token-usage`     | Real token totals for the session.                                     |
 | GET    | `/api/sessions/{id}/job`             | Active worker job for the session, or 404.                             |
+| GET    | `/api/debug/sessions/{id}`           | Debug bundle: session row, messages, audit tools, Loki lines (see below). |
 | POST   | `/api/sessions/{id}/recap`           | Cumulative running recap (see [Session recap](#session-recap)).        |
 | PATCH  | `/api/sessions/{id}`                 | Rename. Body: `{ title }`.                                             |
 | DELETE | `/api/sessions/{id}`                 | Delete the session and its messages.                                   |
+
+### Session debug bundle
+
+`GET /api/debug/sessions/{uuid}` returns SQLite session + messages and audit tool rows. Loki log lines are included only when `LOKI_URL` is set (no trailing slash); empty/unset omits logs and sets `logs_error`. Loki is optional and not part of the Compose stack. Helper: `scripts/debug-session.sh <uuid>`.
 
 ### Session recap
 
