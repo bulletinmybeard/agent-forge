@@ -312,7 +312,7 @@ async def oauth_callback(
         )
     except Exception as exc:
         logger.error("OAuth token exchange failed: %s", exc)
-        return HTMLResponse(_callback_html(success=False, error=f"Token exchange failed: {exc}"))
+        return HTMLResponse(_callback_html(success=False, error="Token exchange failed. See the server log."))
 
     # Store the token with client config for later refresh
     expires_in = int(token_data.get("expires_in", 3600))
@@ -364,7 +364,7 @@ async def oauth_callback(
         )
     except Exception as exc:
         logger.error("Failed to create connection: %s", exc)
-        return HTMLResponse(_callback_html(success=False, error=f"Failed to save connection: {exc}"))
+        return HTMLResponse(_callback_html(success=False, error="Failed to save the connection. See the server log."))
 
     return HTMLResponse(_callback_html(success=True, connection_id=conn["id"]))
 

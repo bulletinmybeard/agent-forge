@@ -149,13 +149,18 @@ def film_simkl_callback(code: str = "", state: str = "", iss: str = "", error: s
     """OAuth redirect target. Register this exact URL on the Simkl app."""
     from agentforge.film.oauth import complete_login
 
-    # Both values are third-party text rendered into HTML — escape before interpolating.
+    # Third-party text rendered into HTML — escape before interpolating. The
+    # exception path stays generic: its message can carry the token response.
     if error:
         return HTMLResponse(f"<p>Simkl authorization failed: {escape(error)}</p>", status_code=400)
     try:
         complete_login(code=code, state=state, iss=iss)
-    except Exception as exc:
-        return HTMLResponse(f"<p>Simkl connect failed: {escape(str(exc))}</p>", status_code=400)
+    except Exception:
+        logger.warning("Simkl connect failed", exc_info=True)
+        return HTMLResponse(
+            "<p>Simkl connect failed. Check the server log, then start again from <code>/api/film/simkl/connect</code>.</p>",
+            status_code=400,
+        )
     return HTMLResponse(
         "<p>Simkl connected. You can close this tab and run "
         "<code>@film Import all current Simkl items</code> in AgentForge.</p>"
