@@ -36,6 +36,11 @@ user_context.md
 data/
 *.log
 
+# Ruflo / agentdb plugin runtime state (session memory, vector index) — local only
+.swarm/
+agentdb.rvf
+agentdb.rvf.idmap.json
+
 # OS / editor
 .DS_Store
 .idea/

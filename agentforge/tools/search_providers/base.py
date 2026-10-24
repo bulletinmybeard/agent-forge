@@ -41,12 +41,15 @@ class FetchResult:
 
     ``links`` may be empty when the provider doesn't surface them
     (Tavily's /extract returns markdown content but no link list).
+    ``provider`` is stamped by the fallback walk so ``web_fetch`` can
+    apply that provider's ``fetch_max_chars``.
     """
 
     title: str
     url: str
     content: str
     links: list[str] = field(default_factory=list)
+    provider: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -66,8 +69,41 @@ class RateLimitError(ProviderError):
 
     Separated from generic ProviderError so callers can log "X is rate
     limited" specifically when deciding whether to bother trying the
-    same provider again later.
+    same provider again later. ``status_code`` / ``retry_after`` feed
+    the cooldown TTL (see ``cooldown.py``).
     """
+
+    def __init__(self, message: str, *, status_code: int | None = None, retry_after: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after = retry_after
+
+
+def parse_retry_after(value: str | None) -> int | None:
+    """Parse a ``Retry-After`` header in delta-seconds form.
+
+    The HTTP-date form is ignored (returns ``None``) — the cooldown
+    falls back to its default TTL, which is good enough.
+    """
+    if not value:
+        return None
+    try:
+        seconds = int(value.strip())
+    except ValueError:
+        return None
+    return seconds if seconds >= 0 else None
+
+
+class NoProviderAvailable(ProviderError):
+    """The whole chain is exhausted — every provider is disabled, has no
+    key, is cooling down, or just failed. ``reasons`` maps provider name
+    to a short human-readable cause.
+    """
+
+    def __init__(self, op_name: str, reasons: dict[str, str]) -> None:
+        detail = "; ".join(f"{name}: {why}" for name, why in reasons.items()) or "no enabled provider configured"
+        super().__init__(f"No alternative web {op_name} provider available ({detail})")
+        self.reasons = reasons
 
 
 class ProviderNotConfigured(ProviderError):
@@ -127,5 +163,7 @@ __all__ = [
     "FetchProvider",
     "ProviderError",
     "RateLimitError",
+    "NoProviderAvailable",
     "ProviderNotConfigured",
+    "parse_retry_after",
 ]

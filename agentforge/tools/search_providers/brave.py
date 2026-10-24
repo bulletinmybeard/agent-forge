@@ -18,7 +18,7 @@ from typing import Any
 import httpx
 from chalkbox.logging.bridge import get_logger
 
-from .base import ProviderError, ProviderNotConfigured, RateLimitError, SearchResult
+from .base import ProviderError, ProviderNotConfigured, RateLimitError, SearchResult, parse_retry_after
 
 logger = get_logger(__name__)
 
@@ -96,7 +96,11 @@ class BraveSearchProvider:
             raise ProviderError(f"brave network error: {exc}") from exc
 
         if resp.status_code == 429:
-            raise RateLimitError(f"brave rate limited: {resp.text[:200]}")
+            raise RateLimitError(
+                f"brave rate limited: {resp.text[:200]}",
+                status_code=429,
+                retry_after=parse_retry_after(resp.headers.get("Retry-After")),
+            )
         if resp.status_code >= 500:
             raise ProviderError(f"brave server error (HTTP {resp.status_code}): {resp.text[:200]}")
         if resp.status_code >= 400:

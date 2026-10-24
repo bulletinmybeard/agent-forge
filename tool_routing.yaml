@@ -29,6 +29,7 @@ dispatch:
   #           so long installs (brew/npm/pip) aren't killed mid-run.
   #   agent — a full agent run (LLM + tool loop + RAG); discovery/research can
   #           take minutes. The Stop button still cancels inside the window.
+  #           @film jobs override this to 3600s (Simkl import + TMDB enrich).
   # Env AGENTFORGE_SAQ_TOOL_TIMEOUT / AGENTFORGE_SAQ_AGENT_TIMEOUT override.
   tool_timeout_seconds: 900
   agent_timeout_seconds: 900
@@ -49,6 +50,7 @@ rules:
       - web_search
       - web_fetch
       - web_fetch_rendered
+      - web_fetch_scrapling
       - ors_geocode
       - ors_reverse
       - ors_route
@@ -56,6 +58,20 @@ rules:
       - trip_publish
       - trip_get
       - wiki_place_image
+    role: remote
+  - tools:
+      - "film_*"
+      - movie_search
+      - movie_details
+      - tv_search
+      - tv_details
+      - tv_season
+      - tv_episode
+      - watch_providers
+      - person_search
+      - person_details
+      - trending_media
+      - multi_search
     role: remote
   - tools:
       - "*"
@@ -69,8 +85,12 @@ rules:
 # on your machine's worker (which also picks up agent jobs). `@review` gathers
 # git + writes the report to ~/Downloads, so it needs the same host. Only
 # consulted in `split` mode; ignored under `in_process`.
+# `@film` pins the agent loop to `remote` (SQLite + Qdrant). File I/O still
+# follows the rules map (`*` → local) when dispatch is split — write_file
+# must not run as /root on the stack host.
 modes:
   coding: local
   review: local
   plan: local
   build: local
+  film: remote

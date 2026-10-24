@@ -393,6 +393,7 @@ async def _execute_agent_job(
         _run_coding,
         _run_custom_agent,
         _run_discovery,
+        _run_film,
         _run_log_analysis,
         _run_pipeline,
         _run_research,
@@ -536,6 +537,8 @@ async def _execute_agent_job(
             await _run_research(ws, query, session_id, rt, db, broker, loop, overrides, cancel_event)
         elif mode == "coding":
             await _run_coding(ws, query, session_id, rt, db, broker, loop, overrides, cancel_event)
+        elif mode == "film":
+            await _run_film(ws, query, session_id, rt, db, broker, loop, overrides, cancel_event)
         elif mode in ("plan", "build"):
             from web.server.builder import run_builder
 
@@ -699,6 +702,7 @@ async def execute_tool_saq(
     args_json: str,
     session_id: str | None = None,
     knowledge_collection: str | None = None,
+    allowed_tools: list[str] | None = None,
 ) -> str:
     """Execute a single cross-dispatched tool call.
 
@@ -738,7 +742,7 @@ async def execute_tool_saq(
         # Confirmation already happened on the agent side before dispatch (see
         # docstring); workers have no confirm handler, so skip the gate
         # explicitly — the registry now fails closed when a handler is absent.
-        return str(rt.registry.execute(tool_name, args, skip_confirm=True))
+        return str(rt.registry.execute(tool_name, args, skip_confirm=True, allowed_tools=allowed_tools))
 
     # A sudo password — unlike a y/n confirm — can only be obtained at execution
     # time (the agent doesn't know shell needs sudo until it runs). Wire a

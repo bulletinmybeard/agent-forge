@@ -39,6 +39,7 @@ VALID_MODES = {
     "scheduler",
     "monitor",
     "pipeline",
+    "film",
 }
 
 _PREFIX_MAP = {
@@ -72,6 +73,9 @@ _PREFIX_MAP = {
     "@scheduler": "scheduler",
     "@monitor": "monitor",
     "@pipeline": "pipeline",
+    "@film": "film",
+    "@movie": "film",
+    "@movies": "film",
 }
 
 _ROUTING_PROMPT_PATH = Path(__file__).parent / "prompts" / "routing.md"

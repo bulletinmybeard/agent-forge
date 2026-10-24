@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import create_engine, event, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
@@ -100,6 +101,7 @@ class ChatDatabase:
         title: str = "New chat",
         provider_override: str | None = None,
         source: str = "web",
+        parent_session_id: str | None = None,
     ) -> ChatSession:
         """Create a new chat session.
 
@@ -110,16 +112,42 @@ class ChatDatabase:
         ``source`` marks the originating client ("web" for the Agent Chat UI;
         external apps send their own). Used to filter external sessions out of
         the human sidebar. Also write-once.
+
+        ``parent_session_id`` ties this call to a root task session. Write-once.
+        The parent must already exist and must itself be a root. One level only.
         """
+        session_id = (session_id or "").strip()
+        if not session_id or len(session_id) > 36:
+            raise ValueError("session id is empty or too long")
+        parent_session_id = (parent_session_id or "").strip() or None
+        if parent_session_id and len(parent_session_id) > 36:
+            raise ValueError("parent session id is too long")
+        if parent_session_id == session_id:
+            raise ValueError("session cannot be its own parent")
+        title = (title or "New chat").strip() or "New chat"
+        if len(title) > 255:
+            title = title[:255]
+
         with self.SessionLocal() as session:
+            if parent_session_id:
+                parent = session.query(ChatSession).filter_by(id=parent_session_id).first()
+                if parent is None:
+                    raise ValueError("parent session does not exist")
+                if parent.parent_session_id:
+                    raise ValueError("parent session is already a child")
             chat = ChatSession(
                 id=session_id,
                 title=title,
                 provider_override=(provider_override.strip().lower() or None) if provider_override else None,
                 source=(source.strip().lower() or "web") if source else "web",
+                parent_session_id=parent_session_id,
             )
             session.add(chat)
-            session.commit()
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise ValueError("session already exists") from exc
             session.refresh(chat)
             session.expunge(chat)
             return chat
@@ -137,17 +165,26 @@ class ChatDatabase:
         limit: int = 50,
         offset: int = 0,
         sources: tuple[str, ...] | None = ("web",),
+        parent_id: str | None = None,
     ) -> list[ChatSession]:
         """List sessions ordered by most recently created (stable ordering).
 
         ``sources`` filters by originating client; defaults to ("web",) so
         external-app sessions stay out of the human sidebar. Pass ``None`` to
         list every source.
+
+        Without ``parent_id``, only root sessions are returned. Pass a parent
+        id to list the calls that belong to that task.
         """
+        parent_id = (parent_id or "").strip() or None
         with self.SessionLocal() as session:
             query = session.query(ChatSession)
             if sources is not None:
                 query = query.filter(ChatSession.source.in_(sources))
+            if parent_id:
+                query = query.filter(ChatSession.parent_session_id == parent_id)
+            else:
+                query = query.filter(ChatSession.parent_session_id.is_(None))
             chats = query.order_by(ChatSession.created_at.desc()).offset(offset).limit(limit).all()
             session.expunge_all()
             return chats
@@ -170,11 +207,11 @@ class ChatDatabase:
     def update_session(self, session_id: str, **fields) -> ChatSession | None:
         """Update session fields (title, profile, model, message_count).
 
-        ``provider_override`` and ``source`` are write-once at session creation
-        and are silently dropped here so callers passing **session.to_dict()
-        back can't clobber them.
+        ``provider_override``, ``source``, and ``parent_session_id`` are
+        write-once at session creation and are silently dropped here so callers
+        passing **session.to_dict() back can't clobber them.
         """
-        for write_once in ("provider_override", "source"):
+        for write_once in ("provider_override", "source", "parent_session_id"):
             if write_once in fields:
                 logger.debug(
                     "update_session: dropping %s (write-once at create_session)",
@@ -214,14 +251,20 @@ class ChatDatabase:
             session.commit()
 
     def delete_session(self, session_id: str) -> bool:
-        """Delete a session and all its messages (cascade)."""
+        """Delete a session, its messages, and any child sessions."""
         with self.SessionLocal() as session:
             chat = session.query(ChatSession).filter_by(id=session_id).first()
             if not chat:
                 return False
-            session.delete(chat)
+            self._delete_session_tree(session, chat)
             session.commit()
             return True
+
+    def _delete_session_tree(self, session, chat: ChatSession) -> None:
+        children = session.query(ChatSession).filter_by(parent_session_id=chat.id).all()
+        for child in children:
+            self._delete_session_tree(session, child)
+        session.delete(chat)
 
     # -- Messages --------------------------------------------------------------
 

@@ -5,6 +5,8 @@ def test_strip_start_of_query_aliases():
     assert strip_mode_prefix("@agent list files") == ("list files", "agent")
     assert strip_mode_prefix("@search latest news") == ("latest news", "web_search")
     assert strip_mode_prefix("@coding fix imports") == ("fix imports", "coding")
+    assert strip_mode_prefix("@film Recommend Alien") == ("Recommend Alien", "film")
+    assert strip_mode_prefix("@movie Arrival") == ("Arrival", "film")
     assert strip_mode_prefix("@code refactor") == ("refactor", "coding")
 
 

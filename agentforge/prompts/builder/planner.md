@@ -47,11 +47,13 @@ Raw markdown. No wrapping fence. Use this shape:
 
 ### T1 — short title
 - Files: `path/a.py`
+- Interfaces: consumes nothing / produces the names later tasks call
 - Draft: the exact text to add or the edit to make (worker applies this; do not make them re-investigate)
 - Acceptance: how we know this task is done
 
 ### T2 — short title
 - Files: `path/b.md`
+- Interfaces: consumes `Name` from T1 / produces …
 - Acceptance: …
 
 ## Risks

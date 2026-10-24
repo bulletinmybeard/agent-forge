@@ -14,12 +14,61 @@ from ollama import AsyncClient, Client
 from ..typing_utils import callable_name
 from ._thinking import strip_inline_think
 from .base import Backend
+from .systemone import SystemOneError, build_systemone_body
 
 if TYPE_CHECKING:
     from ..client import ChatResponse
     from ..config import AIProfile
 
 logger = get_logger(__name__)
+
+
+def _systemone_kwargs(body: dict[str, Any]) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "model": body["model"],
+        "state": body["state"],
+        "questions": body["questions"],
+    }
+    if "images" in body:
+        kwargs["images"] = body["images"]
+    return kwargs
+
+
+def _invoke_systemone(client: Any, body: dict[str, Any]) -> Any:
+    method = getattr(client, "systemone", None)
+    if callable(method):
+        return method(**_systemone_kwargs(body))
+    # ollama-python <= the version pinned here only speaks /api/chat.
+    return client._request_raw("POST", "/v1/systemone", json=body)
+
+
+async def _ainvoke_systemone(client: Any, body: dict[str, Any]) -> Any:
+    method = getattr(client, "systemone", None)
+    if callable(method):
+        result = method(**_systemone_kwargs(body))
+        if inspect.isawaitable(result):
+            return await result
+        return result
+    return await client._request_raw("POST", "/v1/systemone", json=body)
+
+
+def _systemone_dict(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    json_fn = getattr(raw, "json", None)
+    if callable(json_fn):
+        data = json_fn()
+        if isinstance(data, str):
+            data = json.loads(data)
+        if isinstance(data, dict):
+            return data
+    dump = getattr(raw, "model_dump", None)
+    if callable(dump):
+        data = dump()
+        if isinstance(data, dict):
+            return data
+    raise SystemOneError("systemone returned a non-object")
+
 
 # Installed ollama.Client.chat() kwargs. extra_body keys outside this set
 # (e.g. OpenAI-style ``reasoning_effort``) must not be forwarded — they raise
@@ -185,6 +234,42 @@ class OllamaBackend(Backend):
             mapped = _EFFORT_TO_THINK.get(str(effort).lower())
             if mapped and params.get("think") is not False:
                 params["think"] = mapped
+
+    # -- decision models (Clef /v1/systemone) -------------------------------
+
+    def systemone(
+        self,
+        state: str | dict | list,
+        questions: str | dict,
+        images: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Score ``questions`` against ``state`` in one non-autoregressive pass.
+
+        The installed ``ollama`` client has no ``systemone`` method, so this
+        POSTs ``/v1/systemone`` on the same host and auth as ``chat``. A
+        future client method is used when it exists.
+        """
+        body = build_systemone_body(self._profile.model, state, questions, images)
+        logger.info(
+            "Ollama systemone model=%s questions=%d",
+            body["model"],
+            len(body["questions"]),
+        )
+        return _systemone_dict(_invoke_systemone(self._sync, body))
+
+    async def asystemone(
+        self,
+        state: str | dict | list,
+        questions: str | dict,
+        images: list[str] | None = None,
+    ) -> dict[str, Any]:
+        body = build_systemone_body(self._profile.model, state, questions, images)
+        logger.info(
+            "Ollama systemone model=%s questions=%d",
+            body["model"],
+            len(body["questions"]),
+        )
+        return _systemone_dict(await _ainvoke_systemone(self._async, body))
 
     # -- response wrapping --------------------------------------------------
 

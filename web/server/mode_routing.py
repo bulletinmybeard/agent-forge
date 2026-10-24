@@ -9,7 +9,19 @@ from __future__ import annotations
 from agentforge.mode_prefixes import RAG_SEARCH_ALIASES, RAG_SEARCH_MODE
 
 STICKY_MODES = frozenset(
-    ("web_search", "logs", "sql", "scheduler", "monitor", "research", "coding", "review", "plan", "build")
+    (
+        "web_search",
+        "logs",
+        "sql",
+        "scheduler",
+        "monitor",
+        "research",
+        "coding",
+        "review",
+        "plan",
+        "build",
+        "film",
+    )
 )
 
 CHAT_ALIASES = {"@chat"}
@@ -27,6 +39,7 @@ RESEARCH_ALIASES = {"@research"}
 CODING_ALIASES = {"@coding", "@code"}
 PLAN_ALIASES = {"@plan"}
 BUILD_ALIASES = {"@build"}
+FILM_ALIASES = {"@film", "@movie", "@movies"}
 CONNECTOR_ALIASES = {"@conn", "@connector"}
 # RAG aliases that can appear anywhere in the query (not just at the start)
 ANYWHERE_ALIASES = RAG_SEARCH_ALIASES
@@ -47,6 +60,7 @@ _PREFIX_GROUPS: list[tuple[set[str], str]] = [
     (CODING_ALIASES, "coding"),
     (PLAN_ALIASES, "plan"),
     (BUILD_ALIASES, "build"),
+    (FILM_ALIASES, "film"),
 ]
 
 

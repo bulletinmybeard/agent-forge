@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 
@@ -24,9 +24,13 @@ class Base(DeclarativeBase):
 
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
+    __table_args__ = (Index("ix_chat_sessions_parent", "parent_session_id"),)
 
     id = Column(String(36), primary_key=True)  # UUIDv7 from client
     title = Column(String(255), nullable=False, default="New chat")
+    # Task that owns this call. Null for a root session. Write-once.
+    # One level only: the parent row is itself a root.
+    parent_session_id = Column(String(36), nullable=True)
     profile = Column(String(50), nullable=True)  # last-used routed profile
     model = Column(String(100), nullable=True)  # last-used model name
     # Per-session AI provider override. Stamped at session creation, never
@@ -63,6 +67,7 @@ class ChatSession(Base):
             "model": self.model,
             "provider_override": self.provider_override,
             "source": self.source or "web",
+            "parent_session_id": self.parent_session_id,
             "message_count": self.message_count,
             "prompt_tokens": self.prompt_tokens or 0,
             "completion_tokens": self.completion_tokens or 0,

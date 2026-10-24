@@ -123,15 +123,6 @@ def _check_cancelled_http(job_id: str) -> bool:
         return False
 
 
-def _check_already_done_http(job_id: str) -> bool:
-    """Ask agentforge-web whether this job is already in a terminal state."""
-    try:
-        resp = _get_sync_http().get(f"/internal/jobs/{job_id}/cancelled")
-        return resp.json().get("done", False)
-    except Exception:
-        return False
-
-
 # ---------------------------------------------------------------------------
 # HttpCallbackSocket — WebSocket stub for worker-side runs.
 # ---------------------------------------------------------------------------
@@ -249,11 +240,9 @@ class HttpConfirmationBroker:
 
             if self.auto_accept:
                 msg["auto_accepted"] = True
-                await self._broadcast(msg)
                 await self._persist_confirm("confirm_prompt", msg, prompt)
                 return ConfirmDecision(confirmed=True, auto_accepted=True)
 
-        await self._broadcast(msg)
         await self._persist_confirm("confirm_prompt", msg, prompt)
 
         # Poll for the user's response.
@@ -473,6 +462,9 @@ class _NullDatabase:
         # of filtering them out. Set for no_history agents.
         self._incognito_history = incognito_history
 
+    # /internal/sessions/{id}/event persists AND sends to the live WS.
+    _events_broadcast = True
+
     def add_message(
         self,
         session_id: str,
@@ -483,7 +475,11 @@ class _NullDatabase:
         tool_calls: list[dict] | None = None,
         is_incognito: bool = False,
     ) -> None:
-        """Forward message persistence to agentforge-web via HTTP with the correct msg_type."""
+        """Forward message persistence to agentforge-web via HTTP with the correct msg_type.
+
+        ``/internal/sessions/{id}/event`` also broadcasts to the live WS, so
+        AgentBridge must not send the same protocol event a second time.
+        """
         payload = {
             "msg": metadata or {},
             "role": role,

@@ -23,6 +23,9 @@ from typing import TYPE_CHECKING
 
 from chalkbox.logging.bridge import get_logger
 
+from agentforge.attachments import Attachment
+from agentforge.client import AIClient
+
 from .registry import tool
 
 if TYPE_CHECKING:
@@ -71,14 +74,6 @@ def _image_max_size_mb() -> int:
     return int(_cfg("image.max_file_size_mb", 512))
 
 
-def _image_optimize_quality() -> int:
-    return int(_cfg("image.optimize_quality", 82))
-
-
-def _image_strip_metadata() -> bool:
-    return bool(_cfg("image.strip_metadata", True))
-
-
 # Supported video formats (input and output)
 _VIDEO_FORMATS = {
     ".mp4",
@@ -96,6 +91,12 @@ _VIDEO_FORMATS = {
     ".3gp",
     ".ogv",
 }
+
+# Raster formats the vision profile can actually look at. SVG is in
+# _IMAGE_FORMATS for ImageMagick, but it is not a bitmap payload.
+_VISION_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
+# Cloud vision payloads, not the ImageMagick 512 MB cap.
+_VISION_MAX_MB = 20
 
 # Supported image formats (input and output)
 _IMAGE_FORMATS = {
@@ -683,6 +684,51 @@ def image_optimize(
 
 
 # ---------------------------------------------------------------------------
+# image_analyze (vision profile)
+# ---------------------------------------------------------------------------
+
+
+@tool(
+    hint=(
+        "Use image_analyze when the user gives a local image path (screenshot, "
+        "png, jpg) and wants its contents read. Sends the file to the vision "
+        "profile. Do not read_file or cat an image — that is binary, not a description."
+    ),
+)
+def image_analyze(path: str, question: str = "") -> str:
+    """Describe a local screenshot or image with the vision model.
+
+    Reads the file on this machine and calls the ``vision`` profile. A path
+    written in the prompt is not attached on its own — call this tool.
+    Fails if the path is missing, not a raster image, or over 20 MB.
+
+    path: absolute or ~/ path to a png, jpg, webp, gif, bmp, or tiff
+    question: what to ask about the image. Empty describes it and transcribes visible text.
+    """
+    inp = Path(path).expanduser().resolve()
+    err = _validate_input(inp, _VISION_MAX_MB, _VISION_IMAGE_EXTS)
+    if err:
+        return err
+
+    prompt = question.strip() or "Describe this image in detail. Transcribe all visible text."
+    try:
+        client = AIClient(profile="vision")
+        response = client.chat(
+            [{"role": "user", "content": prompt}],
+            attachments=[Attachment(path=inp)],
+        )
+    except Exception as exc:
+        logger.warning("[image_analyze] vision call failed for %s: %s", inp.name, exc)
+        return f"Error: vision model call failed: {exc}"
+
+    text = (response.content or "").strip()
+    if not text:
+        return "Error: vision model returned no text"
+    logger.info("[image_analyze] %s → %d chars", inp.name, len(text))
+    return text
+
+
+# ---------------------------------------------------------------------------
 # Bulk registration
 # ---------------------------------------------------------------------------
 
@@ -698,7 +744,8 @@ def register_media_tools(registry: ToolRegistry) -> int:
         "video_convert uses ffmpeg for video format conversion, trimming, GIF creation, "
         "and compression. image_convert, image_resize, image_optimize, and image_metadata "
         "use ImageMagick for image format conversion, resizing, optimization, and "
-        "metadata extraction. Both ffmpeg and ImageMagick must be installed. "
+        "metadata extraction. image_analyze sends a local raster image to the vision "
+        "profile. Both ffmpeg and ImageMagick must be installed. "
         "Maximum file sizes: 4 GB for video, 512 MB for images. "
         "Maximum video duration: 2 hours (use trim_start/trim_end for longer videos).",
     )
@@ -709,6 +756,7 @@ def register_media_tools(registry: ToolRegistry) -> int:
         image_resize,
         image_metadata,
         image_optimize,
+        image_analyze,
     ]
     for func in tools:
         registry.register(func, category="Media")

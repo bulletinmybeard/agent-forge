@@ -219,13 +219,15 @@ def enqueue_agent_job(
         mode,
         queue_name or QUEUE_NAME_SHARED,
     )
+    # @film Simkl import + TMDB enrich can run 20–40 min on a large library.
+    timeout = 3600.0 if mode == "film" else _SAQ_AGENT_TIMEOUT
     return _run_coro_sync(
         _saq_enqueue(
             "run_agent_job_saq",
             retries=_SAQ_AGENT_RETRIES,
             retry_delay=_SAQ_AGENT_RETRY_DELAY,
             retry_backoff=_SAQ_AGENT_RETRY_BACKOFF,
-            timeout=_SAQ_AGENT_TIMEOUT,
+            timeout=timeout,
             queue_name=queue_name,
             job_id=job_id,
             session_id=session_id,
@@ -234,13 +236,6 @@ def enqueue_agent_job(
             overrides_json=overrides_json,
         )
     )
-
-
-def abort_agent_job(saq_job_key: str) -> bool:
-    """Abort a SAQ-queued agent job by its SAQ key. Sync wrapper for ws cancel path."""
-    if not saq_job_key:
-        return False
-    return _run_coro_sync(_saq_abort(saq_job_key)) or False
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +251,7 @@ async def _saq_tool_apply(
     session_id: str | None = None,
     knowledge_collection: str | None = None,
     timeout: float = _SAQ_TOOL_TIMEOUT,
+    allowed_tools: list[str] | None = None,
 ) -> str:
     """Enqueue a tool call on the role's tools queue and await its string result."""
     from saq.job import Job
@@ -272,6 +268,8 @@ async def _saq_tool_apply(
     }
     if knowledge_collection:
         kwargs["knowledge_collection"] = knowledge_collection
+    if allowed_tools is not None:
+        kwargs["allowed_tools"] = allowed_tools
     job = Job(
         function="execute_tool_saq",
         kwargs=kwargs,
@@ -289,6 +287,7 @@ def saq_dispatch_tool(
     target_role: str,
     *,
     timeout: float = _SAQ_TOOL_TIMEOUT,
+    allowed_tools: list[str] | None = None,
 ) -> str:
     """Sync cross-role tool dispatch. Called from framework/agent.py and
     registry.execute_with_role when the tool's role doesn't match the
@@ -320,6 +319,7 @@ def saq_dispatch_tool(
                 session_id=session_id,
                 knowledge_collection=knowledge_collection,
                 timeout=timeout,
+                allowed_tools=allowed_tools,
             )
         )
     except Exception as exc:

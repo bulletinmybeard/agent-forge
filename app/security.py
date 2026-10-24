@@ -30,7 +30,22 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 # Never gated: liveness + worker→web callbacks.
-_EXEMPT_PREFIXES = ("/health", "/internal")
+#
+# The two OAuth redirect targets are also exempt: the provider sends the user's
+# browser there, so the request carries no API key and the gate would 401 the
+# flow on any deployment that sets security.api_keys. They are not open doors —
+# both require a `state` that matches a pending login this host started, and
+# Simkl's also checks `iss`. Exact paths only (no prefix widening).
+_EXEMPT_PREFIXES = (
+    "/health",
+    # The web app's own liveness route. docs/SECURITY.md has always listed it as
+    # exempt and deploy-remote.sh probes it with no key — "/health" does not
+    # cover it, so an authenticated deploy used to report the web tier as down.
+    "/api/health",
+    "/internal",
+    "/api/connectors/auth/callback",
+    "/api/film/simkl/callback",
+)
 
 
 def api_keys() -> list[str]:

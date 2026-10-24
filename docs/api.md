@@ -500,6 +500,25 @@ The WebUI (and any reverse proxy in front of chat) must forward `/trips/` to thi
 
 See [modes.md](modes.md) (`@trip`) and [tools.md — OpenRouteService](tools.md#openrouteservice-trips).
 
+## Film (Simkl link)
+
+OAuth link for the `@film` library's Simkl import (AUTH V2: authorization code + PKCE + client secret).
+
+Needs `SIMKL_CLIENT_ID` / `SIMKL_CLIENT_SECRET` (or `tools.film.simkl_client_id` / `_secret`) and a redirect URI
+registered on the Simkl app that matches `tools.film.simkl_redirect_uri` exactly.
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| GET | `/api/film/simkl/connect` | Start the link. Returns `{ "authorize_url": "...", "redirect_uri": "..." }` — open the URL in a browser. |
+| GET | `/api/film/simkl/callback` | Simkl's redirect target. Exchanges the code for tokens and stores them, then returns a short HTML page. |
+
+The callback is **exempt from the API-key gate** — Simkl redirects the user's browser there and cannot attach a key.
+It only completes a login this host started: the `state` must match the pending request and `iss` must be Simkl.
+`/api/film/simkl/connect` is *not* exempt, so starting a link still needs a key when `security.api_keys` is set.
+
+Tokens live next to the film database and are stored owner-readable only. A pending login expires after 10 minutes.
+Once linked, run `film_simkl_import` (see [tools.md](tools.md#film-library-film)).
+
 ## Other REST groups
 
 Grouped by subsystem. See the live `/docs` for full request/response schemas.
@@ -516,6 +535,7 @@ Grouped by subsystem. See the live `/docs` for full request/response schemas.
 | Permissions | `/api/permissions/commands/*`, `/api/permissions/profiles/*`                                    | Shell/SSH command policy: YAML baseline + SQLite runtime overrides, named profiles (`tight`/`open`/user), dry-run validate (see [SECURITY.md](SECURITY.md#command-permissions-shell--ssh)). |
 | Tools run  | `/api/tools/run*`, `/api/tools/run-allowlist`                                                    | Direct allowlisted tool execution (no LLM); SAQ → tools worker or in-process (see [Direct tool run](#direct-tool-run)). |
 | Trips      | `/trips/{uuid}`, `/api/trips/{uuid}`, `/api/trips/{uuid}/route`                                  | Published `@trip` maps + JSON + re-route (see [Trips](#trips)). |
+| Film       | `/api/film/simkl/connect`, `/api/film/simkl/callback`                                            | Simkl OAuth link for the `@film` library (see [Film](#film-simkl-link)). |
 | Canvas     | `/api/canvas/*`                                                                                  | Per-session pinned-items workspace.                                                              |
 | Configs    | `/api/configs*`                                                                                  | Read-only view of whitelisted YAML config files.                                                 |
 | Services   | `/api/services*`                                                                                 | Container/service health dashboard + log tail/stream.                                            |

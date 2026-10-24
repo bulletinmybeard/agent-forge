@@ -13,6 +13,9 @@ frontend can reconstruct the exact same UI on page reload.
 
 The client may connect with ``?session_id=<uuid>`` to resume an existing
 session, or omit it to start fresh (the session is created on first query).
+``?parent_id=<uuid>`` stamps a new session as a child of that root task.
+The parent must already exist. A resumed session keeps the parent it was
+created with.
 """
 
 from __future__ import annotations
@@ -40,8 +43,14 @@ from typing import TYPE_CHECKING, Any, Callable
 import yaml
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from agentforge.config import set_request_provider_override, set_request_role_override_map, set_request_session_id
+from agentforge.config import (
+    get_config,
+    set_request_provider_override,
+    set_request_role_override_map,
+    set_request_session_id,
+)
 from agentforge.connectors._account import account_slug, label_slug
+from agentforge.tools.search_providers import describe_search_route
 from app.models.knowledge import KnowledgeSearchRequest
 from app.services.knowledge_registry import (
     collection_for_session_source,
@@ -741,6 +750,9 @@ class SearchRuntime:
 
             _base = list(_base_tools)
             _full = _base + list(_extended_tools)
+            # decide is Clef (/v1/systemone), not a general tool. Keep it off
+            # pipeline and browser, which are built from _full.
+            _agent_tools = _full + ["decide"]
             # Pipeline profile: structured tools only — shell is intentionally
             # excluded so the model uses read_file/grep_text/execute_sql instead
             # of shell("grep …") / shell("mysql …").  execute_sql is added so
@@ -760,8 +772,8 @@ class SearchRuntime:
             self.agent_profiles = {
                 "fast": _base,  # 28 tools — quick tasks
                 "default": _base,  # 28 tools — general tasks
-                "agent": _full,  # 48 tools — multi-step tasks
-                "thinker": _full,  # 48 tools — complex analysis
+                "agent": _agent_tools,  # 49 tools — multi-step tasks
+                "thinker": _agent_tools,  # 49 tools — complex analysis
                 "vision": _base,  # 28 tools — image analysis
                 "pipeline": _pipeline,  # 52 tools — structured (no shell) + file_info + git_show + execute_sql + cache + RAG
                 "browser": _browser,  # agent set minus shell (browser-extension runs)
@@ -1055,6 +1067,8 @@ class SearchRuntime:
                     "profile": agent_cfg.get("profile", "agent"),
                     "tools": agent_cfg.get("tools", []),
                     "max_iterations": int(agent_cfg.get("max_iterations", 10)),
+                    "iter_timeout": int(agent_cfg.get("iter_timeout", 600)),
+                    "no_history": bool(agent_cfg.get("no_history", False)),
                     "aliases": agent_cfg.get("aliases", [f"@{agent_id}"]),
                     "prompt_text": prompt_text,
                 }
@@ -2398,6 +2412,9 @@ def _classify_mode_heuristic(
     if forced_mode == "build":
         logger.info("Mode classifier: build (explicit prefix)")
         return ("build", "high")
+    if forced_mode == "film":
+        logger.info("Mode classifier: film (explicit prefix)")
+        return ("film", "high")
 
     # If the query has an unrecognised @-prefix (e.g., @cooding typo, or
     # a deprecated source like @myapi / @changelog), surface that loudly
@@ -4073,30 +4090,6 @@ def _estimate_session_tokens(db: "ChatDatabase", session_id: str) -> tuple[int, 
     return total_chars // _CHARS_PER_TOKEN, count
 
 
-async def _send_secret_redaction_warning(
-    ws: "WebSocket",
-    client: Any,
-) -> None:
-    """If the last AIClient call redacted secrets, warn the user via WS.
-
-    Reads ``client.last_redaction`` and emits a ``secret.redacted`` event if
-    there were findings.  Safe to call even when the client has no
-    ``last_redaction`` attribute (e.g., older code paths).
-    """
-    try:
-        redaction = getattr(client, "last_redaction", None)
-        if redaction and redaction.had_secrets:
-            types = list({f.secret_type for f in redaction.findings})
-            await ws.send_json(
-                protocol.secret_redacted(
-                    count=len(redaction.findings),
-                    secret_types=types,
-                )
-            )
-    except Exception:
-        pass  # never fail the run because of a WS warning
-
-
 async def _send_context_usage(
     ws: "WebSocket",
     db: "ChatDatabase",
@@ -4163,12 +4156,6 @@ def _persist_token_usage(
             )
         except Exception:
             logger.debug("Failed to persist token usage", exc_info=True)
-
-
-def _ctx_tokens(ctx: Any) -> tuple[int, int]:
-    """Return (prompt_tokens, completion_tokens) from a PipelineContext's token_usage metadata."""
-    usage = (ctx.metadata or {}).get("token_usage", {}) if ctx else {}
-    return usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
 
 
 def _persist_token_usage_raw(
@@ -4253,7 +4240,24 @@ async def _compact_session(
         # Build combined conversation text for extraction
         full_query = " | ".join(msg.content[:200] for msg in db_messages if msg.type == "query" and msg.content)
         full_response = " | ".join(msg.content[:300] for msg in db_messages if msg.type == "result" and msg.content)
-        n_facts = extract_and_store_facts(db, session_id, full_query[:1500], full_response[:2000])
+        compact_mode = ""
+        for msg in reversed(db_messages):
+            if msg.type != "config" or not msg.metadata_json:
+                continue
+            try:
+                meta = json.loads(msg.metadata_json)
+            except (TypeError, ValueError):
+                continue
+            compact_mode = (meta or {}).get("mode") or ""
+            if compact_mode:
+                break
+        n_facts = extract_and_store_facts(
+            db,
+            session_id,
+            full_query[:1500],
+            full_response[:2000],
+            mode=compact_mode,
+        )
         if n_facts:
             logger.info("Compact: extracted %d fact(s) before compaction for session %s", n_facts, session_id)
     except Exception as exc:
@@ -4303,6 +4307,7 @@ _WORKER_MODES = frozenset(
         "coding",
         "plan",
         "build",
+        "film",
     )
 )
 
@@ -4397,6 +4402,7 @@ async def websocket_chat(
     ws: WebSocket,
     session_id: str | None = None,
     source: str | None = None,
+    parent_id: str | None = None,
 ) -> None:
     # Optional API-key auth (off unless security.api_keys is set). When a key is
     # supplied via Sec-WebSocket-Protocol it must be echoed back on accept().
@@ -4424,9 +4430,10 @@ async def websocket_chat(
             await ws.close()
             return
 
-    from .session_source import resolve_session_source
+    from .session_source import resolve_parent_id, resolve_session_source
 
     _connect_source = (source or "").strip().lower() or None
+    _connect_parent = (parent_id or "").strip() or None
 
     rt = get_runtime()
     db = get_db()
@@ -4776,7 +4783,7 @@ async def websocket_chat(
                     has_plan = bool(plan_path_from_message_list(history_msgs))
                 if not has_plan and db and session_id:
                     has_plan = bool(_plan_path_from_messages(db, session_id))
-                if is_approve_plan(text) and has_plan:
+                if (is_approve_plan(text) or is_approve_plan(clean_text)) and has_plan:
                     logger.info(
                         "Plan approve → build (prev_mode=%s forced=%s)",
                         prev_mode,
@@ -4816,7 +4823,7 @@ async def websocket_chat(
             built_in = (
                 "@chat, @agent, @qdrant/@docs/@find, @search/@web, @logs, "
                 "@discover, @sql, @pipeline, @scheduler, @monitor, "
-                "@review, @research, @coding/@code, @plan, @build"
+                "@review, @research, @coding/@code, @plan, @build, @film/@movie"
             )
             custom_aliases = sorted(("@" + a) for a in (getattr(rt, "custom_agents", {}) or {}).keys())
             custom_str = ", ".join(custom_aliases) if custom_aliases else "(none)"
@@ -5235,7 +5242,7 @@ async def websocket_chat(
 
                 # Create session on first query if we don't have one yet
                 if not session_id:
-                    session_id = data.get("session_id", uuid.uuid4().hex)
+                    new_id = data.get("session_id") or uuid.uuid4().hex
                     # Per-session provider override is stamped here and never
                     # mutated afterwards. NULL = use the global default. The
                     # frontend only sends `provider` on the very first query.
@@ -5244,16 +5251,26 @@ async def websocket_chat(
                     # ?source= on the WebSocket URL. The Agent Chat UI omits both
                     # -> "web".
                     initial_source = resolve_session_source(
-                        session_id,
+                        new_id,
                         connect_source=_connect_source,
                         overrides=overrides,
                     )
-                    db.create_session(
-                        session_id,
-                        title="New chat",
-                        provider_override=initial_provider,
-                        source=initial_source,
+                    initial_parent = resolve_parent_id(
+                        connect_parent=_connect_parent,
+                        overrides=overrides if isinstance(overrides, dict) else None,
                     )
+                    try:
+                        db.create_session(
+                            new_id,
+                            title="New chat",
+                            provider_override=initial_provider,
+                            source=initial_source,
+                            parent_session_id=initial_parent,
+                        )
+                    except ValueError as exc:
+                        await ws.send_json(protocol.agent_error(str(exc)))
+                        continue
+                    session_id = new_id
                     if initial_provider:
                         logger.info(
                             "Session %s created with provider_override=%s",
@@ -5501,6 +5518,43 @@ async def websocket_chat(
 # ---------------------------------------------------------------------------
 
 
+async def _send_live(session_id: str | None, ws: WebSocket, msg: dict) -> bool:
+    """Send one frame to the browser's current socket, then this run's.
+
+    An in-process chat holds the WebSocket that accepted the query. A
+    reconnect registers a new socket on ``state.active_ws`` and drops the
+    old handlers. Chunk sends used to mark the run closed and then skip
+    ``agent.result``, so the answer sat in SQLite until a reload.
+    """
+    from . import state
+
+    sockets: list[WebSocket] = []
+    live = state.active_ws.get(session_id) if session_id else None
+    if live is not None:
+        sockets.append(live)
+    if ws is not None and ws is not live:
+        sockets.append(ws)
+    for sock in sockets:
+        try:
+            await sock.send_json(msg)
+            return True
+        except (WebSocketDisconnect, RuntimeError):
+            if session_id and state.active_ws.get(session_id) is sock:
+                state.active_ws.pop(session_id, None)
+    return False
+
+
+def _live_socket(session_id: str | None, ws: WebSocket) -> WebSocket:
+    """Socket the browser is on now, or the one this run captured."""
+    from . import state
+
+    if session_id:
+        live = state.active_ws.get(session_id)
+        if live is not None:
+            return live
+    return ws
+
+
 async def _run_chat(
     ws: WebSocket,
     query: str,
@@ -5528,12 +5582,14 @@ async def _run_chat(
         tool_calls: list[dict] | None = None,
     ) -> None:
         nonlocal ws_closed
-        if not ws_closed:
-            try:
-                await ws.send_json(msg)
-            except (WebSocketDisconnect, RuntimeError):
-                ws_closed = True
+        # Always try the live socket. A failed token must not suppress the
+        # final agent.result if the browser has reconnected.
+        if not await _send_live(session_id, ws, msg):
+            if not ws_closed:
                 logger.warning("WebSocket closed during send — persisting only")
+            ws_closed = True
+        else:
+            ws_closed = False
         db.add_message(
             session_id=session_id,
             role=role,
@@ -5649,18 +5705,17 @@ async def _run_chat(
         if overrides and overrides.get("temperature") is not None:
             llm_options["temperature"] = float(overrides["temperature"])
 
-        # Notify UI that we're waiting for the LLM response
-        if not ws_closed:
-            try:
-                await ws.send_json(
-                    {
-                        "type": "agent.progress",
-                        "phase": "pipeline_running",
-                        "detail": {"step": "generating", "text": "Generating response..."},
-                    }
-                )
-            except (WebSocketDisconnect, RuntimeError):
-                ws_closed = True
+        # Notify UI that we're waiting for the LLM response. A miss here
+        # only skips the progress chip; the result is sent on its own.
+        await _send_live(
+            session_id,
+            ws,
+            {
+                "type": "agent.progress",
+                "phase": "pipeline_running",
+                "detail": {"step": "generating", "text": "Generating response..."},
+            },
+        )
 
         # --- Stream tokens to the client in real-time ---------------------
         # The sync Ollama client produces a blocking stream.  We run a
@@ -5708,6 +5763,9 @@ async def _run_chat(
         loop = asyncio.get_event_loop()
         loop.run_in_executor(None, _stream_producer)
 
+        # Token frames are optional. Closing this flag must not close the
+        # final agent.result / agent.summary send below.
+        stream_to_client = True
         deadline = loop.time() + (_PIPELINE_TIMEOUT or 600)
         while True:
             if cancel_event and cancel_event.is_set():
@@ -5728,20 +5786,20 @@ async def _run_chat(
                 raise item
 
             answer_parts.append(item)
-            if not ws_closed:
-                try:
-                    await ws.send_json(protocol.result_chunk(item))
-                except (WebSocketDisconnect, RuntimeError):
-                    ws_closed = True
+            if stream_to_client:
+                if not await _send_live(session_id, ws, protocol.result_chunk(item)):
+                    stream_to_client = False
+                    logger.warning(
+                        "Chat stream send failed — session %s; result still persisted",
+                        session_id,
+                    )
 
         answer = "".join(answer_parts).strip()
 
-        # Signal streaming complete, then send the full persisted result
-        if not ws_closed:
-            try:
-                await ws.send_json(protocol.result_done())
-            except (WebSocketDisconnect, RuntimeError):
-                ws_closed = True
+        # Signal streaming complete, then send the full persisted result.
+        # result.done is a no-op on the client when no chunks arrived.
+        if stream_to_client:
+            await _send_live(session_id, ws, protocol.result_done())
 
         # --- Step 3: Send result ------------------------------------------
         total_elapsed = time.perf_counter() - total_start
@@ -5766,8 +5824,8 @@ async def _run_chat(
         )
         await send_and_persist(summary_msg, msg_type="summary")
         _persist_token_usage_raw(db, session_id, _chat_prompt_tokens, _chat_completion_tokens)
-        await _send_context_usage(ws, db, session_id, model_name)
-        _store_last_exchange_from_db(db, session_id, model=model_name)
+        await _send_context_usage(_live_socket(session_id, ws), db, session_id, model_name)
+        _store_last_exchange_from_db(db, session_id, mode="chat", model=model_name)
 
         # --- Step 5: Update session metadata ------------------------------
         db.update_session(
@@ -5781,11 +5839,7 @@ async def _run_chat(
         if session and session.title == "New chat":
             title = await asyncio.to_thread(_generate_title, query)
             db.update_session(session_id, title=title)
-            if not ws_closed:
-                try:
-                    await ws.send_json(protocol.session_title(session_id, title))
-                except (WebSocketDisconnect, RuntimeError):
-                    pass
+            await _send_live(session_id, ws, protocol.session_title(session_id, title))
 
     except asyncio.CancelledError:
         logger.info("Chat run cancelled — session %s", session_id)
@@ -7245,7 +7299,7 @@ async def _run_search(
             _search_token_usage.get("completion_tokens", 0),
         )
         await _send_context_usage(ws, db, session_id, model_name)
-        _store_last_exchange_from_db(db, session_id, model=model_name)
+        _store_last_exchange_from_db(db, session_id, mode="search", model=model_name)
 
         # --- Hooks: run completed -----------------------------------------
         from ._hooks import hooks_run_completed
@@ -7373,6 +7427,85 @@ def _build_web_search_system_prompt() -> str:
     )
 
 
+_FILM_TOOLS = [
+    "movie_search",
+    "movie_details",
+    "tv_search",
+    "tv_details",
+    "tv_season",
+    "tv_episode",
+    "watch_providers",
+    "person_search",
+    "person_details",
+    "trending_media",
+    "multi_search",
+    "film_add",
+    "film_add_season",
+    "film_get_season",
+    "film_get",
+    "film_stats",
+    "film_set_status",
+    "film_search",
+    "film_recommend",
+    "film_recommend_ai",
+    "film_lists",
+    "film_list_create",
+    "film_list_show",
+    "film_list_add",
+    "film_list_remove",
+    "film_list_clear",
+    "film_list_delete",
+    "film_simkl_import",
+    "film_simkl_connect",
+    "web_search",
+    "web_fetch",
+    "web_fetch_rendered",
+    "download_file",
+    "read_file",
+    "read_dir",
+    "file_info",
+    "find_files",
+    "grep_text",
+    "write_file",
+    "append_file",
+    "create_directory",
+    "copy_file",
+    "move_file",
+    "delete_file",
+]
+
+
+async def _run_film(
+    ws: WebSocket,
+    query: str,
+    session_id: str,
+    rt: SearchRuntime,
+    db: ChatDatabase,
+    broker: ConfirmationBroker,
+    loop: asyncio.AbstractEventLoop,
+    overrides: dict | None = None,
+    cancel_event: threading.Event | None = None,
+    secret_broker: "SecretBroker | None" = None,
+) -> None:
+    suffix = _inject_user_context(_load_prompt("film"), rt)
+    await _run_agent(
+        ws,
+        query,
+        session_id,
+        rt,
+        db,
+        broker,
+        loop,
+        overrides,
+        cancel_event,
+        forced=True,
+        _system_prompt_suffix=suffix,
+        secret_broker=secret_broker,
+        _tools_override=_FILM_TOOLS,
+        _mode_name="film",
+    )
+
+
 _WEB_SEARCH_TOOLS = [
     "web_search",
     "web_fetch",  # fast raw-HTML fetch (static sites, docs)
@@ -7385,6 +7518,9 @@ _WEB_SEARCH_TOOLS = [
     "movie_details",
     "tv_search",
     "tv_details",
+    "tv_season",
+    "tv_episode",
+    "watch_providers",
     "person_search",
     "person_details",
     "trending_media",
@@ -7474,7 +7610,11 @@ async def _run_web_search(
         # struggles with path resolution and complex instructions.  Web search
         # needs a larger model to correctly interpret results and follow through.
         profile = "web-search"
-        reason = "@search mode — web search via Ollama Cloud"
+        try:
+            reason = f"@search mode — {describe_search_route()}"
+        except Exception as exc:
+            logger.debug("describe_search_route failed: %s", exc)
+            reason = "@search mode — web search"
         route_elapsed = 0.0
 
         routing_msg = protocol.agent_routing()
@@ -7607,7 +7747,7 @@ async def _run_web_search(
         await send_and_persist(summary_msg, msg_type="summary")
         _persist_token_usage(db, session_id, ctx)
         await _send_context_usage(ws, db, session_id, agent_client.model)
-        _store_last_exchange_from_db(db, session_id, model=agent_client.model)
+        _store_last_exchange_from_db(db, session_id, mode="web_search", model=agent_client.model)
 
         # --- Hooks: run completed + tool audit ----------------------------
         from ._hooks import hooks_log_tools, hooks_run_completed
@@ -7916,7 +8056,7 @@ async def _run_log_analysis(
         await send_and_persist(summary_msg, msg_type="summary")
         _persist_token_usage(db, session_id, ctx)
         await _send_context_usage(ws, db, session_id, agent_client.model)
-        _store_last_exchange_from_db(db, session_id, model=agent_client.model)
+        _store_last_exchange_from_db(db, session_id, mode="logs", model=agent_client.model)
 
         # --- Hooks: run completed + tool audit ----------------------------
         from ._hooks import hooks_log_tools, hooks_run_completed
@@ -8128,6 +8268,7 @@ async def _run_pipeline(
         overrides=overrides,
         cancel_event=cancel_event,
         forced=True,
+        _mode_name="pipeline",
         _profile_override="pipeline",
         _llm_profile_override=pipeline_llm_profile,
         _system_prompt_suffix=_PIPELINE_SYSTEM_PROMPT_SUFFIX,
@@ -8314,6 +8455,8 @@ async def _run_agent(
     _llm_profile_override: str | None = None,
     _system_prompt_suffix: str | None = None,
     secret_broker: "SecretBroker | None" = None,
+    _tools_override: list[str] | None = None,
+    _mode_name: str = "agent",
 ) -> None:
     """Run the AgentLoop with system tools and stream events to the client.
 
@@ -8396,7 +8539,7 @@ async def _run_agent(
         )
 
         # --- Persist user query -------------------------------------------
-        query_metadata = {"type": "query", "text": query}
+        query_metadata = {"type": "query", "text": query, "mode": _mode_name}
         db.add_message(
             session_id=session_id,
             role="user",
@@ -8464,7 +8607,7 @@ async def _run_agent(
 
         # Select tool subset using tool_profile (may differ from llm_profile
         # in @pipeline mode where tool_profile="pipeline", llm_profile="agent").
-        tool_subset = rt.agent_profiles.get(tool_profile)
+        tool_subset = _tools_override if _tools_override is not None else rt.agent_profiles.get(tool_profile)
         if tool_profile in ("fast", "default"):
             max_iters = 5
         elif tool_profile == "pipeline":
@@ -8521,7 +8664,7 @@ async def _run_agent(
             tools=actual_tool_count,
             session_id=session_id,
             provider=agent_client.profile.provider,
-            mode="agent",
+            mode=_mode_name,
         )
         await send_and_persist(config_msg, msg_type="config")
 
@@ -8530,7 +8673,7 @@ async def _run_agent(
 
         await hooks_run_started(
             session_id,
-            mode="agent",
+            mode=_mode_name,
             model=agent_client.model,
             profile=tool_profile,
             query=query,
@@ -8815,7 +8958,7 @@ async def _run_agent(
         await send_and_persist(summary_msg, msg_type="summary")
         _persist_token_usage(db, session_id, ctx)
         await _send_context_usage(ws, db, session_id, agent_client.model)
-        _store_last_exchange_from_db(db, session_id, model=agent_client.model)
+        _store_last_exchange_from_db(db, session_id, mode=_mode_name, model=agent_client.model)
 
         # --- Hooks: run completed + tool audit ----------------------------
         from ._hooks import hooks_log_tools, hooks_run_completed
@@ -8823,18 +8966,18 @@ async def _run_agent(
         _tc_names = (
             ",".join(dict(tool_counter).keys()) if not (parallel_plan and parallel_plan.get("parallel")) else "shell"
         )
-        await hooks_log_tools(session_id, all_tool_calls, mode="agent", model=agent_client.model)
+        await hooks_log_tools(session_id, all_tool_calls, mode=_mode_name, model=agent_client.model)
         # Post-write verification — catches silent write failures
         await _fire_post_write_hooks(
             session_id,
             all_tool_calls,
-            mode="agent",
+            mode=_mode_name,
             model=agent_client.model,
         )
         await hooks_run_completed(
             session_id,
             query=query,
-            mode="agent",
+            mode=_mode_name,
             model=agent_client.model,
             profile=tool_profile,
             duration_ms=int(total_elapsed * 1000),
@@ -9351,7 +9494,7 @@ async def _run_sql(
         await send_and_persist(summary_msg, msg_type="summary")
         _persist_token_usage(db, session_id, ctx)
         await _send_context_usage(ws, db, session_id, agent_client.model)
-        _store_last_exchange_from_db(db, session_id, model=agent_client.model)
+        _store_last_exchange_from_db(db, session_id, mode="sql", model=agent_client.model)
 
         # --- Hooks: run completed + tool audit ----------------------------
         from ._hooks import hooks_log_tools, hooks_run_completed
@@ -9850,7 +9993,7 @@ async def _run_discovery(
                 runner.token_usage.get("completion_tokens", 0),
             )
             await _send_context_usage(ws, db, session_id, planner_client.model)
-            _store_last_exchange_from_db(db, session_id, model=planner_client.model)
+            _store_last_exchange_from_db(db, session_id, mode="discover", model=planner_client.model)
 
             # --- Hooks: run completed + tool audit ----------------------------
             from ._hooks import hooks_run_completed
@@ -10196,7 +10339,7 @@ async def _run_custom_agent(
         # Cross-session memory + fact extraction: skip for no_history agents
         # (volatile-state modes like @cloud, @gitlab where old data goes stale)
         if not no_history:
-            _store_last_exchange_from_db(db, session_id, model=agent_client.model)
+            _store_last_exchange_from_db(db, session_id, mode=f"custom:{agent_id}", model=agent_client.model)
 
         # --- Hooks: run completed + tool audit ----------------------------
         from ._hooks import hooks_log_tools, hooks_run_completed
@@ -11523,12 +11666,13 @@ async def _run_review(
             tool_calls=all_tool_calls if all_tool_calls else None,
         )
 
+        tool_counts = Counter(tc.get("name") for tc in all_tool_calls if tc.get("name"))
         summary_data = {
             "type": "agent.summary",
             "iterations": sum(1 for _ in sub_results.values()),
             "elapsed": round(elapsed, 2),
             "tool_calls": total_tools,
-            "tools": ", ".join(sorted({tc["name"] for tc in all_tool_calls})) if all_tool_calls else "",
+            "tools": dict(tool_counts),
         }
         await send_and_persist(summary_data, msg_type="summary")
 
@@ -11602,15 +11746,66 @@ _RESEARCH_TOOLS = [
     "write_file",  # save findings to a file if asked
 ]
 
-# Complexity → profile mapping
-_RESEARCH_PROFILES = {
-    "simple": "cloud-light",
-    "medium": "cloud-heavy",
-    "complex": "cloud-heavy",
-}
 
-# Max concurrent sub-agents — IO-bound so higher than review's 4
-_RESEARCH_MAX_WORKERS = 8
+def _research_settings() -> dict:
+    """framework-config.yaml `research:` block. Defaults match the previous constants."""
+    defaults = {
+        "max_workers": 12,
+        "max_iterations": 6,
+        "max_tool_calls": 15,
+        "max_tool_output": 5000,
+        "min_sub_agents": 3,
+        "max_sub_agents": 8,
+        "planner_profile": "cloud-heavy",
+        "aggregator_profile": "cloud-heavy",
+        "profiles": {
+            "simple": "cloud-light",
+            "medium": "general",
+            "complex": "cloud-heavy",
+        },
+    }
+    try:
+        raw = get_config().get("research") or {}
+    except Exception:
+        return defaults
+    if not isinstance(raw, dict):
+        return defaults
+
+    def _pos(key: str) -> int:
+        try:
+            n = int(raw.get(key, defaults[key]))
+        except (TypeError, ValueError):
+            return int(defaults[key])
+        return n if n > 0 else int(defaults[key])
+
+    def _name(key: str) -> str:
+        value = raw.get(key, defaults[key])
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return str(defaults[key])
+
+    profiles = dict(defaults["profiles"])
+    extra = raw.get("profiles")
+    if isinstance(extra, dict):
+        for key, value in extra.items():
+            if isinstance(value, str) and value.strip():
+                profiles[str(key)] = value.strip()
+
+    min_agents = _pos("min_sub_agents")
+    max_agents = _pos("max_sub_agents")
+    if min_agents > max_agents:
+        min_agents = max_agents
+    return {
+        "max_workers": _pos("max_workers"),
+        "max_iterations": _pos("max_iterations"),
+        "max_tool_calls": _pos("max_tool_calls"),
+        "max_tool_output": _pos("max_tool_output"),
+        "min_sub_agents": min_agents,
+        "max_sub_agents": max_agents,
+        "planner_profile": _name("planner_profile"),
+        "aggregator_profile": _name("aggregator_profile"),
+        "profiles": profiles,
+    }
 
 
 async def _run_research(
@@ -11706,13 +11901,15 @@ async def _run_research(
                 except (WebSocketDisconnect, RuntimeError):
                     pass
 
+        research_cfg = _research_settings()
+
         # --- Hooks: run started -----------------------------------------------
         from ._hooks import hooks_run_started
 
         await hooks_run_started(
             session_id,
             mode="research",
-            model="cloud-heavy",
+            model=research_cfg["planner_profile"],
             profile="research",
             query=query[:100],
         )
@@ -11724,10 +11921,12 @@ async def _run_research(
         from agentforge.client import AIClient
         from agentforge.review.loop import extract_agent_loop_output
 
-        planner_prompt = _load_prompt("research_planner")
-        # Use cloud-heavy for planning — reliable structured JSON with 3-8 sub-agents.
-        # The planner call happens only once per research run so the extra cost is justified.
-        planner_client = AIClient(profile="cloud-heavy")
+        planner_prompt = (
+            _load_prompt("research_planner")
+            .replace("__MIN_SUB_AGENTS__", str(research_cfg["min_sub_agents"]))
+            .replace("__MAX_SUB_AGENTS__", str(research_cfg["max_sub_agents"]))
+        )
+        planner_client = AIClient(profile=research_cfg["planner_profile"])
 
         def _call_planner(client: "AIClient", prompt_text: str, user_query: str) -> list[dict]:
             """Call the planner and return parsed sub_agent specs, or [] on failure."""
@@ -11899,7 +12098,7 @@ async def _run_research(
             agent_id = spec["id"]
             try:
                 complexity = spec.get("complexity", "medium")
-                profile_name = _RESEARCH_PROFILES.get(complexity, "cloud-heavy")
+                profile_name = research_cfg["profiles"].get(complexity, "cloud-heavy")
 
                 # Build sub-agent system prompt from template
                 sources_hint_str = (
@@ -11924,13 +12123,12 @@ async def _run_research(
                     rt.registry,
                     system_prompt=sub_prompt,
                     tools=tools,
-                    max_iterations=12,
+                    max_iterations=research_cfg["max_iterations"],
+                    max_tool_calls=research_cfg["max_tool_calls"],
                     verbose=False,
                     cancel_event=cancel_event,
                     on_event=_make_sub_agent_event_handler(agent_id),
-                    # Cap each tool result at 5 KB to prevent context blowup
-                    # from large web_fetch responses causing Ollama 500 errors.
-                    max_tool_output=5_000,
+                    max_tool_output=research_cfg["max_tool_output"],
                     deep_think=bool(sub_client.profile.thinking_budget),
                 )
 
@@ -11979,7 +12177,7 @@ async def _run_research(
                         ws_closed = True
 
         # Launch all sub-agents in parallel
-        with ThreadPoolExecutor(max_workers=_RESEARCH_MAX_WORKERS, thread_name_prefix="research") as executor:
+        with ThreadPoolExecutor(max_workers=research_cfg["max_workers"], thread_name_prefix="research") as executor:
             thread_futures = {executor.submit(_run_research_sub_agent, spec): spec["id"] for spec in sub_agent_specs}
 
             # Wrap thread futures as asyncio futures so we can await them
@@ -12112,7 +12310,7 @@ async def _run_research(
 
             from agentforge.backends._retry import retry_call
 
-            aggregator_client = AIClient(profile="cloud-heavy")
+            aggregator_client = AIClient(profile=research_cfg["aggregator_profile"])
 
             def _agg_call():
                 return aggregator_client.chat(
@@ -12161,12 +12359,13 @@ async def _run_research(
             tool_calls=all_tool_calls if all_tool_calls else None,
         )
 
+        tool_counts = Counter(tc.get("name") for tc in all_tool_calls if tc.get("name"))
         summary_data = {
             "type": "agent.summary",
             "iterations": len(sub_results),
             "elapsed": round(elapsed, 2),
             "tool_calls": total_tools,
-            "tools": ", ".join(sorted({tc["name"] for tc in all_tool_calls})) if all_tool_calls else "",
+            "tools": dict(tool_counts),
             "research_stats": {
                 "sub_agents_planned": len(sub_agent_specs),
                 "sub_agents_completed": len(sub_results),

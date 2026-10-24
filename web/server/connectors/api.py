@@ -8,6 +8,7 @@ import os
 import secrets
 import time
 from datetime import datetime, timedelta
+from html import escape
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request as HttpRequest
@@ -414,7 +415,7 @@ setTimeout(() => window.close(), 1500);
 <body style="background:#111;color:#e5e7eb;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
 <div style="text-align:center">
 <h2 style="color:#f87171">Connection Failed</h2>
-<p>{error}</p>
+<p>{escape(error)}</p>
 <p style="color:#9ca3af;font-size:0.875rem">Close this window and try again.</p>
 </div>
 </body></html>"""

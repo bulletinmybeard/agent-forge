@@ -79,7 +79,7 @@ class AgentBridge:
 
     def _on_file_diff(self, payload: dict[str, Any]) -> None:
         msg = protocol.file_diff(**payload)
-        self._send(msg)  # live broadcast
+        persisted = False
         if self._db is not None and self._session_id:
             try:
                 self._db.add_message(
@@ -89,8 +89,13 @@ class AgentBridge:
                     metadata=msg,
                     is_incognito=self._incognito,
                 )
+                persisted = True
             except Exception:
                 pass  # persistence errors must never break execution
+        # Worker NullDatabase /event already broadcasts. In-process ChatDatabase
+        # only persists — still need the live WS send.
+        if not persisted or not getattr(self._db, "_events_broadcast", False):
+            self._send(msg)
 
     # -- Callbacks (called from agent thread) --------------------------------
 

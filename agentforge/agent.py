@@ -26,6 +26,7 @@ import concurrent.futures
 import contextvars
 import difflib
 import hashlib
+import json
 import os
 import re
 import threading
@@ -40,12 +41,35 @@ from chalkbox.logging.bridge import get_logger
 from agentforge.tools._file_snapshots import save_snapshot
 from agentforge.tools.routing import dispatch_mode, my_role
 
-from .client import AIClient, ChatResponse
+from .client import AIClient, ChatResponse, add_model_used
 from .config import get_config
 from .context import PipelineContext
 from .tools import ToolRegistry
 
 logger = get_logger(__name__)
+
+
+def record_tool_model(name: str, result: str) -> None:
+    """Add a decision model's name to this request's model chain.
+
+    ``decide`` runs on the tool's own worker. That process records the model
+    on its own chain, which the agent summary never sees. The System One JSON
+    carries the model that answered, so record it here, where the summary is
+    built. An error payload has no answer and is skipped.
+    """
+    if name != "decide" or not result:
+        return
+    try:
+        data = json.loads(result)
+    except (json.JSONDecodeError, TypeError):
+        return
+    if not isinstance(data, dict) or "error" in data:
+        return
+    model = data.get("model")
+    if not isinstance(model, str) or not model.strip():
+        return
+    add_model_used(model)
+
 
 # ---------------------------------------------------------------------------
 # Verbatim output detection
@@ -341,6 +365,7 @@ class AgentLoop:
         cancel_event: threading.Event | None = None,
         iter_timeout: int | None = None,
         max_tool_output: int | None = None,
+        max_tool_calls: int | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
         stream_final: bool = False,
         read_only: bool = False,
@@ -358,6 +383,7 @@ class AgentLoop:
         self._cancel_event = cancel_event
         self._iter_timeout = iter_timeout or 600
         self._max_tool_output = max_tool_output or 16_000
+        self._max_tool_calls = max_tool_calls if max_tool_calls and max_tool_calls > 0 else None
         self._on_event = on_event or (lambda _kind, _data: None)
         self._stream_final = stream_final
         self._active_query = ""
@@ -444,19 +470,32 @@ class AgentLoop:
         """
         _skip_confirm = internal or skip_confirm
 
+        denied = self._registry.deny_if_not_allowed(name, self._tool_names)
+        if denied:
+            logger.warning("[Agent] Tool '%s' not in mode allowlist — refused before dispatch", name)
+            return denied
+
         # In-process tools (e.g., connector tools whose closures hold a live
         # connection's credentials) only exist in THIS process — never dispatch
         # them to a worker whose registry never had them. Runs before the role
         # map so the catch-all `*`->local rule can't ship them off-host.
         if self._registry.is_in_process(name):
-            return self._registry.execute(name, args, skip_confirm=_skip_confirm, skip_events=internal)
+            result = self._registry.execute(
+                name, args, skip_confirm=_skip_confirm, skip_events=internal, allowed_tools=self._tool_names
+            )
+            record_tool_model(name, result)
+            return result
 
         # Single-host / dev: run every tool in-process, no cross-role dispatch.
         # Avoids hanging on a role whose worker isn't running (the enqueue would
         # otherwise block until the SAQ timeout). registry.execute() handles
         # guard + confirm internally, same as the same-role fast path below.
         if dispatch_mode() == "in_process":
-            return self._registry.execute(name, args, skip_confirm=_skip_confirm, skip_events=internal)
+            result = self._registry.execute(
+                name, args, skip_confirm=_skip_confirm, skip_events=internal, allowed_tools=self._tool_names
+            )
+            record_tool_model(name, result)
+            return result
 
         tool_role = self._registry.get_role(name)
         worker_role = my_role()
@@ -464,7 +503,11 @@ class AgentLoop:
         if tool_role == worker_role:
             # Fast path — same role, execute directly. registry.execute()
             # handles guard + confirm internally.
-            return self._registry.execute(name, args, skip_confirm=_skip_confirm, skip_events=internal)
+            result = self._registry.execute(
+                name, args, skip_confirm=_skip_confirm, skip_events=internal, allowed_tools=self._tool_names
+            )
+            record_tool_model(name, result)
+            return result
 
         # Cross-role path: run guard + confirm on THIS side so the browser
         # prompt reaches the user. The remote worker's _check_confirm is a
@@ -499,7 +542,14 @@ class AgentLoop:
         try:
             from web.server.queue.dispatch_compat import saq_dispatch_tool
 
-            return saq_dispatch_tool(name, self._remap_dispatcher_home(args), tool_role)
+            result = saq_dispatch_tool(
+                name,
+                self._remap_dispatcher_home(args),
+                tool_role,
+                allowed_tools=self._tool_names,
+            )
+            record_tool_model(name, result)
+            return result
         except ImportError:
             # Fallback: queue module not available (e.g., in-process WS mode
             # without a running SAQ setup). Execute locally — better than failing.
@@ -512,7 +562,11 @@ class AgentLoop:
                 worker_role,
                 tool_role,
             )
-            return self._registry.execute(name, args, skip_confirm=internal, skip_events=internal)
+            result = self._registry.execute(
+                name, args, skip_confirm=internal, skip_events=internal, allowed_tools=self._tool_names
+            )
+            record_tool_model(name, result)
+            return result
 
     def _preview_confirm_edit(self, name: str, args: dict) -> str:
         """Show a diff card, confirm, then write — for editing tools (code_edit).
@@ -796,7 +850,10 @@ class AgentLoop:
         logger.info("[Agent] Search escalation — querying web for: %s", search_query[:100])
 
         try:
-            result = self._registry.execute("web_search", {"query": search_query})
+            # Honour the mode allowlist here too — a mode without web_search
+            # should not get one through the escalation path. A refusal comes
+            # back as "Error: ..." and is handled just below.
+            result = self._registry.execute("web_search", {"query": search_query}, allowed_tools=self._tool_names)
             result_str = str(result)
             if result_str.startswith("Error:") or result_str.startswith("Web search is not"):
                 logger.warning("[Agent] Search escalation failed: %s", result_str[:200])
@@ -871,6 +928,7 @@ class AgentLoop:
         _consecutive_error_iters = 0
         _error_messages: list[str] = []  # accumulated error messages
         _search_escalation_fired = False  # only fire once per run
+        _tool_calls_used = 0
 
         for i in range(1, self._max_iterations + 1):
             # Check for external cancellation
@@ -1357,12 +1415,10 @@ class AgentLoop:
                     if name == "shell":
                         output = (
                             "Error: 'shell' is not available in this context. "
-                            "Wrapping a tool name in shell does nothing "
-                            '(e.g., shell("web_fetch ...") is not a real command). '
-                            "Call the structured tools directly instead: "
-                            "web_fetch(url=...) to read a page, "
-                            "web_search(query=...) to search the web, "
-                            "download_file(url=...) to download a file, "
+                            "Do not curl localhost or wrap other tools in shell. "
+                            "Call the structured tools directly: "
+                            "film_list_delete / film_list_clear for lists, "
+                            "web_fetch / web_search for the web, "
                             "read_file / write_file for files."
                         )
                     else:
@@ -1439,6 +1495,7 @@ class AgentLoop:
             # in one iteration, run them concurrently.  Single calls still go
             # through the same path (ThreadPoolExecutor with 1 task is fine).
             n_calls = len(response.tool_calls)
+            _tool_calls_used += n_calls
             if n_calls > 1:
                 logger.debug("[Agent] Executing %d tool calls in parallel", n_calls)
                 with concurrent.futures.ThreadPoolExecutor(max_workers=min(n_calls, 4)) as exec_pool:
@@ -1750,11 +1807,14 @@ class AgentLoop:
             # Last budgeted iteration still spent on tools: force one closing
             # text turn (no tools). Thinking models often burn the budget on
             # tool_calls + empty content; without this we hit for/else salvage.
-            if i >= self._max_iterations and not ctx.result:
-                logger.warning(
-                    "[Agent] Max iterations (%d) after tools — forcing final answer turn",
-                    self._max_iterations,
-                )
+            over_tool_budget = self._max_tool_calls is not None and _tool_calls_used >= self._max_tool_calls
+            over_iter_budget = i >= self._max_iterations
+            if (over_tool_budget or over_iter_budget) and not ctx.result:
+                if over_tool_budget:
+                    budget_label = f"tool-call budget ({self._max_tool_calls})"
+                else:
+                    budget_label = f"max iterations ({self._max_iterations})"
+                logger.warning("[Agent] %s after tools — forcing final answer turn", budget_label)
                 ctx.messages.append(
                     {
                         "role": "user",
@@ -1770,7 +1830,7 @@ class AgentLoop:
                     {
                         "iteration": i,
                         "category": "force_final",
-                        "message": "Max iterations after tools — forcing final answer",
+                        "message": f"{budget_label} — forcing final answer",
                     },
                 )
                 try:

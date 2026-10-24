@@ -46,3 +46,29 @@ def resolve_session_source(
             return normalize_source(str(src), default=default)
 
     return default
+
+
+def normalize_parent_id(value: str | None) -> str | None:
+    """Return a parent session id, or None when the caller did not set one."""
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
+
+
+def resolve_parent_id(
+    *,
+    connect_parent: str | None = None,
+    overrides: dict[str, Any] | None = None,
+) -> str | None:
+    """Pick the parent session id for a new child row.
+
+    Priority: query ``overrides.parent_id`` (then ``parent_session_id``)
+    > WebSocket ``?parent_id=``. Empty means this session is a root.
+    """
+    if overrides:
+        if overrides.get("parent_id") is not None:
+            return normalize_parent_id(str(overrides.get("parent_id")))
+        if overrides.get("parent_session_id") is not None:
+            return normalize_parent_id(str(overrides.get("parent_session_id")))
+    return normalize_parent_id(connect_parent)

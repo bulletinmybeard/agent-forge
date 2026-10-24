@@ -51,6 +51,7 @@ MODE_TIERS: dict[str, MemoryTier] = {
     "logs": MemoryTier.SESSION,
     "discover": MemoryTier.SESSION,
     "web_search": MemoryTier.SESSION,
+    "film": MemoryTier.SESSION,
     # ---- Conversational (Tier FULL) ------------------------------------
     "search": MemoryTier.FULL,  # @qdrant (+ @docs/@find aliases)
     "chat": MemoryTier.FULL,  # default LLM

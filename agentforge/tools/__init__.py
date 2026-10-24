@@ -41,8 +41,10 @@ def register_core_tools(registry: ToolRegistry) -> int:
     from .code_edit import register_code_edit_tools
     from .code_quality_tools import register_code_quality_tools
     from .data_tools import register_data_tools
+    from .decision_tools import register_decision_tools
     from .docker import register_docker_tools
     from .filesystem import register_filesystem_tools
+    from .film import register_film_tools
     from .git_tools import register_git_tools
     from .icon_generator import register_icon_generator_tools
     from .log_analysis import register_log_analysis_tools
@@ -61,6 +63,7 @@ def register_core_tools(registry: ToolRegistry) -> int:
     from .tmdb import register_tmdb_tools
     from .trip_tools import register_trip_tools
     from .web_render import register_web_render_tools
+    from .web_scrapling import register_web_scrapling_tools
     from .web_search import register_web_search_tools
 
     count = 0
@@ -75,8 +78,10 @@ def register_core_tools(registry: ToolRegistry) -> int:
     count += register_netdiag_tools(registry)
     count += register_shell_tools(registry)
     count += register_code_edit_tools(registry)
+    count += register_decision_tools(registry)
     count += register_web_search_tools(registry)
     count += register_web_render_tools(registry)
+    count += register_web_scrapling_tools(registry)
     count += register_log_analysis_tools(registry)
     count += register_media_tools(registry)
     count += register_audio_tools(registry)
@@ -89,6 +94,7 @@ def register_core_tools(registry: ToolRegistry) -> int:
     count += register_qdrant_tools(registry)
     count += register_redis_tools(registry)
     count += register_tmdb_tools(registry)
+    count += register_film_tools(registry)
     count += register_ors_tools(registry)
     count += register_trip_tools(registry)
     return count
