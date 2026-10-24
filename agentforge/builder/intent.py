@@ -60,6 +60,21 @@ def is_approve_plan(query: str) -> bool:
     return bool(_APPROVE_RE.match(query or ""))
 
 
+def resolve_builder_phase(query: str, mode: str = "plan") -> tuple[str, BuilderQuery]:
+    """Pick plan or build. ``approve the plan`` builds even after an ``@plan`` prefix.
+
+    The mode chip sends ``@plan approve the plan``. The prefix used to win and
+    the follow-up was drafted again, which also dropped the saved target.
+    """
+    phase = "build" if mode == "build" else "plan"
+    parsed = parse_builder_query(query, default_phase=phase)
+    if parsed.phase in {"plan", "build"}:
+        phase = parsed.phase
+    if is_approve_plan(query) or is_approve_plan(parsed.instruction):
+        phase = "build"
+    return phase, parsed
+
+
 def is_cancel_plan(query: str) -> bool:
     return bool(_CANCEL_RE.match(query or ""))
 

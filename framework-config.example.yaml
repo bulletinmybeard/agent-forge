@@ -86,6 +86,14 @@ agent:
 
 # Tool defaults
 tools:
+  film:
+    db_path: "data/film_db.sqlite"  # or env AGENTFORGE_FILM_DB
+    collection: "film_db"  # reuse the recommender Qdrant collection
+    simkl_client_id: ""             # or env SIMKL_CLIENT_ID
+    simkl_client_secret: ""         # or env SIMKL_CLIENT_SECRET — never commit
+    simkl_redirect_uri: ""          # exact Simkl app redirect, e.g. https://host/api/film/simkl/callback
+    simkl_username: ""              # unused once OAuth is connected
+    simkl_access_token: ""          # or env SIMKL_ACCESS_TOKEN — skips the OAuth flow when set
   write_file:
     unique: true              # suffix file/folder (_1) on conflict; false = overwrite in place
   default_search_depth: 0
@@ -111,17 +119,24 @@ tools:
     base_url: ""                # empty = https://api.openrouteservice.org
   web_search:
     provider: ollama          # ollama | brave | tavily
-    provider_fallbacks: []
-    api_key: ""               # Ollama web-search key, or env OLLAMA_API_KEY
-    max_results: 5
-    fetch_max_chars: 8000
+    provider_fallbacks: []    # disabled providers are skipped even when listed here
+    ollama:
+      enabled: true
+      api_key: ""             # or env OLLAMA_API_KEY
+      max_results: 5          # 1..20
+      fetch_max_chars: 8000   # web_fetch truncation when Ollama served the page
     brave:
+      enabled: false
       api_key: ""             # or env BRAVE_API_KEY
       safesearch: moderate
+      max_results: 5          # no fetch_max_chars, Brave has no fetch endpoint
     tavily:
+      enabled: false
       api_key: ""             # or env TAVILY_API_KEY
-      search_depth: basic
+      search_depth: basic     # basic (1 credit) | advanced (2 credits)
       topic: general
+      max_results: 5
+      fetch_max_chars: 8000   # extract costs credits too
   web_fetch:
     provider: ollama
     provider_fallbacks: []
@@ -173,9 +188,31 @@ review:
     deepinfra: 8
 
 # Code-transform burst mode
+# @research fan-out. Every key below falls back to the value shown, so an
+# absent `research:` block behaves exactly as the hardcoded defaults did.
+research:
+  max_workers: 12            # sub-investigations running at once
+  max_iterations: 6          # agent-loop passes per sub-investigation
+  max_tool_calls: 15         # tool calls per sub-investigation
+  max_tool_output: 5000      # chars of tool output kept per call
+  min_sub_agents: 3          # planner must fan out to at least this many
+  max_sub_agents: 8          # ...and no more than this many
+  planner_profile: cloud-heavy      # splits the question into sub-investigations
+  aggregator_profile: cloud-heavy   # merges the findings into one sourced report
+  # Which profile a sub-investigation gets, by the planner's complexity verdict.
+  profiles:
+    simple: cloud-light
+    medium: general
+    complex: cloud-heavy
+
 coding:
   auto_planner: true
   max_files_per_burst: 50
+  # Extra directories @coding may write to, ON TOP of the always-allowed cwd and
+  # the target file's nearest git root (git root is refused when it resolves to
+  # / or $HOME, so a plan cannot retarget ~/.ssh). Point this at sibling repos.
+  allowed_roots: []
+  snapshot_ttl_seconds: 86400    # how long an undo snapshot stays replayable (1 day)
   planner_profile: agent-heavy
   extractor_profile: cloud-light
   burst_profile: cloud-coder

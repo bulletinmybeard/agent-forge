@@ -25,6 +25,7 @@ from .base import (
     ProviderNotConfigured,
     RateLimitError,
     SearchResult,
+    parse_retry_after,
 )
 
 logger = get_logger(__name__)
@@ -88,7 +89,11 @@ def _post(url: str, body: dict[str, Any], api_key: str) -> dict[str, Any]:
     # All three are quota-style failures; map to RateLimitError so the
     # fallback chain treats them identically.
     if resp.status_code in (429, 432, 433):
-        raise RateLimitError(f"tavily quota/rate limit (HTTP {resp.status_code}): {resp.text[:200]}")
+        raise RateLimitError(
+            f"tavily quota/rate limit (HTTP {resp.status_code}): {resp.text[:200]}",
+            status_code=resp.status_code,
+            retry_after=parse_retry_after(resp.headers.get("Retry-After")),
+        )
     if resp.status_code >= 500:
         raise ProviderError(f"tavily server error (HTTP {resp.status_code}): {resp.text[:200]}")
     if resp.status_code >= 400:

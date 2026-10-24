@@ -29,7 +29,7 @@ import threading
 import time
 from contextvars import ContextVar
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import IO, TYPE_CHECKING
 
 from chalkbox.logging.bridge import get_logger
 
@@ -487,6 +487,8 @@ def _fix_platform_compat(command: str) -> tuple[str, str]:
 # k6_*, audio_*, ardour_*) for groups that share a common prefix.
 _AGENT_TOOL_NAMES = frozenset(
     {
+        # decision (Clef /v1/systemone) — English verb, exact first word only
+        "decide",
         # filesystem
         "read_file",
         "write_file",
@@ -780,9 +782,10 @@ def shell(command: str, cwd: str = "", timeout: int = 0) -> str:
     merged = f"{run_command} 2>&1"
 
     try:
-        # Use Popen + polling instead of subprocess.run so we can:
-        # 1. Kill the process on cancellation (via _shell_cancel_event)
-        # 2. Kill the process on timeout without leaving zombies
+        # Popen + poll so cancel and timeout can kill the process group.
+        # Reader threads drain both pipes from the start. Waiting until exit
+        # to read deadlocks once the OS pipe fills (~16–64KB): the child blocks
+        # in print/flush, poll() stays None, and the timeout then drops the output.
         proc = subprocess.Popen(
             merged,
             shell=True,  # noqa: S602
@@ -794,6 +797,25 @@ def shell(command: str, cwd: str = "", timeout: int = 0) -> str:
             preexec_fn=os.setsid,  # new process group for clean kill
         )
 
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+
+        def _drain(stream: IO[str], parts: list[str]) -> None:
+            try:
+                data = stream.read()
+            except (OSError, ValueError):
+                return
+            if data:
+                parts.append(data)
+
+        readers: list[threading.Thread] = []
+        for stream, parts in ((proc.stdout, stdout_parts), (proc.stderr, stderr_parts)):
+            if stream is None:
+                continue
+            reader = threading.Thread(target=_drain, args=(stream, parts), daemon=True)
+            reader.start()
+            readers.append(reader)
+
         # Send sudo password if needed, then close stdin
         if sudo_pw and proc.stdin is not None:
             try:
@@ -802,6 +824,40 @@ def shell(command: str, cwd: str = "", timeout: int = 0) -> str:
                 proc.stdin.close()
             except (BrokenPipeError, OSError):
                 pass
+
+        def _stop() -> None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    proc.kill()
+                proc.wait(timeout=5)
+
+        def _captured() -> tuple[str, str]:
+            # Join after the child has exited (or been killed) so read() sees EOF.
+            for reader in readers:
+                reader.join(timeout=5)
+            output = "".join(stdout_parts).strip()
+            stderr_out = "".join(stderr_parts).strip()
+            # Strip the sudo password prompt from output if present
+            if sudo_pw and output.startswith("[sudo]"):
+                lines = output.split("\n", 1)
+                output = lines[1].strip() if len(lines) > 1 else ""
+            return output, stderr_out
+
+        def _detail(output: str, stderr_out: str) -> str:
+            parts: list[str] = []
+            if output:
+                parts.append(output)
+            if stderr_out and stderr_out != output:
+                parts.append(f"STDERR: {stderr_out}")
+            return "\n".join(parts)
 
         # Poll loop: check for completion, timeout, and cancellation
         deadline = time.time() + timeout
@@ -812,43 +868,30 @@ def shell(command: str, cwd: str = "", timeout: int = 0) -> str:
                 break  # process finished
 
             if time.time() > deadline:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                except (ProcessLookupError, OSError):
-                    proc.kill()
-                proc.wait(timeout=5)
-                return f"Error: Command timed out after {timeout}s — `{command}`"
+                _stop()
+                output, stderr_out = _captured()
+                detail = _detail(output, stderr_out)
+                msg = f"Error: Command timed out after {timeout}s — `{command}`"
+                return f"{msg}\n\n{detail}" if detail else msg
 
             if _shell_cancel_event and _shell_cancel_event.is_set():
                 logger.info("[shell] Cancel requested — killing subprocess")
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                except (ProcessLookupError, OSError):
-                    proc.kill()
-                proc.wait(timeout=5)
-                return f"[cancelled] $ {command}"
+                _stop()
+                output, stderr_out = _captured()
+                detail = _detail(output, stderr_out)
+                msg = f"[cancelled] $ {command}"
+                return f"{msg}\n\n{detail}" if detail else msg
 
             time.sleep(_POLL_INTERVAL)
 
-        output = ((proc.stdout.read() if proc.stdout is not None else "") or "").strip()
-        stderr_out = ((proc.stderr.read() if proc.stderr is not None else "") or "").strip()
-
-        # Strip the sudo password prompt from output if present
-        if sudo_pw and output.startswith("[sudo]"):
-            lines = output.split("\n", 1)
-            output = lines[1].strip() if len(lines) > 1 else ""
+        output, stderr_out = _captured()
 
         if needs_sudo and sudo_pw and _looks_like_sudo_auth_failure(output):
             _invalidate_sudo_password("localhost")
             return "Error: sudo rejected the password. It was discarded; re-run to be prompted again."
 
         if retcode != 0:
-            parts = []
-            if output:
-                parts.append(output)
-            if stderr_out and stderr_out != output:
-                parts.append(f"STDERR: {stderr_out}")
-            error_detail = "\n".join(parts) if parts else "(no output)"
+            error_detail = _detail(output, stderr_out) or "(no output)"
             return f"[exit {retcode}] $ {command}\n\n{error_detail}"
 
         return f"$ {command}\n\n{output}" if output else f"$ {command}\n\n(completed successfully, no output)"

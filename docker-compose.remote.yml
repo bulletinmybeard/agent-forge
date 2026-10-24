@@ -92,6 +92,9 @@ services:
   agentforge-worker-saq-tools:
     environment:
       REDIS_URL: "${REMOTE_REDIS_URL:-redis://host.docker.internal:6379}"
+      # Pinned @film / @coding jobs land here. Must be split so write_file
+      # (role local) is dispatched to the Mac worker, not /root in this box.
+      AGENTFORGE_DISPATCH_MODE: "${AGENTFORGE_DISPATCH_MODE:-split}"
 
   # Qdrant dashboard at https://${QDRANT_DOMAIN}/dashboard
   qdrant:

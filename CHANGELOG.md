@@ -6,6 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-24
+
+### Added
+
+- **`decide` / `POST /v1/systemone`**: Clef is a decision call, not chat. The Ollama server needs **0.40.6** or later for `clef:cloud`. The route exists from 0.35.0; an older server returns `404 page not found` and Clef never runs
+- **`@film`** (aliases `@movie`, `@movies`): TMDB lookup plus a local `film_db` SQLite library and named lists (`film_lists`, `film_list_create` / `_show` / `_add` / `_remove` / `_delete`). Qdrant uses `media_fingerprints`. Simkl AUTH V2: `GET /api/film/simkl/connect` then `film_simkl_import`
+- **`web_fetch_scrapling`**: GETs one http(s) URL through Scrapling's `Fetcher` (curl_cffi, Chrome TLS impersonation) and returns cleaned markdown. No JavaScript, no browser — `web_fetch_rendered` is still the SPA path. Optional `selector`, `max_chars` capped at 64k. Needs the `scrapling[rag]` extra; without it the tool registers and errors at call time
+- **Plan directories for `@plan` / `@build`**: a plan is now `~/agent-forge/plans/<slug>-<stamp>/` (`plan.md`, one `task-N-brief.md` per task, `progress.md`). Workers write `task-N-report.md`, Python owns `progress.md`, and a later `@build` skips tasks already `complete`. A blocked task stops the run; `@build` again retries it. Apply bundle is `apply.json.gz` inside the directory. Single-file `*.md` plans from 0.16.0 still run as before
+- **Parent/child sessions**: `POST /api/sessions` creates a session row directly and takes an optional `parent_id`. Children stay out of the default listing — `GET /api/sessions?parent_id=<id>` lists one task's calls. `parent_session_id` is write-once and deleting a parent removes its children. Migration `005_session_parent`
+- **`image_analyze`**: describe a local screenshot or image with the `vision` profile. Raster formats only (png / jpg / webp / gif / bmp / tiff), 20 MB cap. A path written in the prompt is not attached on its own — the tool reads the file on the machine that owns it. `read_file` on an image returns binary, not a description
+- TMDB `tv_season`, `tv_episode`, and `watch_providers`: one season's episodes, one episode's detail, and stream / rent / buy availability per region (JustWatch via TMDB)
+- Two Ollama Cloud prompt-lab scripts under `sandbox/scripts/` — a one-shot prompt sweep and a code-edit sweep across profiles. Both are paid: every profile hits Ollama Cloud
+- **Tool allowlist enforced in the registry**: `ToolRegistry.execute(..., allowed_tools=[...])` and `deny_if_not_allowed()` refuse any name outside a mode's or custom agent's list before the tool runs, instead of trusting the prompt. `None` means unrestricted. Checked on every dispatch path (in-process, same-role, cross-role, SAQ worker)
+
+### Changed
+
+- **Web-search providers are configured per provider.** Each gets its own block with `enabled` / `api_key` / `max_results` / `fetch_max_chars` (`tools.web_search.ollama.*`, `.brave.*`, `.tavily.*`). A disabled provider is dropped from the chain even when `provider_fallbacks` lists it. The old root-level `api_key` / `max_results` / `fetch_max_chars` still work as a fallback (a provider block wins; using the legacy root logs one warning), so existing configs keep running
+- **Rate-limited providers cool down instead of being retried.** A `RateLimitError` sets `websearch:cooldown:<provider>` in Redis and the chain moves to the next provider; a plan-limit cooldown runs until the first of the next month, a `429` honours `Retry-After`, anything else is 60s. Shared by the web containers and the native worker. Redis being down fails open
+- `search_with_fallback(query, max_results)` takes `max_results=0` to mean "each provider uses its own configured `max_results`". A caller that passed `0` before got no results; it now gets the configured count
+- `agentforge.__version__` is read from the installed distribution metadata instead of being a hand-maintained constant (it had been stuck at `0.13.0`). Outbound user-agents derive from it
+- **`@research` reads a `research:` config block** instead of hardcoded constants: `max_workers`, `max_iterations`, `max_tool_calls`, `max_tool_output`, `min_sub_agents` / `max_sub_agents` (were a fixed 3-8), `planner_profile`, `aggregator_profile`, and per-complexity `profiles.simple` / `.medium` / `.complex`. Defaults match the previous values, so an existing config behaves as before
+- `AGENTFORGE_DISPATCH_MODE` defaults to `split` for the SAQ tools worker in `docker-compose.yml` and `docker-compose.remote.yml`, so a pinned `@film` / `@coding` job still dispatches `write_file` to the Mac worker instead of writing inside the container
+
+### Fixed
+
+- **`shell` no longer loses output on timeout or cancel.** Reading both pipes only after the process exited deadlocked once the OS pipe buffer filled (~16–64KB): the child blocked in `print`/flush, `poll()` never returned, and the timeout then discarded everything it had written. Reader threads now drain stdout/stderr from the start, and a timed-out or cancelled command returns the output captured so far
+- Simkl OAuth tokens and the PKCE verifier are stored owner-readable only, and a pending login expires after 10 minutes rather than staying valid indefinitely
+- Both OAuth redirect targets (`/api/connectors/auth/callback`, `/api/film/simkl/callback`) are exempt from the API-key gate — the provider sends the user's browser there with no key, so `security.api_keys` used to 401 the whole flow
+- Both OAuth callbacks report a failure generically and keep the detail in the server log — a token-exchange error message can carry the provider's whole response
+- `file.diff` events no longer arrive twice in split mode. The worker's event callback already broadcasts, so the extra live send duplicated every diff card; the in-process database still needs it and still gets it
+- The last-resort web-search escalation in the agent loop honours the mode allowlist like every other tool call
+- `GET /api/health` is exempt from the API-key gate, as [docs/SECURITY.md](docs/SECURITY.md) always claimed. Only `/health` was, so `deploy-remote.sh` reported the web tier as down on any deployment with `security.api_keys` set. Covered by `tests/test_auth_exempt_paths.py`
+- `framework-config.example.yaml` documents the `research:` block, `coding.allowed_roots` / `coding.snapshot_ttl_seconds`, and `tools.film.simkl_access_token` — every key the code reads now has an example entry, and the two `coding` defaults shown match the code
+- [docs/tools.md](docs/tools.md) covers `web_fetch_scrapling`, `image_analyze`, `decide`, the `film_*` tools, and the new TMDB lookups; [docs/api.md](docs/api.md) covers the Simkl OAuth endpoints
+
+### Removed
+
+- Nine unused helpers that nothing called: `is_tmdb_available()` and its cached probe state, `abort_agent_job()`, `_check_already_done_http()`, `_send_secret_redaction_warning()`, `_ctx_tokens()`, `_image_optimize_quality()`, `_image_strip_metadata()`, and the `_set_*_provider_for_test` seams
+
 ## [0.16.0] - 2026-09-13
 
 ### Added

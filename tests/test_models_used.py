@@ -41,6 +41,20 @@ def test_get_models_used_extra_fills_gap():
     ]
 
 
+def test_decide_result_records_model_on_the_caller():
+    from agentforge.agent import record_tool_model
+
+    reset_models_used()
+    record_tool_model(
+        "decide",
+        '{"model": "clef", "answers": {"health": {"choice": "degraded"}}}',
+    )
+    # A failed call has no answer. Another tool's JSON is not a decision model.
+    record_tool_model("decide", '{"error": "404 page not found", "status": 404}')
+    record_tool_model("shell", '{"model": "nope"}')
+    assert get_models_used() == ["clef"]
+
+
 def test_uninitialised_tracking_is_noop():
     # Clear the ContextVar to the default (None)
     from agentforge import client as client_mod

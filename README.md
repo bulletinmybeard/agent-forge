@@ -7,6 +7,7 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![ty](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ty/main/assets/badge/v0.json)](https://github.com/astral-sh/ty)
 [![Docker](https://img.shields.io/badge/stack-Docker%20Compose-2496ED?logo=docker&logoColor=white)](./docker-compose.yml)
+[![Code review: Claude Opus 5](https://img.shields.io/badge/code%20review-Claude%20Opus%205-D97757?logo=claude&logoColor=white)](#pre-release-code-review)
 
 <!-- prettier-ignore -->
 > [!NOTE]
@@ -34,7 +35,9 @@ These projects use AgentForge as their backend and don't run without it:
 - **Backends**: Ollama (local + cloud relay), AWS Bedrock, and any OpenAI-compatible API (DeepInfra, OpenRouter, ...). Selected per role via named profiles. Switch the whole stack with one `provider_override`.
 - **Agent loop**: think -> act -> observe with tool calling, error recovery, optional web-search escalation, and per-session profile overrides (`overrides.profiles`). Thinking models: fence-aware `<think>` strip + native Ollama thinking; empty/plan-fragment answers get one nudge instead of ending the run.
 - **`@plan` / `@build`**: investigate a repo, write a markdown plan, approve it, then execute with queued workers. Undo/redo from an apply bundle next to the plan. **`@review`**: read-only code review written to disk (`single` / `deep` / `classic`).
-- **Tools**: filesystem, shell, system info, Docker, Git, SSH, archives, network diagnostics, web search/fetch/render, media, code editing, macOS notifications, **Apple Reminders** (list/create/edit/complete/delete via `remindctl`), **OpenRouteService trips** (`@trip` / `@tripplanner`: geocode, driving/walking directions, POIs, published Leaflet map), and more. Shell/SSH commands can be gated by allowlist, denylist, or confirm policy (config + runtime API).
+- **`@film`**: TMDB lookup, local `film_db` library, recommend-similar (Qdrant optional).
+- **Tools**: filesystem, shell, system info, Docker, Git, SSH, archives, network diagnostics, web search/fetch/render, media, code editing, macOS notifications, **Apple Reminders** (list/create/edit/complete/delete via `remindctl`), **OpenRouteService trips** (`@trip` / `@tripplanner`: geocode, driving/walking directions, POIs, published Leaflet map), and more. Shell/SSH commands can be gated by allowlist, denylist, or confirm policy (config + runtime API). A mode's or custom agent's tool list is enforced in the registry, so a tool outside it is refused before it runs, not just left out of the prompt.
+- **Web search and fetch**: Ollama, Brave, or Tavily, each configured in its own block with `enabled` / `api_key` / `max_results`. A rate-limited provider is put on a Redis-backed cooldown and the chain falls through to the next one. `web_fetch_scrapling` GETs a page directly (browser TLS impersonation, no JavaScript) and returns markdown; `web_fetch_rendered` is the headless-browser path for SPAs.
 - **RAG**: index OpenAPI/SQL schemas, source code, docs, and transcripts into Qdrant. Query with refinement, reranking, and dedup.
 - **Knowledge Database**: personal store for notes, references, documentation, attached documents, cheatsheets, and snippets. One-call ingest, semantic search, tag faceting, and smart updates (re-embeds only when content changes). Multi-collection routing (`X-Knowledge-Collection` header) separates the KB SPA, AgentForge Notes, and AgentForge Email into independent Qdrant collections. Original attachment files (PDFs, etc.) are stored alongside extracted text and downloadable via the API.
 - **Direct tool run**: IDE clients (e.g. IntelliJ Quality) can call allowlisted tools (`linter_run`, `test_runner`, …) over REST without an agent/LLM loop, on the same tools worker as chat.
@@ -66,6 +69,8 @@ The default backend is [Ollama](https://ollama.com). **When the Ollama provider 
 ```bash
 OLLAMA_HOST=0.0.0.0:11434 ollama serve     # or set OLLAMA_HOST=0.0.0.0 for a brew/launchd service
 ```
+
+`decide` (Clef) uses `POST /v1/systemone` on that server, not `/api/chat`. `clef:cloud` needs Ollama **0.40.6** or later. The route has existed since 0.35.0. An older server returns `404 page not found` and Clef never runs.
 
 Pull the models your profiles reference. To run on a cloud backend instead (Bedrock, DeepInfra, OpenRouter), point the providers at it in `framework-config.yaml` and then you don't need Ollama for prompts at all. Note embeddings default to local Ollama, so move those to a cloud embedder too if you want to skip Ollama entirely.
 
@@ -146,7 +151,9 @@ security:
 
 Clients send the key as `Authorization: Bearer agf_...` or `X-API-Key: agf_...`.
 Browsers (which can't set WebSocket headers) pass it as a `Sec-WebSocket-Protocol` subprotocol or `?api_key=agf_...`.
-`/health` and internal worker callbacks are exempt.
+`/health`, internal worker callbacks, and the two OAuth redirect targets
+(`/api/connectors/auth/callback`, `/api/film/simkl/callback`) are exempt — the provider sends the
+user's browser there with no key. Those two are still tied to a `state` issued by this host.
 
 For public deploys, `AGENTFORGE_REQUIRE_AUTH=1` refuses to boot without keys (and the app already fails closed when the Docker socket is mounted with none)! `AGENTFORGE_ALLOW_INSECURE=1` is the trusted-network escape hatch. See [docs/SECURITY.md](docs/SECURITY.md) for the full checklist and [deploy.example.env](deploy.example.env) for every knob.
 
@@ -175,6 +182,14 @@ CI runs lint, format, type check, and build + smoke on pull requests (`.github/w
 Schema changes belong in Alembic revision files under `web/server/database/migrations/` (chat/canvas) or `web/server/prompt_lab/database/migrations/` — see [architecture → SQLite schema](docs/architecture.md#sqlite-schema-alembic).
 
 To exercise the framework directly without the Docker/web stack, see the [sandbox harness](sandbox/README.md): a short Python script driving `AIClient` / `ToolRegistry` / the agent loop against your Ollama.
+
+### Pre-release code review
+
+The changes for the current unreleased version were reviewed by **Claude Opus 5** (Anthropic), run through [Claude Code](https://claude.com/claude-code), on 2026-10-24.
+
+Scope was the diff for that release, not the whole codebase: dead code, the new tool and API surfaces, type and lint conformance, test coverage, and whether the README and CHANGELOG matched what shipped. What came out of it is in the [CHANGELOG](CHANGELOG.md).
+
+This is one review pass by one model on one diff, not an audit or a security guarantee — see the note at the top of this README about what AgentForge is. Findings were verified and fixed by hand before release.
 
 ## License
 

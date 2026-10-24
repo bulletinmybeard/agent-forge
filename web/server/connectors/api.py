@@ -8,6 +8,7 @@ import os
 import secrets
 import time
 from datetime import datetime, timedelta
+from html import escape
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request as HttpRequest
@@ -311,7 +312,7 @@ async def oauth_callback(
         )
     except Exception as exc:
         logger.error("OAuth token exchange failed: %s", exc)
-        return HTMLResponse(_callback_html(success=False, error=f"Token exchange failed: {exc}"))
+        return HTMLResponse(_callback_html(success=False, error="Token exchange failed. See the server log."))
 
     # Store the token with client config for later refresh
     expires_in = int(token_data.get("expires_in", 3600))
@@ -363,7 +364,7 @@ async def oauth_callback(
         )
     except Exception as exc:
         logger.error("Failed to create connection: %s", exc)
-        return HTMLResponse(_callback_html(success=False, error=f"Failed to save connection: {exc}"))
+        return HTMLResponse(_callback_html(success=False, error="Failed to save the connection. See the server log."))
 
     return HTMLResponse(_callback_html(success=True, connection_id=conn["id"]))
 
@@ -414,7 +415,7 @@ setTimeout(() => window.close(), 1500);
 <body style="background:#111;color:#e5e7eb;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
 <div style="text-align:center">
 <h2 style="color:#f87171">Connection Failed</h2>
-<p>{error}</p>
+<p>{escape(error)}</p>
 <p style="color:#9ca3af;font-size:0.875rem">Close this window and try again.</p>
 </div>
 </body></html>"""

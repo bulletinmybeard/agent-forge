@@ -15,14 +15,16 @@ import logging
 import re as _re
 import subprocess
 import time
+import uuid
 from datetime import datetime as _dt
+from html import escape
 from pathlib import Path
 from typing import List
 
 import ollama
 import yaml
 from fastapi import APIRouter, Body, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from agentforge.client import AIClient
@@ -129,6 +131,41 @@ async def _generate_note_title(query: str, calls: list[dict], content: str | Non
 
 
 router = APIRouter(prefix="/api")
+
+
+@router.get("/film/simkl/connect")
+def film_simkl_connect():
+    """Start Simkl AUTH V2; returns JSON with authorize_url (or follow it in a browser)."""
+    from agentforge.film.oauth import start_login
+
+    try:
+        return start_login()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/film/simkl/callback")
+def film_simkl_callback(code: str = "", state: str = "", iss: str = "", error: str = ""):
+    """OAuth redirect target. Register this exact URL on the Simkl app."""
+    from agentforge.film.oauth import complete_login
+
+    # Third-party text rendered into HTML — escape before interpolating. The
+    # exception path stays generic: its message can carry the token response.
+    if error:
+        return HTMLResponse(f"<p>Simkl authorization failed: {escape(error)}</p>", status_code=400)
+    try:
+        complete_login(code=code, state=state, iss=iss)
+    except Exception:
+        logger.warning("Simkl connect failed", exc_info=True)
+        return HTMLResponse(
+            "<p>Simkl connect failed. Check the server log, then start again from <code>/api/film/simkl/connect</code>.</p>",
+            status_code=400,
+        )
+    return HTMLResponse(
+        "<p>Simkl connected. You can close this tab and run "
+        "<code>@film Import all current Simkl items</code> in AgentForge.</p>"
+    )
+
 
 # Shared state — set at startup from app.py lifespan
 _db: ChatDatabase | None = None
@@ -260,6 +297,13 @@ class SessionUpdate(BaseModel):
     title: str
 
 
+class SessionCreate(BaseModel):
+    title: str = "New chat"
+    source: str | None = None
+    parent_id: str | None = None
+    id: str | None = None
+
+
 class CommandNoteCreate(BaseModel):
     session_id: str | None = None
     title: str
@@ -272,8 +316,37 @@ class CommandNoteCreate(BaseModel):
 # -- Session endpoints ---------------------------------------------------------
 
 
+@router.post("/sessions", status_code=201)
+async def create_session(body: SessionCreate):
+    """Create an empty session row.
+
+    Omit ``parent_id`` for a root task. Pass it to open a child call under a
+    root that already exists. Children stay out of the default session list.
+    """
+    from .session_source import normalize_source
+
+    session_id = (body.id or "").strip() or uuid.uuid4().hex
+    db = get_db()
+    try:
+        chat = db.create_session(
+            session_id,
+            title=body.title,
+            source=normalize_source(body.source) if body.source else "web",
+            parent_session_id=body.parent_id,
+        )
+    except ValueError as exc:
+        status = 409 if str(exc) == "session already exists" else 400
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    return chat.to_dict()
+
+
 @router.get("/sessions")
-async def list_sessions(limit: int = 50, offset: int = 0, source: str = "web"):
+async def list_sessions(
+    limit: int = 50,
+    offset: int = 0,
+    source: str = "web",
+    parent_id: str | None = None,
+):
     """List sessions ordered by most recently created.
 
     Each session dict includes ``has_active_job: bool`` so the frontend can
@@ -282,10 +355,13 @@ async def list_sessions(limit: int = 50, offset: int = 0, source: str = "web"):
     ``source`` filters by originating client (default ``"web"`` — the Agent Chat
     UI). External-app sessions are hidden unless asked for: ``?source=all`` lists
     every source, ``?source=<name>`` a single one.
+
+    Without ``parent_id`` only root sessions are returned, so child calls stay
+    out of the sidebar. ``?parent_id=<id>`` lists the calls for that task.
     """
     sources = None if source == "all" else (source,)
     db = get_db()
-    sessions = db.list_sessions(limit=limit, offset=offset, sources=sources)
+    sessions = db.list_sessions(limit=limit, offset=offset, sources=sources, parent_id=parent_id)
     result = []
     for s in sessions:
         d = s.to_dict()
@@ -726,10 +802,22 @@ async def push_worker_event(session_id: str, body: _EventBody):
     """
     db = get_db()
 
-    # Ensure the session row exists. Stamp source from the active job's overrides
-    # when present so KB/external clients are not mis-tagged as "web".
+    # Ensure the session row exists. Stamp source and parent from the active
+    # job's overrides when present so external clients are not mis-tagged.
     if not db.get_session(session_id):
-        db.create_session(session_id, source=resolve_session_source(session_id))
+        from .session_source import resolve_parent_id
+
+        job = job_store.get_active_job(session_id)
+        parent_id = resolve_parent_id(overrides=job.overrides if job else None)
+        try:
+            db.create_session(
+                session_id,
+                source=resolve_session_source(session_id),
+                parent_session_id=parent_id,
+            )
+        except ValueError as exc:
+            logger.warning("session %s parent rejected (%s); creating as root", session_id, exc)
+            db.create_session(session_id, source=resolve_session_source(session_id))
 
     db.add_message(
         session_id=session_id,
@@ -1208,6 +1296,17 @@ async def list_agents():
             ),
             "example": "@build",
             "profile": "coder",
+        },
+        {
+            "id": "film",
+            "type": "built-in",
+            "aliases": ["@film", "@movie", "@movies"],
+            "title": "Film — Movies and TV library",
+            "description": (
+                "Look up titles on TMDB, keep a local film_db (SQLite + Qdrant), and recommend similar movies or shows."
+            ),
+            "example": "@film Recommend a sci-fi movie like Alien (1979)",
+            "profile": "agent",
         },
     ]
 

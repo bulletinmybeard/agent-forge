@@ -9,7 +9,7 @@ AgentForge runs a tool-calling agent that can execute shell, SSH, Docker, and SQ
 
 API-key auth is **off by default** (open). Enable it before exposing AgentForge on any untrusted network.
 
-- Set keys via `security.api_keys` in `config.yaml` or `AGENTFORGE_API_KEYS` (comma-separated; env wins here). When set, every HTTP and WebSocket request needs a key except `GET /health`, `GET /api/health`, and the internal worker callbacks.
+- Set keys via `security.api_keys` in `config.yaml` or `AGENTFORGE_API_KEYS` (comma-separated; env wins here). When set, every HTTP and WebSocket request needs a key except `GET /health`, `GET /api/health`, the internal worker callbacks, and the two OAuth redirect targets (`/api/connectors/auth/callback`, `/api/film/simkl/callback`) — an external provider redirects the user's browser there and cannot attach a key. Both still require a `state` that matches a login this host started.
 - Clients send `Authorization: Bearer agf_...` or `X-API-Key: agf_...`. Browsers pass the key as a `Sec-WebSocket-Protocol` subprotocol or `?api_key=agf_...` (query param shows up in proxy logs / prefer the subprotocol).
 - `AGENTFORGE_REQUIRE_AUTH=1` makes the app refuse to boot without keys. Use it on public deploys so an unauthenticated surface can never start by accident.
 - The app already **fails closed** when the Docker socket is mounted and no keys are set (the container can control the host, so an open surface there is fatal).

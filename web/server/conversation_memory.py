@@ -279,7 +279,7 @@ class ConversationMemory:
     @staticmethod
     def _make_id(session_id: str, query: str) -> str:
         """Deterministic UUID for a session+query pair."""
-        h = hashlib.md5(f"{session_id}:{query}".encode()).hexdigest()
+        h = hashlib.md5(f"{session_id}:{query}".encode(), usedforsecurity=False).hexdigest()
         return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}"
 
     def delete_by_mode(self, mode: str) -> int:

@@ -693,6 +693,16 @@ class ToolRegistry:
                 missing.append(pname)
         return missing
 
+    @staticmethod
+    def deny_if_not_allowed(name: str, allowed: list[str] | None) -> str | None:
+        """Return an error string if *name* is outside the run allowlist.
+
+        ``allowed is None`` means unrestricted (full @agent / tools: all).
+        """
+        if allowed is None or name in allowed:
+            return None
+        return f"Error: Tool '{name}' is not available in this mode. Use one of the provided tools, or answer directly."
+
     def execute(
         self,
         name: str,
@@ -700,6 +710,7 @@ class ToolRegistry:
         *,
         skip_confirm: bool = False,
         skip_events: bool = False,
+        allowed_tools: list[str] | None = None,
     ) -> Any:
         """Execute a tool synchronously by name.
 
@@ -709,7 +720,15 @@ class ToolRegistry:
         the generic confirm gate or the tool_call badge — used by the diff-preview
         confirm flow, which runs code_edit's internal propose/apply passes itself
         and drives its own confirmation.
+
+        ``allowed_tools`` is the mode/custom-agent allowlist. ``None`` means
+        unrestricted. Names outside the list return an error string and never run.
         """
+        denied = self.deny_if_not_allowed(name, allowed_tools)
+        if denied:
+            logger.warning("[registry] refused '%s' — not in mode allowlist", name)
+            return denied
+
         func = self._tools.get(name)
         if func is None:
             raise KeyError(f"Tool '{name}' not found. Available: {self.list_tools()}")

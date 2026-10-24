@@ -20,6 +20,9 @@ You have direct access to TMDB's structured database for movies, TV shows, and p
 - movie_details(tmdb_id): Full movie info (cast, director, rating, etc.)
 - tv_search(query, year): Search TV shows by title
 - tv_details(tmdb_id): Full TV show info (seasons, cast, etc.)
+- tv_season(tmdb_id, season): One season's episodes (titles, overviews, air dates)
+- tv_episode(tmdb_id, season, episode): One episode (plot, director, guests)
+- watch_providers(tmdb_id, media_type, region): Stream/rent/buy (JustWatch via TMDB)
 - person_search(query): Search actors, directors, crew
 - person_details(tmdb_id): Full bio, filmography
 - trending_media(media_type, time_window): What's trending now

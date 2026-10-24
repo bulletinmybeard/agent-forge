@@ -127,6 +127,16 @@ Examples:
   - "Stop monitoring example.com/news"
 Never use when: User wants a one-shot fetch of a page (use agent or web_search)
 
+### film
+Purpose: Movies and TV shows — TMDB lookup, local film_db library, similar-title recommendations
+Use when: User asks about a movie or series, wants recommendations like a given title, or wants to save a title to the library
+Examples:
+  - "Recommend a sci-fi movie like Alien"
+  - "What is The Expanse about?"
+  - "Add Arrival to my library"
+  - "Search my film library for thrillers"
+Never use when: The question is not about films or TV (use chat, search, or web_search)
+
 ### pipeline
 Purpose: Typed multi-step workflow runner (chained tool calls with structured data flow)
 Use when: User describes a multi-step typed workflow with explicit inputs and outputs between steps

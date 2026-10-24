@@ -20,7 +20,9 @@ from .base import (
     ProviderNotConfigured,
     RateLimitError,
     SearchResult,
+    parse_retry_after,
 )
+from .settings import provider_setting
 
 logger = get_logger(__name__)
 
@@ -33,22 +35,14 @@ _REQUEST_TIMEOUT = 30  # seconds — matches the legacy urllib timeout
 def _get_api_key() -> str:
     """Return the Ollama Cloud API key.
 
-    ``OLLAMA_API_KEY`` env wins, else ``tools.web_search.api_key`` (YAML),
-    else empty string (disables the provider gracefully).
+    ``OLLAMA_API_KEY`` env wins, else ``tools.web_search.ollama.api_key``
+    (legacy: ``tools.web_search.api_key``), else empty string (disables
+    the provider gracefully).
     """
     env = os.environ.get("OLLAMA_API_KEY", "").strip()
     if env:
         return env
-    try:
-        from agentforge.config import get_config
-
-        cfg = get_config()
-        key = cfg._raw.get("tools", {}).get("web_search", {}).get("api_key", "")
-        if key:
-            return str(key)
-    except Exception:
-        pass
-    return ""
+    return str(provider_setting("ollama", "api_key", "") or "")
 
 
 def _post(url: str, body: dict[str, Any], api_key: str) -> dict[str, Any]:
@@ -69,7 +63,11 @@ def _post(url: str, body: dict[str, Any], api_key: str) -> dict[str, Any]:
         raise ProviderError(f"ollama network error: {exc}") from exc
 
     if resp.status_code == 429:
-        raise RateLimitError(f"ollama rate limited: {resp.text[:200]}")
+        raise RateLimitError(
+            f"ollama rate limited: {resp.text[:200]}",
+            status_code=429,
+            retry_after=parse_retry_after(resp.headers.get("Retry-After")),
+        )
     if resp.status_code >= 500:
         raise ProviderError(f"ollama server error (HTTP {resp.status_code}): {resp.text[:200]}")
     if resp.status_code >= 400:
@@ -94,7 +92,7 @@ class OllamaSearchProvider:
         api_key = _get_api_key()
         if not api_key:
             raise ProviderNotConfigured(
-                "ollama search: no API key (set OLLAMA_API_KEY or tools.web_search.api_key in config.yaml)"
+                "ollama search: no API key (set OLLAMA_API_KEY or tools.web_search.ollama.api_key in config.yaml)"
             )
         data = _post(_SEARCH_URL, {"query": query, "max_results": max_results}, api_key)
         raw_results = data.get("results") or []
@@ -120,7 +118,7 @@ class OllamaFetchProvider:
         api_key = _get_api_key()
         if not api_key:
             raise ProviderNotConfigured(
-                "ollama fetch: no API key (set OLLAMA_API_KEY or tools.web_search.api_key in config.yaml)"
+                "ollama fetch: no API key (set OLLAMA_API_KEY or tools.web_search.ollama.api_key in config.yaml)"
             )
         data = _post(_FETCH_URL, {"url": url}, api_key)
         return FetchResult(

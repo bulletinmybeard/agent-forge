@@ -499,6 +499,44 @@ class AIClient:
             on_fallback=on_fallback,
         )
 
+    # -- decision models (/v1/systemone) -----------------------------------
+
+    def systemone(
+        self,
+        state: str | dict | list,
+        questions: str | dict,
+        images: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Score questions against state. Ollama decision models only.
+
+        This does not go through chat fallbacks. A wrong provider raises
+        ``NotImplementedError``. A bad question schema raises
+        :class:`SystemOneError`.
+        """
+        fn = getattr(self._backend, "systemone", None)
+        if not callable(fn):
+            raise NotImplementedError(
+                f"profile {self._profile.name!r} ({self._profile.provider}) has no /v1/systemone support"
+            )
+        result = fn(state, questions, images)
+        add_model_used(result.get("model") or self._profile.model)
+        return result
+
+    async def asystemone(
+        self,
+        state: str | dict | list,
+        questions: str | dict,
+        images: list[str] | None = None,
+    ) -> dict[str, Any]:
+        fn = getattr(self._backend, "asystemone", None)
+        if not callable(fn):
+            raise NotImplementedError(
+                f"profile {self._profile.name!r} ({self._profile.provider}) has no /v1/systemone support"
+            )
+        result = await fn(state, questions, images)
+        add_model_used(result.get("model") or self._profile.model)
+        return result
+
     # -- chat with fallback (sync) -----------------------------------------
 
     def _chat_with_fallback(

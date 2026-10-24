@@ -226,6 +226,127 @@ def _format_tv(t: dict, credits: dict | None = None) -> str:
         if creators:
             lines.append(f"Created By: {', '.join(creators)}")
         lines.append(f"Cast: {', '.join(cast) if cast else 'N/A'}")
+    seasons = t.get("seasons") or []
+    if seasons:
+        bits: list[str] = []
+        for s in seasons:
+            n = s.get("season_number")
+            if n is None:
+                continue
+            count = s.get("episode_count")
+            label = s.get("name") or f"Season {n}"
+            if count is not None:
+                bits.append(f"S{int(n):02d} {label} ({count} ep)")
+            else:
+                bits.append(f"S{int(n):02d} {label}")
+        if bits:
+            lines.append("Season list: " + "; ".join(bits))
+            lines.append("Use tv_season(tmdb_id, season) for episode titles and overviews.")
+    return "\n".join(lines)
+
+
+def _episode_heading(ep: dict) -> str:
+    n = ep.get("episode_number")
+    s = ep.get("season_number")
+    name = (ep.get("name") or "").strip() or "(untitled)"
+    air = ep.get("air_date") or "N/A"
+    runtime = ep.get("runtime")
+    runtime_s = f" {runtime} min" if runtime not in (None, "") else ""
+    rating = ep.get("vote_average")
+    rating_s = f" {rating}/10" if rating not in (None, "") else ""
+    se = ""
+    if s is not None and n is not None:
+        se = f"S{int(s):02d}E{int(n):02d} "
+    elif n is not None:
+        se = f"E{int(n):02d} "
+    return f"{se}{name} ({air}){runtime_s}{rating_s}"
+
+
+def _format_season(data: dict, show_tmdb_id: str) -> str:
+    season = data.get("season_number")
+    title = (data.get("name") or "").strip() or (f"Season {season}" if season is not None else "Season")
+    lines = [
+        f"{title} — show TMDB {show_tmdb_id}",
+        f"Air date: {data.get('air_date') or 'N/A'}",
+        f"Episodes: {len(data.get('episodes') or [])}",
+    ]
+    overview = (data.get("overview") or "").strip()
+    if overview:
+        lines.append(f"Overview: {overview}")
+    poster = data.get("poster_path")
+    if poster:
+        lines.append(f"Poster: {_poster_url(poster)}")
+    episodes = data.get("episodes") or []
+    if not episodes:
+        lines.append("No episodes in this TMDB season payload.")
+        return "\n".join(lines)
+    lines.append("Episodes (TMDB; empty title/overview stay empty):")
+    for ep in episodes:
+        lines.append(f"  {_episode_heading(ep)}")
+        blurb = (ep.get("overview") or "").strip()
+        if blurb:
+            lines.append(f"    {blurb}")
+    return "\n".join(lines)
+
+
+def _format_episode(ep: dict, show_tmdb_id: str) -> str:
+    lines = [
+        _episode_heading(ep),
+        f"Show TMDB: {show_tmdb_id}",
+        f"Episode TMDB: {ep.get('id', 'N/A')}",
+        f"Still: {_poster_url(ep.get('still_path'), 'w300')}",
+    ]
+    blurb = (ep.get("overview") or "").strip()
+    lines.append(f"Overview: {blurb or '(empty on TMDB)'}")
+    crew = ep.get("crew") or []
+    directors = [c.get("name") for c in crew if c.get("job") == "Director" and c.get("name")]
+    writers = [c.get("name") for c in crew if c.get("department") == "Writing" and c.get("name")]
+    if directors:
+        lines.append(f"Director: {', '.join(directors)}")
+    if writers:
+        seen: list[str] = []
+        for name in writers:
+            if name not in seen:
+                seen.append(name)
+        lines.append(f"Writers: {', '.join(seen[:8])}")
+    guests = [g.get("name") for g in (ep.get("guest_stars") or [])[:8] if g.get("name")]
+    if guests:
+        lines.append(f"Guest stars: {', '.join(guests)}")
+    return "\n".join(lines)
+
+
+def _provider_names(entries: list | None) -> str:
+    names = [e.get("provider_name") for e in (entries or []) if e.get("provider_name")]
+    return ", ".join(names) if names else ""
+
+
+def _format_watch_providers(data: dict, region: str, media_type: str, tmdb_id: str) -> str:
+    results = data.get("results") or {}
+    region = (region or "").strip().upper()
+    block = results.get(region) if region else None
+    header = f"Watch providers for {media_type} TMDB {tmdb_id} in {region or '?'} (JustWatch via TMDB):"
+    if not block:
+        available = sorted(results)
+        extra = ", ".join(available[:30]) if available else "none"
+        if len(available) > 30:
+            extra += f", … ({len(available)} regions)"
+        return f"{header}\nNo providers for this region. Regions with data: {extra}"
+    lines = [header]
+    link = block.get("link")
+    if link:
+        lines.append(f"TMDB watch page: {link}")
+    for key, label in (
+        ("flatrate", "Stream"),
+        ("free", "Free"),
+        ("ads", "Free with ads"),
+        ("rent", "Rent"),
+        ("buy", "Buy"),
+    ):
+        names = _provider_names(block.get(key))
+        if names:
+            lines.append(f"  {label}: {names}")
+    if len(lines) == (2 if link else 1):
+        lines.append("  (no stream/rent/buy entries for this region)")
     return "\n".join(lines)
 
 
@@ -531,43 +652,58 @@ def multi_search(query: str) -> str:
         return f"Error in multi-search: {exc}"
 
 
-# ---------------------------------------------------------------------------
-# Availability check
-# ---------------------------------------------------------------------------
+@tool
+def tv_season(tmdb_id: str, season: str) -> str:
+    """Get one TV season from TMDB, including per-episode titles and overviews.
 
-_availability_checked = False
-_available = False
-
-
-def is_tmdb_available() -> bool:
-    """Return True if TMDB API is configured and reachable.
-
-    Caches the result after the first probe.
+    When to use: Episode list, air dates, runtimes, or TMDB plots for a season.
+        After tv_details (which only has season counts). Prefer this over scraping
+        TMDB HTML or Fandom.
+    When NOT to use: Show-level info (tv_details), one episode (tv_episode),
+        persisting into film_db (film_add_season).
+    Input: tmdb_id - TMDB TV show id. season - season number (0 = specials).
+    Output: Episode list from TMDB. Missing names/overviews stay empty.
     """
-    global _availability_checked, _available
-
-    if _availability_checked:
-        return _available
-
-    api_key = _get_api_key()
-    if not api_key:
-        logger.info("[tmdb] No API key found - TMDB tools disabled")
-        _availability_checked = True
-        _available = False
-        return False
-
-    # Quick probe: hit /configuration (lightweight endpoint)
     try:
-        _tmdb_request("/configuration")
-        logger.info("[tmdb] TMDB API available")
-        _availability_checked = True
-        _available = True
-        return True
+        data = _tmdb_request(f"/tv/{tmdb_id}/season/{season}")
+        return _format_season(data, tmdb_id)
     except Exception as exc:
-        logger.warning("[tmdb] Probe failed (%s) - TMDB tools disabled", exc)
-        _availability_checked = True
-        _available = False
-        return False
+        return f"Error getting TV season: {exc}"
+
+
+@tool
+def tv_episode(tmdb_id: str, season: str, episode: str) -> str:
+    """Get one TV episode from TMDB (title, overview, crew, guest stars).
+
+    When to use: A single episode's TMDB plot, director, or guests.
+    When NOT to use: Whole season (use tv_season), show details (tv_details).
+    Input: tmdb_id - TMDB TV show id. season and episode numbers.
+    Output: Episode heading, overview (empty if TMDB has none), director/writers.
+    """
+    try:
+        data = _tmdb_request(f"/tv/{tmdb_id}/season/{season}/episode/{episode}")
+        return _format_episode(data, tmdb_id)
+    except Exception as exc:
+        return f"Error getting TV episode: {exc}"
+
+
+@tool
+def watch_providers(tmdb_id: str, media_type: str = "movie", region: str = "") -> str:
+    """Where a movie or TV show can be streamed, rented, or bought (JustWatch via TMDB).
+
+    When to use: 'where can I watch X', streaming availability for a country.
+    When NOT to use: Title lookup (movie_search / tv_search), library status (film_get).
+    Input: tmdb_id - TMDB id. media_type - movie or tv (default movie).
+        region - ISO 3166-1 alpha-2 (default tools.tmdb.watch_region or DE).
+    Output: Stream / rent / buy provider names for that region. Attribute JustWatch.
+    """
+    try:
+        kind = "tv" if media_type.lower() in ("tv", "show", "series") else "movie"
+        loc = (region or "").strip() or str(_get_config_value("watch_region", "DE") or "DE")
+        data = _tmdb_request(f"/{kind}/{tmdb_id}/watch/providers")
+        return _format_watch_providers(data, loc, kind, tmdb_id)
+    except Exception as exc:
+        return f"Error getting watch providers: {exc}"
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +723,8 @@ def register_tmdb_tools(registry: ToolRegistry) -> int:
         "The Movie Database (TMDB). Use these tools for any entertainment "
         "media lookups - they provide structured, reliable data. "
         "Available tools: movie_search, movie_details, tv_search, tv_details, "
-        "person_search, person_details, trending_media, multi_search.",
+        "tv_season, tv_episode, person_search, person_details, trending_media, "
+        "multi_search, watch_providers.",
     )
 
     tools = [
@@ -595,10 +732,13 @@ def register_tmdb_tools(registry: ToolRegistry) -> int:
         movie_details,
         tv_search,
         tv_details,
+        tv_season,
+        tv_episode,
         person_search,
         person_details,
         trending_media,
         multi_search,
+        watch_providers,
     ]
     for func in tools:
         registry.register(func, category="TMDB")

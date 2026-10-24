@@ -145,6 +145,7 @@ The agent has no separate `mode` field. You select behaviour inline, inside `tex
 | `@build`           | Execute an approved plan; undo/redo from the apply bundle |
 | `@research`        | Multi-agent research                                |
 | `@coding`, `@code` | Coding mode (plan, edit, dry-run, undo)             |
+| `@film`, `@movie`  | Movies and TV: TMDB lookup, local library, recommend |
 | `@scheduler`       | Create/list/delete recurring jobs                   |
 | `@monitor`         | Create/list/delete website-change monitors          |
 | `@trip`, `@tripplanner` | Timed itinerary + Leaflet map (`/trips/{uuid}`) |

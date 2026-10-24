@@ -24,7 +24,13 @@ _EMPTY_HASH = hashlib.sha256(b"").hexdigest()
 
 
 def bundle_path_for(plan_path: Path | str) -> Path:
-    return Path(plan_path).expanduser().with_suffix(".apply.json.gz")
+    """Legacy plans use ``<file>.apply.json.gz``. A workspace uses ``<dir>/apply.json.gz``."""
+    path = Path(plan_path).expanduser()
+    if path.is_dir() and ((path / "plan.md").is_file() or (path / "progress.md").is_file()):
+        return path / "apply.json.gz"
+    if path.name == "plan.md" and (path.parent / "progress.md").is_file():
+        return path.parent / "apply.json.gz"
+    return path.with_suffix(".apply.json.gz")
 
 
 def save_apply_bundle(plan_path: Path | str, receipts: dict[str, dict[str, str]]) -> Path | None:
@@ -37,6 +43,11 @@ def save_apply_bundle(plan_path: Path | str, receipts: dict[str, dict[str, str]]
             files.append(entry)
     if not files:
         return None
+    # A resumed build must still undo to the original bytes, not the
+    # midpoint left by the first run.
+    previous = load_apply_bundle(plan_path)
+    if previous and previous.get("files"):
+        files = _merge_bundle_files(previous["files"], files)
     env = {
         "schema": SCHEMA,
         "plan_path": str(Path(plan_path).expanduser()),
@@ -68,6 +79,34 @@ def undo_bundle(plan_path: Path | str) -> str:
 def redo_bundle(plan_path: Path | str) -> str:
     """Write post-build content for every file in the bundle."""
     return _apply_side(plan_path, side="after")
+
+
+def _merge_bundle_files(old: list[dict[str, Any]], new: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the earliest ``before`` and the latest ``after`` per path."""
+    by_path: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for entry in old:
+        key = str(entry.get("path") or "")
+        if not key or key in by_path:
+            continue
+        by_path[key] = entry
+        order.append(key)
+    for entry in new:
+        key = str(entry.get("path") or "")
+        if not key:
+            continue
+        prev = by_path.get(key)
+        if prev is None:
+            by_path[key] = entry
+            order.append(key)
+            continue
+        merged = dict(prev)
+        merged["after"] = entry.get("after", prev.get("after"))
+        merged["post_hash"] = entry.get("post_hash") or prev.get("post_hash")
+        if entry.get("diff_text"):
+            merged["diff_text"] = entry.get("diff_text")
+        by_path[key] = merged
+    return [by_path[key] for key in order]
 
 
 def _entry_from_receipt(rec: dict[str, str]) -> dict[str, Any] | None:

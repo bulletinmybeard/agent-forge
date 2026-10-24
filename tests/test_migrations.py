@@ -16,7 +16,7 @@ from web.server.database.migrate import (
 )
 from web.server.database.models import Base
 
-CHAT_HEAD = "004_perm_profiles"
+CHAT_HEAD = "005_session_parent"
 PROMPT_LAB_HEAD = "001_pl_baseline"
 
 
@@ -58,7 +58,11 @@ def test_upgrade_is_idempotent(tmp_path: Path):
     upgrade(db, database="chat")
     upgrade(db, database="chat")
     assert current(db, database="chat") == CHAT_HEAD
-    assert len(list_applied(db, database="chat")) == 4
+    # Idempotent = the second upgrade logged nothing twice. Counting distinct
+    # revisions instead of a fixed number so a new migration doesn't fail here.
+    revisions = [row["revision"] for row in list_applied(db, database="chat")]
+    assert revisions == sorted(set(revisions))
+    assert revisions[-1] == CHAT_HEAD
 
 
 def test_legacy_db_is_stamped_not_recreated(tmp_path: Path):

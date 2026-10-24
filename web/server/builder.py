@@ -22,18 +22,31 @@ from agentforge.builder.intent import (
     is_redo_build,
     is_start_over_plan,
     is_undo_build,
-    parse_builder_query,
+    resolve_builder_phase,
+)
+from agentforge.builder.progress import (
+    has_started,
+    mark_progress,
+    parse_checklist,
+    remaining_task_ids,
 )
 from agentforge.builder.store import (
+    PlanTask,
+    brief_filename,
+    consumes_something,
     extract_section,
     merge_all_tasks,
     merge_overlapping_tasks,
     parse_frontmatter,
+    parse_interfaces,
     parse_tasks,
+    report_filename,
+    resolve_plan_ref,
+    rewrite_workspace,
     stamp_status,
     tasks_share_files,
     wrap_plan,
-    write_plan_file,
+    write_plan_workspace,
 )
 from agentforge.review.gather import gather_review_context
 from agentforge.review.loop import extract_agent_loop_output
@@ -103,7 +116,7 @@ async def run_builder(
     """Draft (@plan) or execute (@build) a gated markdown plan."""
     total_start = time.perf_counter()
     ws_closed = False
-    phase = "build" if mode == "build" else "plan"
+    phase, parsed = resolve_builder_phase(query, mode)
 
     def send_sync(msg: dict) -> None:
         nonlocal ws_closed
@@ -133,9 +146,6 @@ async def run_builder(
             is_incognito=(overrides or {}).get("incognito", False),
         )
 
-    parsed = parse_builder_query(query, default_phase=phase)
-    if parsed.phase in {"plan", "build"}:
-        phase = parsed.phase
     all_tool_calls: list = []
 
     try:
@@ -250,7 +260,10 @@ async def run_builder(
             )
 
             approved = False
-            if broker is not None:
+            # A started workspace was not rewritten. Don't ask to approve a draft
+            # that was not written. @build resumes it.
+            pending_draft = not _workspace_has_started(plan_path)
+            if broker is not None and pending_draft:
                 decision = await broker.request(
                     f"Approve this plan and start @build?\n{plan_path or '(unsaved)'}\nDeny to keep drafting in chat.",
                     ignore_auto_accept=True,
@@ -259,10 +272,7 @@ async def run_builder(
                 approved = bool(getattr(decision, "confirmed", decision))
 
             if approved and plan_path:
-                Path(plan_path).write_text(
-                    stamp_status(Path(plan_path).read_text(encoding="utf-8"), "approved"),
-                    encoding="utf-8",
-                )
+                plan_path = _stamp_plan_status(plan_path, "approved")
                 if hasattr(broker, "auto_accept"):
                     broker.auto_accept = True
                 build_report, build_calls, bptok, bctok = await _execute_plan(
@@ -289,7 +299,7 @@ async def run_builder(
                 )
                 report = build_report
                 all_tool_calls.extend(build_calls)
-            elif not approved:
+            elif pending_draft and not approved:
                 note = "\n\nPlan left as draft. Reply with changes, or say **approve the plan**."
                 await send_and_persist(
                     protocol.agent_result(note.strip(), 0.0),
@@ -392,6 +402,19 @@ async def _draft_plan(
     from agentforge.client import AIClient
     from web.server.ws_endpoint import _attachment_text_block, _strip_wrapping_fence
 
+    existing_kind = "missing"
+    existing_resolved: Path | None = None
+    if existing_path:
+        existing_kind, existing_resolved = resolve_plan_ref(existing_path)
+        if existing_kind == "workspace" and existing_resolved is not None:
+            progress_file = existing_resolved / "progress.md"
+            if progress_file.is_file() and has_started(progress_file.read_text(encoding="utf-8")):
+                note = (
+                    f"Plan at `{existing_resolved}` already has tasks in progress or done. "
+                    "Not rewriting it. Say **start over** for a new plan, or `@build` to resume."
+                )
+                return note, existing_resolved, [], 0, 0
+
     gather_txt = ""
     if parsed.target:
         gathered = gather_review_context(parsed.target, instruction=parsed.instruction)
@@ -405,10 +428,11 @@ async def _draft_plan(
         "Investigate with tools first. Cite `file:line` in Findings. Then write the plan.\n\n"
         f"{gather_txt}{docs}"
     )
-    if existing_path and Path(existing_path).is_file():
+    current_plan = _current_plan_text(existing_kind, existing_resolved)
+    if current_plan:
         user += (
             "\n\n--- current plan ---\n"
-            f"{Path(existing_path).read_text(encoding='utf-8')}\n"
+            f"{current_plan}\n"
             "--- end ---\nRevise this plan per the user. Keep task ids stable where possible.\n"
         )
     client = AIClient(profile=profile_name)
@@ -445,20 +469,28 @@ async def _draft_plan(
         ptok, ctok = _token_pair(tok)
     body = _strip_wrapping_fence((body or "").strip())
     created = datetime.now().strftime("%Y-%m-%d-%H-%M")
+    target, branch = carry_plan_meta(
+        _current_plan_text(existing_kind, existing_resolved),
+        target=parsed.target,
+        branch=parsed.branch,
+    )
     markdown = wrap_plan(
         body,
         status="draft",
-        target=parsed.target,
-        branch=parsed.branch,
+        target=target,
+        branch=branch,
         created=created,
     )
     slug = parsed.branch or parsed.instruction[:40] or "plan"
     try:
-        if existing_path and Path(existing_path).is_file():
-            Path(existing_path).write_text(markdown, encoding="utf-8")
-            path = Path(existing_path)
+        if existing_kind == "workspace" and existing_resolved is not None:
+            rewrite_workspace(existing_resolved, markdown)
+            path = existing_resolved
+        elif existing_kind == "file" and existing_resolved is not None:
+            existing_resolved.write_text(markdown, encoding="utf-8")
+            path = existing_resolved
         else:
-            path = write_plan_file(markdown, slug=slug, unique=True)
+            path = write_plan_workspace(markdown, slug=slug, unique=True)
     except Exception:
         logger.exception("plan file write failed")
         path = None
@@ -497,7 +529,57 @@ def _plan_path_from_text(text: str) -> str:
     if not match:
         return ""
     path = match.group(1).strip()
-    return path if path.endswith(".md") else ""
+    if path.endswith(".md") or path.startswith("/") or path.startswith("~"):
+        return path
+    return ""
+
+
+def carry_plan_meta(existing: str, *, target: str, branch: str) -> tuple[str, str]:
+    """Keep the saved repo and branch when a follow-up does not name them."""
+    meta, _body = parse_frontmatter(existing or "")
+    if not (target or "").strip():
+        target = (meta.get("target") or "").strip()
+    if not (branch or "").strip():
+        branch = (meta.get("branch") or "").strip()
+    return target, branch
+
+
+def _current_plan_text(kind: str, resolved: Path | None) -> str:
+    if resolved is None:
+        return ""
+    if kind == "workspace":
+        plan_md = resolved / "plan.md"
+        if plan_md.is_file():
+            return plan_md.read_text(encoding="utf-8")
+        return ""
+    if kind == "file" and resolved.is_file():
+        return resolved.read_text(encoding="utf-8")
+    return ""
+
+
+def _workspace_has_started(plan_path: Path | str | None) -> bool:
+    if not plan_path:
+        return False
+    kind, resolved = resolve_plan_ref(plan_path)
+    if kind != "workspace":
+        return False
+    progress = resolved / "progress.md"
+    if not progress.is_file():
+        return False
+    return has_started(progress.read_text(encoding="utf-8"))
+
+
+def _stamp_plan_status(plan_path: str, status: str) -> str:
+    """Stamp ``plan.md`` inside a workspace, or the legacy file. Return the stored path."""
+    kind, resolved = resolve_plan_ref(plan_path)
+    if kind == "workspace":
+        plan_md = resolved / "plan.md"
+        plan_md.write_text(stamp_status(plan_md.read_text(encoding="utf-8"), status), encoding="utf-8")
+        return str(resolved)
+    if kind == "file":
+        resolved.write_text(stamp_status(resolved.read_text(encoding="utf-8"), status), encoding="utf-8")
+        return str(resolved)
+    return plan_path
 
 
 def plan_path_from_message_list(messages: list | None) -> str:
@@ -524,6 +606,73 @@ def _plan_path_from_messages(db: ChatDatabase, session_id: str) -> str:
         return ""
 
 
+_STATUS_DONE_RE = re.compile(r"(?im)^\s*STATUS:\s*done\b")
+_STATUS_BLOCKED_RE = re.compile(r"(?im)^\s*STATUS:\s*blocked\b")
+_BLOCKED_LINE_RE = re.compile(r"(?im)^Blocked:")
+_EMPTY_PRODUCES = {"", "nothing", "none", "n/a", "-", "—"}
+
+
+def _is_blocked_report(report: str) -> bool:
+    if _STATUS_DONE_RE.search(report or ""):
+        return False
+    if _STATUS_BLOCKED_RE.search(report or ""):
+        return True
+    return bool(_BLOCKED_LINE_RE.search(report or ""))
+
+
+def _settle_report(path: Path, loop_text: str) -> str:
+    existing = ""
+    if path.is_file():
+        try:
+            existing = path.read_text(encoding="utf-8")
+        except OSError:
+            existing = ""
+    if existing.strip():
+        return existing
+    body = loop_text or ""
+    if body and not body.endswith("\n"):
+        body += "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    return body
+
+
+def _mark_progress_file(
+    path: Path,
+    task_id: str,
+    status: str,
+    note: str,
+    lock: threading.Lock,
+) -> None:
+    with lock:
+        current = path.read_text(encoding="utf-8") if path.is_file() else ""
+        path.write_text(mark_progress(current, task_id, status, note), encoding="utf-8")
+
+
+def _checklist_all_complete(path: Path | None) -> bool:
+    if path is None or not path.is_file():
+        return False
+    items = parse_checklist(path.read_text(encoding="utf-8"))
+    return bool(items) and all(item.status == "complete" for item in items)
+
+
+def _produces_block(task: PlanTask, originals: list[PlanTask], done_ids: set[str]) -> str:
+    if not consumes_something(task.body):
+        return ""
+    own = set(task.id.split("+"))
+    lines: list[str] = []
+    for prev in originals:
+        if prev.id not in done_ids or prev.id in own:
+            continue
+        _consumes, produced = parse_interfaces(prev.body)
+        if produced.lower() in _EMPTY_PRODUCES:
+            continue
+        lines.append(f"- {prev.id}: {produced}")
+    if not lines:
+        return ""
+    return "\n## Produced by earlier tasks\n" + "\n".join(lines) + "\n"
+
+
 async def _execute_plan(
     *,
     plan_path: Path,
@@ -540,12 +689,43 @@ async def _execute_plan(
     from agentforge.agent import AgentLoop
     from agentforge.client import AIClient
 
-    raw = plan_path.read_text(encoding="utf-8")
+    kind, resolved = resolve_plan_ref(plan_path)
+    if kind == "missing":
+        return f"Plan path does not exist: `{plan_path}`", [], 0, 0
+    workspace = resolved if kind == "workspace" else None
+    plan_file = (resolved / "plan.md") if workspace is not None else resolved
+    if not plan_file.is_file():
+        return f"Plan path does not exist: `{plan_file}`", [], 0, 0
+    raw = plan_file.read_text(encoding="utf-8")
     meta, body = parse_frontmatter(raw)
     target = meta.get("target") or ""
     findings = extract_section(body, "Findings")
     parsed_tasks = parse_tasks(body)
     tasks = merge_all_tasks(parsed_tasks) if len(parsed_tasks) <= 4 else merge_overlapping_tasks(parsed_tasks)
+    if not tasks:
+        tasks = [PlanTask(id="T1", title="Execute the plan", files=[], body=body)]
+        parsed_tasks = list(tasks)
+    originals = list(parsed_tasks)
+    progress_path = (workspace / "progress.md") if workspace is not None else None
+    progress_text = ""
+    if progress_path is not None and progress_path.is_file():
+        progress_text = progress_path.read_text(encoding="utf-8")
+    if workspace is not None and progress_text:
+        pending_ids = set(remaining_task_ids(progress_text, [task.id for task in tasks]))
+        pending = [task for task in tasks if task.id in pending_ids]
+    else:
+        pending = list(tasks)
+    complete_ids = {item.id for item in parse_checklist(progress_text) if item.status == "complete"}
+    if workspace is not None and not pending:
+        try:
+            plan_file.write_text(stamp_status(raw, "done"), encoding="utf-8")
+        except OSError:
+            logger.warning("could not stamp plan done: %s", plan_file)
+        recap = (
+            f"# Build recap\n\nPlan: `{workspace}`\nTarget: `{target}`\n\n"
+            f"Nothing left to run. Progress: `{progress_path}`\n"
+        )
+        return recap, [], 0, 0
     worker_prompt = _load_prompt("worker.md")
     client = AIClient(profile="coder")
     bridge = AgentBridge(
@@ -584,19 +764,17 @@ async def _execute_plan(
 
     rt.registry.set_file_diff_handler(_capture_diff)
 
-    if not tasks:
-        from agentforge.builder.store import PlanTask
-
-        tasks = [PlanTask(id="T1", title="Execute the plan", files=[], body=body)]
-
-    parallel = not tasks_share_files(tasks) and len(tasks) > 1
+    run_tasks = pending if workspace is not None else tasks
+    parallel = not tasks_share_files(run_tasks) and len(run_tasks) > 1
     workers = resolve_review_max_workers(4) if parallel else 1
     results: dict[str, str] = {}
     calls_out: list = []
     prompt_tokens = 0
     completion_tokens = 0
+    progress_lock = threading.Lock()
+    blocked_hit = False
 
-    def _run_task(task, prior: str = "") -> tuple[str, str, list]:
+    def _run_task(task, prior: str = "", done_ids: set[str] | None = None) -> tuple[str, str, list]:
         abs_files: list[str] = []
         for rel in task.files:
             if not rel or rel.startswith("__"):
@@ -605,16 +783,42 @@ async def _execute_plan(
             abs_files.append(str(Path(target) / rel) if target and not p.is_absolute() else rel)
         verify = _is_verify_task(task)
         tools = list(_PLAN_TOOLS) if verify else list(_BUILD_TOOLS)
-        system = f"{worker_prompt}\n\nRepository: `{target}`\n\n## {task.id} — {task.title}\n{task.body}\n"
+        report_path = (workspace / report_filename(task.id)) if workspace is not None else None
+        system = f"{worker_prompt}\n\nRepository: `{target}`\n\n"
+        if workspace is not None and report_path is not None:
+            brief_lines = [f"- `{workspace / brief_filename(part)}`" for part in task.id.split("+") if part]
+            system += (
+                "Read these briefs first. They are the task. Do not read plan.md or progress.md.\n"
+                + "\n".join(brief_lines)
+                + "\n\n"
+            )
+            if verify:
+                system += (
+                    "This is a verify task. Do not write files. "
+                    "Start your reply with `STATUS: done` or `STATUS: blocked`. "
+                    "The controller saves the report.\n"
+                    f"Do not write `{workspace / 'progress.md'}` or `{workspace / 'plan.md'}`.\n\n"
+                )
+            else:
+                system += (
+                    f"Write the full report to `{report_path}` with `write_file unique=false`.\n"
+                    "The report starts with `STATUS: done` or `STATUS: blocked`.\n"
+                    f"Do not write `{workspace / 'progress.md'}` or `{workspace / 'plan.md'}`.\n\n"
+                )
+        system += f"## {task.id} — {task.title}\n{task.body}\n"
         if findings:
             system += f"\n## Plan findings (already verified — do not re-investigate)\n{findings}\n"
-        if prior:
+        if workspace is not None:
+            system += _produces_block(task, originals, done_ids or set())
+        elif prior:
             system += f"\n## Already completed\n{prior}\n"
         user = (
             f"Complete {task.id} in `{target}`.\n"
             f"Update these files in place (write_file unique=false): {', '.join(abs_files) or target}\n"
             "read_file the target once, then write. Do not spend the budget re-proving Findings.\n"
         )
+        if report_path is not None and not verify:
+            user += f"Write the report to `{report_path}`.\n"
         if verify:
             user += "This is a verify task. Do not write files.\n"
         agent = AgentLoop(
@@ -632,62 +836,108 @@ async def _execute_plan(
         ptok, ctok = _token_pair(tok)
         return task.id, text, calls, ptok, ctok
 
+    def _finish_task(task, text: str) -> str:
+        nonlocal blocked_hit
+        if workspace is None or progress_path is None:
+            return text
+        report_path = workspace / report_filename(task.id)
+        report = _settle_report(report_path, text)
+        if _is_blocked_report(report):
+            _mark_progress_file(progress_path, task.id, "blocked", report_path.name, progress_lock)
+            blocked_hit = True
+            return report
+        _mark_progress_file(progress_path, task.id, "complete", report_path.name, progress_lock)
+        complete_ids.update(part for part in task.id.split("+") if part)
+        return report
+
+    skipped = len(tasks) - len(run_tasks) if workspace is not None else 0
+    detail = f"Build: {len(run_tasks)} task(s)"
+    if skipped:
+        detail += f", {skipped} already complete"
     if send_sync:
         send_sync(
             {
                 "type": "agent.iteration",
                 "iteration": 0,
-                "max_iterations": len(tasks),
-                "detail": f"Build: {len(tasks)} task(s)",
+                "max_iterations": len(run_tasks),
+                "detail": detail,
                 "elapsed": 0,
             }
         )
 
     if workers == 1:
         prior = ""
-        for i, task in enumerate(tasks, start=1):
+        for i, task in enumerate(run_tasks, start=1):
             if send_sync:
                 send_sync(
                     {
                         "type": "agent.iteration",
                         "iteration": i,
-                        "max_iterations": len(tasks),
+                        "max_iterations": len(run_tasks),
                         "detail": f"{task.id} — {task.title}",
                         "elapsed": 0,
                     }
                 )
-            tid, text, calls, ptok, ctok = await asyncio.to_thread(_run_task, task, prior)
-            results[tid] = text
+            if progress_path is not None:
+                _mark_progress_file(progress_path, task.id, "running", "", progress_lock)
+            tid, text, calls, ptok, ctok = await asyncio.to_thread(_run_task, task, prior, set(complete_ids))
+            results[tid] = _finish_task(task, text)
             calls_out.extend(calls)
             prompt_tokens += ptok
             completion_tokens += ctok
-            prior += f"\n### {tid}\n{text}\n"
+            if workspace is None:
+                prior += f"\n### {tid}\n{text}\n"
+            if blocked_hit:
+                break
     else:
+        if progress_path is not None:
+            for task in run_tasks:
+                _mark_progress_file(progress_path, task.id, "running", "", progress_lock)
+        snapshot = set(complete_ids)
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="build") as pool:
-            futs = {pool.submit(_run_task, t, ""): t.id for t in tasks}
+            futs = {pool.submit(_run_task, task, "", snapshot): task for task in run_tasks}
             for fut in as_completed(futs):
+                task = futs[fut]
                 try:
                     tid, text, calls, ptok, ctok = fut.result()
-                    results[tid] = text
+                    results[tid] = _finish_task(task, text)
                     calls_out.extend(calls)
                     prompt_tokens += ptok
                     completion_tokens += ctok
                 except Exception as exc:
-                    results[futs[fut]] = f"Failed: {exc}"
+                    results[task.id] = f"Failed: {exc}"
+                    if progress_path is not None:
+                        _mark_progress_file(progress_path, task.id, "blocked", "", progress_lock)
+                        blocked_hit = True
 
-    lines = ["# Build recap", "", f"Plan: `{plan_path}`", f"Target: `{target}`", ""]
+    stored = workspace if workspace is not None else plan_file
+    lines = ["# Build recap", "", f"Plan: `{stored}`", f"Target: `{target}`", ""]
     for task in tasks:
         lines.append(f"## {task.id} — {task.title}")
-        lines.append(results.get(task.id, "(no output)"))
+        if task.id in results:
+            lines.append(results[task.id])
+        elif workspace is not None:
+            lines.append("Already complete.")
+        else:
+            lines.append("(no output)")
+        lines.append("")
+    if blocked_hit and workspace is not None:
+        lines.append(f"Stopped. Progress: `{progress_path}`")
+        lines.append("Resume with `@build`.")
         lines.append("")
     recap = "\n".join(lines)
-    try:
-        plan_path.write_text(stamp_status(raw, "done"), encoding="utf-8")
-    except OSError:
-        logger.warning("could not stamp plan done: %s", plan_path)
+    finished = workspace is None or (not blocked_hit and _checklist_all_complete(progress_path))
+    if finished:
+        try:
+            plan_file.write_text(
+                stamp_status(plan_file.read_text(encoding="utf-8"), "done"),
+                encoding="utf-8",
+            )
+        except OSError:
+            logger.warning("could not stamp plan done: %s", plan_file)
     bundle = None
     try:
-        bundle = save_apply_bundle(plan_path, receipts)
+        bundle = save_apply_bundle(stored, receipts)
     except Exception:
         logger.exception("build apply bundle failed")
     if bundle:

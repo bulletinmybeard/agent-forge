@@ -103,8 +103,11 @@ Hosts must be on `tools.ssh.allowed_hosts`. Remote **command strings** use the s
 | `web_fetch`          | Fetch and extract a page as text                 |
 | `web_fetch_rendered` | Fetch a page via headless browser (SPA-friendly) |
 | `web_screengrab`     | Screenshot a rendered page                       |
+| `web_fetch_scrapling`| GET a page directly and return markdown          |
 
-These run in the sidecar (locality `remote`). See [Plugins and availability](#plugins-and-availability). The sidecar validates targets (no private/loopback/link-local URLs unless `SIDECAR_ALLOW_PRIVATE_URLS=1`) and requires `X-Sidecar-Token` when `SIDECAR_AUTH_TOKEN` is set. See [SECURITY.md](SECURITY.md) for more.
+`web_fetch_scrapling` is the exception: it runs on the worker, GETs the URL itself through Scrapling's `Fetcher` (curl_cffi with Chrome TLS impersonation) and converts the HTML to markdown. It does not execute JavaScript — use `web_fetch_rendered` for SPAs. Takes an optional CSS `selector` and a `max_chars` cap (default 8000, max 64000). Needs the `scrapling[rag]` extra; without it the tool is registered but errors when called.
+
+The rest run in the sidecar (locality `remote`). See [Plugins and availability](#plugins-and-availability). The sidecar validates targets (no private/loopback/link-local URLs unless `SIDECAR_ALLOW_PRIVATE_URLS=1`) and requires `X-Sidecar-Token` when `SIDECAR_AUTH_TOKEN` is set. See [SECURITY.md](SECURITY.md) for more.
 
 ## OpenRouteService (trips)
 
@@ -171,6 +174,9 @@ Geocoding, driving/walking directions, and POIs for the `@trip` agent. Always re
 | `image_optimize` | Compress images for the web                    |
 | `image_metadata` | Extract EXIF, dimensions, camera info          |
 | `generate_icons` | Generate a favicon/app-icon set from one image |
+| `image_analyze`  | Describe an image with the `vision` profile    |
+
+`image_analyze` reads a local raster image (png / jpg / webp / gif / bmp / tiff, 20 MB cap) and sends it to the `vision` profile with an optional `question`. A path mentioned in a prompt is not attached by itself, and `read_file` on an image returns binary — call this tool instead.
 
 ## Audio
 
@@ -238,6 +244,34 @@ Structured movie, TV, and person lookups from [The Movie Database](https://www.t
 | `person_details` | Full bio and filmography                         |
 | `trending_media` | What's trending now (movie, tv, person, or all)  |
 | `multi_search`   | Search movies, TV, and people at once            |
+| `tv_season`      | One season's episode list (titles, air dates)    |
+| `tv_episode`     | One episode: plot, director, guest cast          |
+| `watch_providers`| Stream / rent / buy by region (JustWatch)        |
+
+## Decision (Clef)
+
+| Tool     | Description                                            |
+| -------- | ------------------------------------------------------ |
+| `decide` | Score a state against named questions, returns odds    |
+
+`decide` calls Ollama's `POST /v1/systemone` — a decision pass, not a chat completion. It returns probabilities for `choice`, `noul` (yes/no), and `score` questions (1-64 of them), with up to 4 images (4 MiB each, 8 MiB total). `clef:cloud` needs an Ollama server at **0.40.6** or later; an older one returns `404 page not found`.
+
+## Film library (`@film`)
+
+| Tool                                           | Description                               |
+| ---------------------------------------------- | ----------------------------------------- |
+| `film_add` / `film_get` / `film_search`        | Add, read, and search the local library   |
+| `film_add_season` / `film_get_season`          | Store and read a show's season + episodes |
+| `film_stats`                                   | Library counts by type and status         |
+| `film_set_status`                              | Set watch status on a title or a list     |
+| `film_lists`                                   | List the named lists                      |
+| `film_list_create` / `_show` / `_delete`       | Create, read, and drop a list             |
+| `film_list_add` / `_remove` / `_clear`         | Move titles in and out of a list          |
+| `film_recommend`                               | Similar titles from Qdrant neighbours     |
+| `film_recommend_ai`                            | Recommendations via a nested agent pass   |
+| `film_simkl_connect` / `film_simkl_import`     | Link a Simkl account and import its items |
+
+Backed by a local SQLite database (`tools.film.db_path`, or `AGENTFORGE_FILM_DB`) plus TMDB for lookups. Semantic neighbours reuse the Qdrant `media_fingerprints` collection, and recommendations degrade to TMDB-only when Qdrant is absent. Simkl import is OAuth (AUTH V2 + PKCE): open `GET /api/film/simkl/connect`, approve, then run `film_simkl_import`.
 
 ## Cloud storage (optional)
 

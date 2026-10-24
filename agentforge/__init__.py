@@ -1,3 +1,8 @@
 """AgentForge — composable pipelines and agent loops over pluggable LLM backends."""
 
-__version__ = "0.13.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("agent-forge")
+except PackageNotFoundError:  # source checkout, not installed
+    __version__ = "0.0.0+unknown"

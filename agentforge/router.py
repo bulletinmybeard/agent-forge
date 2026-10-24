@@ -44,6 +44,7 @@ MODE_CAPABILITY: dict[str, str] = {
     "review": "agent",
     "research": "agent",
     "web_search": "agent",
+    "film": "agent",
     "chat": "general",
 }
 

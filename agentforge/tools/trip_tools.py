@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 
 from chalkbox.logging.bridge import get_logger
 
+from agentforge import __version__
 from agentforge.trips import service
 from agentforge.trips.ors import OrsError
 
@@ -30,7 +31,7 @@ def _error(exc: Exception) -> str:
     return _dumps({"error": str(exc)})
 
 
-_WIKI_UA = "agentforge-trip/0.1"
+_WIKI_UA = f"agentforge-trip/{__version__}"
 _WIKI_TIMEOUT = 12
 
 

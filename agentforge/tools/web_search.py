@@ -7,11 +7,13 @@ Default provider is Ollama Cloud (unchanged behaviour from the original
 single-vendor implementation). Operators can switch to Brave or Tavily
 via ``tools.web_search.provider`` / ``tools.web_fetch.provider`` in
 ``config.yaml`` and configure cross-provider fallbacks for resilience
-against rate limits / outages.
+against rate limits / outages. Each provider block under
+``tools.web_search.<provider>`` has its own ``enabled`` / ``max_results``
+/ ``fetch_max_chars``.
 
 Requirements:
   - At least one provider with a valid API key. Today:
-      • Ollama Cloud — set ``OLLAMA_API_KEY`` env or ``tools.web_search.api_key``
+      • Ollama Cloud — set ``OLLAMA_API_KEY`` env or ``tools.web_search.ollama.api_key``
       • Brave Search — set ``BRAVE_API_KEY`` env or ``tools.web_search.brave.api_key``
       • Tavily Search — set ``TAVILY_API_KEY`` env or ``tools.web_search.tavily.api_key``
 
@@ -36,6 +38,7 @@ from chalkbox.logging.bridge import get_logger
 from .registry import tool
 from .search_providers import (
     FetchResult,
+    NoProviderAvailable,
     ProviderError,
     SearchResult,
     fetch_with_fallback,
@@ -43,6 +46,7 @@ from .search_providers import (
 )
 from .search_providers import _resolve_fetch_chain as _resolve_fetch_chain  # noqa: F401
 from .search_providers import _resolve_search_chain as _resolve_search_chain  # noqa: F401
+from .search_providers.settings import MAX_RESULTS_CAP, fetch_max_chars_for
 
 if TYPE_CHECKING:
     from .registry import ToolRegistry
@@ -50,37 +54,21 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Config helpers
-# ---------------------------------------------------------------------------
+_KEY_HINT = (
+    "Configure at least one provider's API key:\n"
+    "  • Ollama:  set OLLAMA_API_KEY or tools.web_search.ollama.api_key\n"
+    "  • Brave:   set BRAVE_API_KEY or tools.web_search.brave.api_key\n"
+    "  • Tavily:  set TAVILY_API_KEY or tools.web_search.tavily.api_key"
+)
 
 
-def _get_max_results() -> int:
-    """Max search results to return (default: 5, hard cap: 20).
-
-    The hard cap matches Brave + Tavily limits; Ollama's API max was 10
-    historically but accepts larger values silently. We clamp to 20 so
-    the cap is consistent across providers.
+def _provider_error_message(prefix: str, exc: ProviderError, hint: str) -> str:
+    """Only point at API keys when missing keys are actually the problem —
+    a cooled-down or failing provider needs no config change.
     """
-    try:
-        from agentforge.config import get_config
-
-        cfg = get_config()
-        n = cfg._raw.get("tools", {}).get("web_search", {}).get("max_results", 5)
-        return min(int(n), 20)
-    except Exception:
-        return 5
-
-
-def _get_fetch_max_chars() -> int:
-    """Max characters to return from web_fetch (default: 8000)."""
-    try:
-        from agentforge.config import get_config
-
-        cfg = get_config()
-        return int(cfg._raw.get("tools", {}).get("web_search", {}).get("fetch_max_chars", 8000))
-    except Exception:
-        return 8000
+    if isinstance(exc, NoProviderAvailable) and any(why != "no API key" for why in exc.reasons.values()):
+        return f"{prefix}: {exc}"
+    return f"{prefix}: {exc}\n\n{hint}"
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +191,7 @@ def web_search(query: str, max_results: int = 0) -> str:
         local file searches (use find_files), if no API key is configured.
 
     query: the search query in natural language
-    max_results: number of results to return (default: 5, max: 20)
+    max_results: number of results to return (default: the provider's configured max_results, max: 20)
     """
     if not query or not query.strip():
         return "Error: No search query provided."
@@ -213,22 +201,15 @@ def web_search(query: str, max_results: int = 0) -> str:
             max_results = int(max_results)
         except ValueError:
             max_results = 0
-    if max_results <= 0:
-        max_results = _get_max_results()
-    max_results = min(max_results, 20)
+    # <= 0 lets each provider use its own tools.web_search.<provider>.max_results
+    max_results = min(max(max_results, 0), MAX_RESULTS_CAP)
 
     logger.debug("[web_search] Searching: %s (max %d)", query[:80], max_results)
 
     try:
         results = search_with_fallback(query, max_results)
     except ProviderError as exc:
-        return (
-            f"Search error: {exc}\n\n"
-            "Configure at least one provider's API key:\n"
-            "  • Ollama:  set OLLAMA_API_KEY or tools.web_search.api_key\n"
-            "  • Brave:   set BRAVE_API_KEY or tools.web_search.brave.api_key\n"
-            "  • Tavily:  set TAVILY_API_KEY or tools.web_search.tavily.api_key"
-        )
+        return _provider_error_message("Search error", exc, _KEY_HINT)
 
     logger.debug("[web_search] Got %d results", len(results))
     return _format_search_results(query, results)
@@ -277,15 +258,16 @@ def web_fetch(url: str) -> str:
     try:
         result = fetch_with_fallback(url)
     except ProviderError as exc:
-        return (
-            f"Fetch error: {exc}\n\n"
+        return _provider_error_message(
+            "Fetch error",
+            exc,
             "Configure at least one fetch provider:\n"
-            "  • Ollama:  set OLLAMA_API_KEY or tools.web_search.api_key\n"
+            "  • Ollama:  set OLLAMA_API_KEY or tools.web_search.ollama.api_key\n"
             "  • Tavily:  set TAVILY_API_KEY or tools.web_search.tavily.api_key\n"
-            "(Brave does not offer a fetch endpoint.)"
+            "(Brave does not offer a fetch endpoint.)",
         )
 
-    rendered = _format_fetch_result(url, result, _get_fetch_max_chars())
+    rendered = _format_fetch_result(url, result, fetch_max_chars_for(result.provider))
     logger.debug("[web_fetch] %d chars from %s", len(result.content or ""), url[:60])
     return rendered
 

@@ -19,7 +19,7 @@ def test_high_entropy_catch_all_redacts_unknown_tokens():
     # A token with NO known format under a NON-credential key name — the residual
     # the keyword/signature layers can't reach. The high-entropy layer catches it.
     for line in [
-        'mystery_field: "F7HHYZMXZCKIGIXUYHFZ1234"',
+        'mystery_field: "QZ7XKVNB2DJHRWMYT4PS9CLA"',
         'x: "aB3kQ9zR7yL4mP2wN8tH6jF1cD5eG0v"',
     ]:
         assert "[REDACTED:" in _redact(line), line
