@@ -16,6 +16,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from web.server.identity import current_user_id
+
 from .api import _SAFE_SESSION_RE, get_db, get_upload_base
 from .conversation_memory import get_conversation_memory
 
@@ -42,11 +44,18 @@ class UserDataDeleteRequest(BaseModel):
     confirm: str
 
 
-def clear_session_attachments(upload_base: Path | None) -> int:
+def clear_session_attachments(
+    upload_base: Path | None,
+    *,
+    only_session_ids: set[str] | None = None,
+) -> int:
     """Remove session upload directories. Returns how many directories went.
 
     Skips the operational directories in ``_KEEP_UPLOAD_DIRS``, symlinks, and
     names that could not have been created by the upload route.
+
+    ``only_session_ids`` limits the wipe to those session directories. ``None``
+    still clears every session directory (auth off, single user).
     """
     if upload_base is None or not upload_base.is_dir():
         return 0
@@ -55,6 +64,8 @@ def clear_session_attachments(upload_base: Path | None) -> int:
         if child.is_symlink() or not child.is_dir():
             continue
         if child.name in _KEEP_UPLOAD_DIRS or not _SAFE_SESSION_RE.match(child.name):
+            continue
+        if only_session_ids is not None and child.name not in only_session_ids:
             continue
         shutil.rmtree(child)
         removed += 1
@@ -71,6 +82,9 @@ def _memory_status() -> str:
     if mem is None:
         return "unavailable"
     try:
+        actor = current_user_id()
+        if actor:
+            return "cleared" if mem.delete_for_user(actor) else "failed"
         return "cleared" if mem.delete_all() else "failed"
     except Exception as exc:
         logger.warning("user-data delete: conversation memory clear failed: %s", exc)
@@ -83,8 +97,10 @@ def delete_user_data(body: UserDataDeleteRequest):
     if body.confirm != _CONFIRM:
         raise HTTPException(status_code=400, detail='confirm must be "delete"')
 
+    actor = current_user_id()
+    owned_ids = set(get_db().list_session_ids()) if actor else None
     deleted = get_db().delete_user_chat_data()
-    deleted["attachments"] = clear_session_attachments(get_upload_base())
+    deleted["attachments"] = clear_session_attachments(get_upload_base(), only_session_ids=owned_ids)
     deleted["conversation_memory"] = _memory_status()
     payload = {"deleted": deleted, "kept": list(_KEPT)}
     if deleted["conversation_memory"] == "failed":

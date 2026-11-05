@@ -34,7 +34,8 @@ if str(SERVICE_ROOT) not in sys.path:
 
 from agentforge.session_logging import configure_session_logging
 from app.config import settings as af_settings
-from app.security import enforce_auth_policy, install_api_key_auth, install_internal_auth
+from app.security import enforce_auth_policy, install_api_key_auth, install_internal_auth, set_auth_database
+from web.server.identity import apply_admin_password, apply_admin_username
 
 from . import api as api_module
 from . import ws_endpoint
@@ -44,6 +45,8 @@ from .api import set_database as set_api_database
 from .api import set_upload_config
 from .api_memory import router as memory_router
 from .api_user_data import router as user_data_router
+from .auth_api import router as auth_router
+from .auth_api import users_router as users_api_router
 from .botty_endpoint import router as botty_router
 from .botty_endpoint import set_database as set_botty_database
 from .canvas.api import init_canvas_api
@@ -56,6 +59,7 @@ from .connectors.api import router as connectors_api_router
 from .database import ChatDatabase
 from .model_catalog.api import router as model_catalog_router
 from .monitor_service import init_monitor, shutdown_monitor
+from .ownership import session_owned
 from .permissions.api import router as permissions_api_router
 from .prompt_lab.database.manager import PromptLabDatabase
 from .scheduler_service import init_scheduler, shutdown_scheduler
@@ -133,6 +137,9 @@ async def lifespan(app: FastAPI):
     # Initialise database
     db = _init_database()
     set_api_database(db)
+    set_auth_database(db)
+    apply_admin_username(db)
+    apply_admin_password(db)
 
     # Configure file uploads
     config_path = SERVICE_ROOT / "config.yaml"
@@ -163,6 +170,11 @@ async def lifespan(app: FastAPI):
         candidate = (_uploads_base / filepath).resolve()
         if not candidate.is_file() or not candidate.is_relative_to(_uploads_base):
             raise HTTPException(status_code=404, detail="not found")
+        # monitor/ and screenshots/ are operational, not a chat. Everything
+        # else is data/uploads/<session_id>/ and follows the session owner.
+        owner_key = filepath.split("/", 1)[0]
+        if owner_key not in {"monitor", "screenshots"} and not session_owned(owner_key):
+                raise HTTPException(status_code=404, detail="not found")
         return FileResponse(candidate, headers={"X-Content-Type-Options": "nosniff"})
 
     # Make database available to WebSocket handler
@@ -328,6 +340,8 @@ app.include_router(ws_router)
 
 # REST API endpoints
 app.include_router(api_router)
+app.include_router(auth_router)
+app.include_router(users_api_router)
 
 # Internal endpoints — called by the native worker (not the browser)
 app.include_router(internal_router)

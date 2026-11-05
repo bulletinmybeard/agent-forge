@@ -64,6 +64,7 @@ from . import protocol
 from .agent_bridge import AgentBridge
 from .confirm import ConfirmationBroker, unanswered_confirm_request
 from .database import ChatDatabase
+from .identity import current_user_id as _current_user_id
 from .mode_routing import CONNECTOR_ALIASES as _CONNECTOR_ALIASES
 from .mode_routing import STICKY_MODES as _STICKY_MODES
 from .mode_routing import strip_mode_prefix as _strip_mode_prefix
@@ -2195,15 +2196,33 @@ def _resolve_skills(
     return cleaned, result, promoted_mode
 
 
+def _connector_aliases(rt: SearchRuntime) -> dict[str, dict]:
+    """Connector aliases the logged-in user may route to."""
+    mgr = getattr(rt, "connection_manager", None)
+    if mgr is None:
+        return {}
+    fn = getattr(mgr, "aliases_for_actor", None)
+    return fn() if callable(fn) else {}
+
+
+def _connector_cfg_allowed(cfg: dict | None) -> bool:
+    """False when this connector agent belongs to someone else."""
+    if not cfg or cfg.get("source") != "connector":
+        return bool(cfg)
+    actor = _current_user_id()
+    if not actor:
+        return True
+    return cfg.get("user_id") == actor
+
+
 def _agent_ref_for_connection(conn: dict, rt: SearchRuntime) -> str | None:
     """Agent ref for a connection: its account agent if grouped, else its own."""
     mgr = rt.connection_manager
-    acct = (conn.get("account_identifier") or "").strip()
-    if acct:
-        cfg = mgr._account_agents.get(account_slug(acct))
-        if cfg:
-            return f"custom:{cfg['id']}"
-    cfg = mgr._agents.get(conn["id"])
+    if mgr is None:
+        return None
+    cfg = mgr.account_agent_for(conn) if hasattr(mgr, "account_agent_for") else None
+    if cfg is None:
+        cfg = mgr._agents.get(conn["id"])
     return f"custom:{cfg['id']}" if cfg else None
 
 
@@ -2323,8 +2342,17 @@ def _strip_custom_prefix(query: str, rt: SearchRuntime) -> tuple[str, str | None
             rest = stripped[len(alias) :].lstrip()
             return _resolve_connector_agent(rest, rt)
 
-    # 2. Start-of-query alias detection (@cloud, @debug, etc.)
+    # 2. This user's connector aliases. The shared dict also holds other
+    #    users' connectors (tools stay registered in-process). Skip those.
+    for alias, agent_cfg in _connector_aliases(rt).items():
+        if lower.startswith(alias + " ") or lower == alias:
+            rest = stripped[len(alias) :].lstrip()
+            return rest, f"custom:{agent_cfg['id']}"
+
+    # 3. Start-of-query alias detection (@cloud, @debug, etc.)
     for alias, agent_cfg in rt.custom_agents.items():
+        if agent_cfg.get("source") == "connector":
+            continue
         # Match "alias " (with trailing space) or bare alias at end of string
         if lower.startswith(alias + " ") or lower == alias:
             rest = stripped[len(alias) :].lstrip()
@@ -2779,7 +2807,13 @@ async def _classify_mode(
         try:
             agents_registry = getattr(rt, "custom_agents", {}) or {}
             seen_ids: set[str] = set()
-            for alias, cfg in agents_registry.items():
+            # Drop connector entries from the shared dict. Another user's
+            # alias can sit on the same key. Add back only this user's.
+            visible = {
+                alias: cfg for alias, cfg in agents_registry.items() if cfg.get("source") != "connector"
+            }
+            visible.update(_connector_aliases(rt))
+            for alias, cfg in visible.items():
                 agent_id = (cfg.get("id") or alias).strip()
                 if agent_id in seen_ids:
                     continue  # multiple aliases share one agent — list once
@@ -4423,7 +4457,9 @@ async def _enqueue_job(
 
     # Pass all data as task args — the worker does NOT read job_store.db.
     overrides_json = json.dumps(overrides) if overrides else None
-    enqueue_agent_job(job_id, session_id, query, mode, overrides_json)
+    from web.server.identity import current_user_id
+
+    enqueue_agent_job(job_id, session_id, query, mode, overrides_json, user_id=current_user_id())
     logger.info("Enqueued job %s (session=%s, mode=%s)", job_id, session_id, mode)
     return job_id
 
@@ -4502,6 +4538,13 @@ async def websocket_chat(
     if session_id:
         existing_session = db.get_session(session_id)
         if not existing_session:
+            from web.server.identity import current_user_id
+
+            actor = current_user_id()
+            owner = db.get_session_owner(session_id) if actor else None
+            if owner and owner != actor:
+                await ws.close(code=1008)
+                return
             session_id = None
 
     # Thread-safe sender for agent callbacks
@@ -4988,7 +5031,13 @@ async def websocket_chat(
                 "@discover, @sql, @pipeline, @scheduler, @monitor, "
                 "@review, @research, @coding/@code, @plan, @build, @film/@movie"
             )
-            custom_aliases = sorted(("@" + a) for a in (getattr(rt, "custom_agents", {}) or {}).keys())
+            custom_aliases = sorted(
+                "@" + alias
+                for alias, cfg in (getattr(rt, "custom_agents", {}) or {}).items()
+                if cfg.get("source") != "connector"
+            )
+            custom_aliases.extend(sorted(_connector_aliases(rt)))
+            custom_aliases = sorted(set(custom_aliases))
             custom_str = ", ".join(custom_aliases) if custom_aliases else "(none)"
             msg = (
                 f"**No such mode `{bad_prefix}`.** Did you mean one of these?\n\n"
@@ -5343,13 +5392,20 @@ async def websocket_chat(
                 cancel_event,
             )
         elif mode.startswith(("custom:connector:", "custom:connector-account:")):
-            # Connector agents run inline (tools are closures bound to ConnectionManager)
+            # Connector agents run inline (tools are closures bound to ConnectionManager).
+            # Look up by id on the manager. The shared alias dict can hold another user's copy.
             agent_id = mode[len("custom:") :]
-            # Look up in both custom_agents and connection_manager._agents
-            agent_cfg = rt.get_custom_agent_by_id(agent_id)
-            if not agent_cfg and hasattr(rt, "connection_manager") and rt.connection_manager:
-                connection_id = agent_id.replace("connector:", "", 1)
-                agent_cfg = rt.connection_manager._agents.get(connection_id)
+            agent_cfg = None
+            mgr = getattr(rt, "connection_manager", None)
+            if mgr is not None:
+                if agent_id.startswith("connector-account:"):
+                    agent_cfg = mgr._account_agents.get(agent_id)
+                elif agent_id.startswith("connector:"):
+                    agent_cfg = mgr._agents.get(agent_id[len("connector:") :])
+            if agent_cfg is None:
+                agent_cfg = rt.get_custom_agent_by_id(agent_id)
+            if not _connector_cfg_allowed(agent_cfg):
+                agent_cfg = None
             if agent_cfg:
                 active_task = _start_inline(
                     _run_custom_agent(
@@ -5433,7 +5489,12 @@ async def websocket_chat(
                             parent_session_id=initial_parent,
                         )
                     except ValueError as exc:
-                        await ws.send_json(protocol.agent_error(str(exc)))
+                        detail = str(exc)
+                        from web.server.identity import current_user_id
+
+                        if current_user_id() and detail == "session already exists":
+                            detail = "session not found"
+                        await ws.send_json(protocol.agent_error(detail))
                         continue
                     session_id = new_id
                     if initial_provider:

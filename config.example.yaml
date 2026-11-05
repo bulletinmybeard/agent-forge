@@ -53,7 +53,9 @@ indexer:
 # Clients send `Authorization: Bearer <key>` or `X-API-Key: <key>`; browsers
 # pass the key as a WebSocket subprotocol or `?api_key=<key>`. /health and the
 # internal worker callbacks are exempt. Generate a key: openssl rand -hex 32
-# Env AGENTFORGE_API_KEYS (comma-separated) overrides this list.
+# AGENTFORGE_API_KEYS replaces this list only when it contains a key.
+# A blank value leaves the list alone. The WebUI login is separate
+# (AGENTFORGE_ADMIN_USERNAME / AGENTFORGE_ADMIN_PASSWORD).
 security:
   api_keys: []
 

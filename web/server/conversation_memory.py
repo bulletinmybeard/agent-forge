@@ -31,6 +31,8 @@ from qdrant_client.models import (
 )
 
 from app.config import settings as _af_settings
+from app.services.qdrant_owner import backfill_missing_owner
+from web.server.identity import ADMIN_USER_ID, current_user_id
 
 if TYPE_CHECKING:
     from app.services.embedding_service import EmbeddingService
@@ -96,7 +98,7 @@ class ConversationMemory:
                 )
                 logger.info("Created conversation_memory collection '%s' (dim=%d)", self._collection, self._dimension)
             # Ensure payload indexes
-            for field in ("session_id", "mode"):
+            for field in ("session_id", "mode", "user_id"):
                 try:
                     client.create_payload_index(
                         collection_name=self._collection,
@@ -115,6 +117,7 @@ class ConversationMemory:
             except Exception:
                 pass  # already exists
             self._ready = True
+            self._backfill_admin_owner()
             logger.info("ConversationMemory ready (collection=%s)", self._collection)
         except Exception as exc:
             logger.warning("ConversationMemory init failed (Qdrant unreachable?): %s", exc)
@@ -179,6 +182,7 @@ class ConversationMemory:
             point_id = self._make_id(session_id, query)
             payload = {
                 "session_id": session_id,
+                "user_id": current_user_id() or ADMIN_USER_ID,
                 "query": query[:500],
                 "response": response[:1500],
                 "mode": mode,
@@ -227,6 +231,10 @@ class ConversationMemory:
                 must_not.append(
                     FieldCondition(key="session_id", match=MatchValue(value=sid_to_exclude)),
                 )
+
+            actor = current_user_id()
+            if actor:
+                must.append(FieldCondition(key="user_id", match=MatchValue(value=actor)))
 
             if max_age_days:
                 cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
@@ -366,6 +374,56 @@ class ConversationMemory:
             logger.warning("Failed to prune conversation_memory: %s", exc)
             return 0
 
+    def delete_for_user(self, user_id: str) -> bool:
+        """Delete points stamped with ``user_id``. Other users stay."""
+        if not self._ready or not user_id:
+            return False
+        try:
+            client = self._get_client()
+            client.delete(
+                collection_name=self._collection,
+                points_selector=Filter(
+                    must=[FieldCondition(key="user_id", match=MatchValue(value=user_id))],
+                ),
+            )
+            logger.info("Cleared conversation_memory points for user %s", user_id)
+            return True
+        except Exception as exc:
+            logger.warning("Failed to clear conversation_memory for user %s: %s", user_id, exc)
+            return False
+
+    def point_owned(self, point_id: str) -> bool:
+        """True when auth is off, or the point's ``user_id`` is the current user.
+
+        Points with no ``user_id`` stay unreadable while the wall is on.
+        """
+        actor = current_user_id()
+        if not actor:
+            return True
+        if not self._ready:
+            return False
+        try:
+            points = self._get_client().retrieve(
+                collection_name=self._collection,
+                ids=[point_id],
+                with_payload=True,
+            )
+        except Exception as exc:
+            logger.warning("conversation_memory retrieve %s failed: %s", point_id, exc)
+            return False
+        if not points:
+            return False
+        return (points[0].payload or {}).get("user_id") == actor
+
+    def _backfill_admin_owner(self) -> None:
+        """Tag points that have no ``user_id`` as the admin user."""
+        try:
+            stamped = backfill_missing_owner(self._get_client(), self._collection)
+            if stamped:
+                logger.info("conversation_memory stamped user_id on %d points", stamped)
+        except Exception as exc:
+            logger.warning("conversation_memory user backfill skipped: %s", exc)
+
     def delete_all(self) -> bool:
         """Delete every point in the collection. Used by the Settings UI.
 
@@ -415,9 +473,20 @@ class ConversationMemory:
         try:
             client = self._get_client()
             info = client.get_collection(self._collection)
+            points_count = info.points_count
+            actor = current_user_id()
+            if actor:
+                counted = client.count(
+                    collection_name=self._collection,
+                    count_filter=Filter(
+                        must=[FieldCondition(key="user_id", match=MatchValue(value=actor))],
+                    ),
+                    exact=True,
+                )
+                points_count = int(getattr(counted, "count", 0) or 0)
             return {
                 "collection": self._collection,
-                "points_count": info.points_count,
+                "points_count": points_count,
                 "status": info.status.value if info.status else "unknown",
             }
         except Exception:

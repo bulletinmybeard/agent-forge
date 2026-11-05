@@ -18,6 +18,7 @@ from app.services.knowledge_vector_service import KnowledgeVectorService
 def mock_client():
     client = MagicMock()
     client.get_collections.return_value = types.SimpleNamespace(collections=[])
+    client.scroll.return_value = ([], None)
     return client
 
 
@@ -52,6 +53,7 @@ class TestEnsureCollection:
         assert "created_at" in indexed_fields
         assert "updated_at" in indexed_fields
         assert "source_url" in indexed_fields
+        assert "user_id" in indexed_fields
 
 
 class TestUpsertBatch:

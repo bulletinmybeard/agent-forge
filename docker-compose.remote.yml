@@ -53,8 +53,8 @@ services:
 
   # RAG index/search API (:8100), exposed at API_DOMAIN for remote indexing/test
   # runs. LAN-only by default — exposing it makes the indexer + /search endpoints
-  # reachable from the internet, so set security.api_keys in config.yaml (or
-  # AGENTFORGE_API_KEYS) before deploying.
+  # reachable from the internet, so set security.api_keys in config.yaml
+  # before deploying. A blank AGENTFORGE_API_KEYS does not replace that list.
   agentforge-api:
     # Internet-exposed via Traefik but does NOT mount the Docker socket, so the
     # enforce_auth_policy socket backstop never fires here (unlike agentforge-web).
@@ -62,8 +62,8 @@ services:
     # otherwise /indexer/upload + /search are open to anyone (fleet poisoning,
     # bypassing Felix's skill firewall, and data read). Override to "false" only
     # for a LAN-only deploy.
-    # AGENTFORGE_API_KEYS comes from the shared x-app-env anchor (base compose),
-    # so web + api read the same keys. Only REQUIRE_AUTH is api-specific here.
+    # Script keys come from the mounted config.yaml. Only REQUIRE_AUTH is
+    # api-specific here. A blank AGENTFORGE_API_KEYS does not clear the yaml list.
     environment:
       AGENTFORGE_REQUIRE_AUTH: "${AGENTFORGE_REQUIRE_AUTH:-true}"
     healthcheck:

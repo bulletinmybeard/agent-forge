@@ -25,12 +25,9 @@ from app.services.dedup_service import dedup_service as _default_dedup
 from app.services.embedding_service import EmbeddingService
 from app.services.embedding_service import embedding_service as _default_embed
 from app.services.knowledge_file_service import knowledge_file_service
-from app.services.knowledge_vector_service import (
-    KnowledgeVectorService,
-)
-from app.services.knowledge_vector_service import (
-    knowledge_vector_service as _default_vector,
-)
+from app.services.knowledge_vector_service import KnowledgeVectorService
+from app.services.knowledge_vector_service import knowledge_vector_service as _default_vector
+from app.services.qdrant_owner import stamp_payload
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +100,7 @@ class KnowledgeService:
         if has_chunks:
             payload["has_chunks"] = True
             payload["chunk_count"] = len(pages)
+        stamp_payload(payload)
 
         point = PointStruct(id=point_id, vector=vector, payload=payload)
         self._vector.upsert_batch([point])
@@ -131,6 +129,7 @@ class KnowledgeService:
         if request.tags:
             merged["tags"] = list({*(merged.get("tags") or []), *request.tags})
         merged["updated_at"] = now
+        stamp_payload(merged)
         self._vector.set_payload(point_id, merged)
         result = self._payload_to_response(point_id, merged)
         result["_reattached"] = True
@@ -204,6 +203,7 @@ class KnowledgeService:
                     "updated_at": now,
                     "indexed_at": now,
                 }
+                stamp_payload(payload)
                 points.append(PointStruct(id=pid, vector=embeddings[idx], payload=payload))
                 indexed += 1
             except Exception as e:
@@ -239,6 +239,7 @@ class KnowledgeService:
         for key, value in updates.items():
             payload[key] = value
         payload["updated_at"] = now
+        stamp_payload(payload)
 
         if needs_reembed:
             if "content" in updates:
@@ -280,10 +281,13 @@ class KnowledgeService:
         self._vector.set_payload(point_id, payload)
         return self._payload_to_response(point_id, payload)
 
-    def delete_entry(self, point_id: str) -> None:
+    def delete_entry(self, point_id: str) -> bool:
+        if self._vector.get_by_id(point_id) is None:
+            return False
         knowledge_file_service.delete(point_id)
         self._vector.delete_by_parent(point_id)
         self._vector.delete_point(point_id)
+        return True
 
     def delete_by_filter(self, request: BulkDeleteRequest) -> dict:
         self._vector.delete_by_filter(
@@ -578,12 +582,14 @@ class KnowledgeService:
                     "page_number": page["page_number"],
                     "total_pages": total_pages,
                     "is_chunk": True,
+                    "user_id": parent_payload.get("user_id"),
                     "content_hash": chunk_hash,
                     "created_at": now,
                     "updated_at": now,
                     "indexed_at": now,
                 }
 
+                stamp_payload(payload)
                 points.append(PointStruct(id=chunk_id, vector=batch_embeddings[i], payload=payload))
 
             self._vector.upsert_batch(points)
@@ -654,6 +660,7 @@ class KnowledgeService:
             return None
 
         payload = dict(entry["payload"])
+        stamp_payload(payload)
         content = payload.get("content", "")
         pages = self._split_pages(content)
 

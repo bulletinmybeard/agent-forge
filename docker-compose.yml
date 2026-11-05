@@ -34,9 +34,13 @@ x-app-env: &app-env
   AGENTFORGE_WEB_URL: "http://agentforge-web:8200"
   # Optional private tool plugins (module:register_fn,...). Empty in public.
   AGENTFORGE_TOOL_PLUGINS: "${AGENTFORGE_TOOL_PLUGINS:-}"
-  # API keys for the HTTP/WS surface. Shared so web + api (+ workers) read the
-  # same value from one place; empty = auth disabled (wins over config.yaml).
+  # Optional override of config.yaml security.api_keys. A blank value leaves
+  # the yaml list alone. The WebUI login is AGENTFORGE_ADMIN_USERNAME / _PASSWORD.
   AGENTFORGE_API_KEYS: "${AGENTFORGE_API_KEYS:-}"
+  # WebUI admin login. Empty username keeps "admin". The password is applied
+  # at web startup. Both come from deploy.env via the deploy scripts.
+  AGENTFORGE_ADMIN_USERNAME: "${AGENTFORGE_ADMIN_USERNAME:-}"
+  AGENTFORGE_ADMIN_PASSWORD: "${AGENTFORGE_ADMIN_PASSWORD:-}"
   # Explicit opt-out: boot open even when the socket is mounted / REQUIRE_AUTH
   # is set and no keys exist. For a trusted network during a transition only.
   AGENTFORGE_ALLOW_INSECURE: "${AGENTFORGE_ALLOW_INSECURE:-}"

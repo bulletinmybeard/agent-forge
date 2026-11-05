@@ -24,6 +24,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from web.server.identity import current_user_id
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/tools", tags=["tools-run"])
@@ -176,13 +178,17 @@ async def _enqueue_saq_tool(
 
     queue = get_tool_queue_for_role(role)
     args_json = json.dumps(args, default=str)
+    tool_kwargs: dict[str, Any] = {
+        "tool_name": tool,
+        "args_json": args_json,
+        "session_id": session_id,
+    }
+    user_id = current_user_id()
+    if user_id:
+        tool_kwargs["user_id"] = user_id
     job = Job(
         function="execute_tool_saq",
-        kwargs={
-            "tool_name": tool,
-            "args_json": args_json,
-            "session_id": session_id,
-        },
+        kwargs=tool_kwargs,
         timeout=int(timeout_s),
         retries=0,
     )

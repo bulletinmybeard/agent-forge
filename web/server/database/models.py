@@ -9,8 +9,22 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, relationship
+
+from web.server.identity import ADMIN_USER_ID
 
 
 def _now() -> datetime:
@@ -22,11 +36,79 @@ class Base(DeclarativeBase):
     pass
 
 
+def _owner_column():
+    """FK to ``users``. Python default and server default both land on the admin user.
+
+    The server default keeps a raw INSERT that omits the column working
+    (legacy migration test). The Python default is what the ORM sends.
+    """
+    return Column(
+        String(36),
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+        default=ADMIN_USER_ID,
+        server_default=ADMIN_USER_ID,
+    )
+
+
+class User(Base):
+    """A person. The admin row uses the fixed :data:`ADMIN_USER_ID`."""
+
+    __tablename__ = "users"
+
+    id = Column(String(36), primary_key=True)
+    username = Column(String(64), nullable=False, unique=True)
+    password_hash = Column(String(256), nullable=False, default="")
+    is_admin = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=_now, nullable=False)
+
+    def __repr__(self) -> str:
+        return f"<User(id='{self.id}', username='{self.username}', admin={self.is_admin})>"
+
+
+class ApiKey(Base):
+    """A per-user API key. The secret is stored as a hash. ``prefix`` is the visible part."""
+
+    __tablename__ = "api_keys"
+
+    id = Column(String(36), primary_key=True)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    prefix = Column(String(16), nullable=False, index=True)
+    key_hash = Column(String(128), nullable=False, unique=True)
+    created_at = Column(DateTime, default=_now, nullable=False)
+    last_used_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<ApiKey(id='{self.id}', prefix='{self.prefix}')>"
+
+
+class AuthSession(Base):
+    """WebUI login session. The cookie stores the secret; the row stores the hash."""
+
+    __tablename__ = "auth_sessions"
+
+    id = Column(String(36), primary_key=True)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    # Set when an admin's browser session was replaced with this user's session.
+    impersonator_user_id = Column(String(36), ForeignKey("users.id"), nullable=True, index=True)
+    token_hash = Column(String(128), nullable=False, unique=True)
+    created_at = Column(DateTime, default=_now, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<AuthSession(id='{self.id}', user_id='{self.user_id}')>"
+
+
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
     __table_args__ = (Index("ix_chat_sessions_parent", "parent_session_id"),)
 
     id = Column(String(36), primary_key=True)  # UUIDv7 from client
+    user_id = _owner_column()
     title = Column(String(255), nullable=False, default="New chat")
     # Task that owns this call. Null for a root session. Write-once.
     # One level only: the parent row is itself a root.
@@ -117,10 +199,12 @@ class UserFact(Base):
     """A structured fact extracted from conversation (user preferences, system details, etc.)."""
 
     __tablename__ = "user_facts"
+    __table_args__ = (UniqueConstraint("user_id", "key", name="uq_user_facts_user_key"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = _owner_column()
     fact_type = Column(String(30), nullable=False)  # "preference", "system", "entity", "decision"
-    key = Column(String(255), nullable=False, unique=True)  # dedupe key, e.g., "preferred_download_dir"
+    key = Column(String(255), nullable=False)  # dedupe key per user, e.g. "preferred_download_dir"
     value = Column(Text, nullable=False)  # the fact content
     source_session = Column(String(36), nullable=True)  # session where fact was extracted
     confidence = Column(Float, nullable=False, default=0.8)
@@ -158,6 +242,7 @@ class SessionInstruction(Base):
     __tablename__ = "session_instructions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = _owner_column()
     session_id = Column(String(36), ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=True)
     text = Column(Text, nullable=False)
     created_at = Column(DateTime, default=_now, nullable=False)
@@ -239,6 +324,7 @@ class CommandNote(Base):
     __tablename__ = "command_notes"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = _owner_column()
     session_id = Column(String(36), ForeignKey("chat_sessions.id", ondelete="SET NULL"), nullable=True)
     title = Column(String(500), nullable=False, default="Untitled")
     kind = Column(String(20), nullable=False, default="tool_calls")
@@ -269,6 +355,7 @@ class ScheduledJob(Base):
     __tablename__ = "scheduled_jobs"
 
     id = Column(String(36), primary_key=True)  # UUID
+    user_id = _owner_column()
     label = Column(String(500), nullable=False)
     command = Column(Text, nullable=False)
     cron = Column(String(100), nullable=False)  # standard cron expression
@@ -349,6 +436,7 @@ class Connection(Base):
     __tablename__ = "connections"
 
     id = Column(String(36), primary_key=True)
+    user_id = _owner_column()
     connector_type = Column(String(50), nullable=False)
     label = Column(String(255), nullable=False)
     account_identifier = Column(String(255), nullable=True)
@@ -382,6 +470,7 @@ class MonitorJob(Base):
     __tablename__ = "monitor_jobs"
 
     id = Column(String(36), primary_key=True)  # UUID
+    user_id = _owner_column()
     label = Column(String(500), nullable=False)
     url = Column(String(2048), nullable=False)
     original_prompt = Column(Text, nullable=True)  # user's NL request — used by vision fallback

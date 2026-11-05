@@ -47,6 +47,15 @@ def internal_auth_headers() -> dict[str, str]:
     return {"X-Internal-Token": INTERNAL_TOKEN} if INTERNAL_TOKEN else {}
 
 
+def _stamp_outbound_user(request: httpx.Request) -> None:
+    """Attach the job's user id. The web process checks it against the session owner."""
+    from web.server.identity import current_user_id
+
+    user_id = current_user_id()
+    if user_id:
+        request.headers["X-AgentForge-User"] = user_id
+
+
 # ---------------------------------------------------------------------------
 # Persistent HTTP clients (TCP/TLS reuse across all callbacks).
 # ---------------------------------------------------------------------------
@@ -68,6 +77,7 @@ def _get_sync_http() -> httpx.Client:
             timeout=5.0,
             headers=internal_auth_headers(),
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+            event_hooks={"request": [_stamp_outbound_user]},
         )
         return _sync_http
 
@@ -93,6 +103,7 @@ def _get_async_http() -> httpx.AsyncClient:
             timeout=10.0,
             headers=internal_auth_headers(),
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+            event_hooks={"request": [_stamp_outbound_user]},
         )
         _async_clients[lid] = client
         return client
