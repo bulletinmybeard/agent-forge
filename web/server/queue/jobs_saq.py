@@ -505,6 +505,7 @@ async def _execute_agent_job(
             session_id,
             conversation_history=conversation_history,
             incognito_history=incognito_history,
+            job_id=job_id,
         )
 
         if mode == "pipeline":

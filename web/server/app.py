@@ -43,6 +43,7 @@ from .api import router as api_router
 from .api import set_database as set_api_database
 from .api import set_upload_config
 from .api_memory import router as memory_router
+from .api_user_data import router as user_data_router
 from .botty_endpoint import router as botty_router
 from .botty_endpoint import set_database as set_botty_database
 from .canvas.api import init_canvas_api
@@ -333,6 +334,10 @@ app.include_router(internal_router)
 
 # Memory Settings — list / delete facts + conversation memory entries
 app.include_router(memory_router)
+
+# Settings → Data: one confirmed wipe of chat sessions, attachments, and
+# conversation memory. Does not delete connector rows.
+app.include_router(user_data_router)
 
 app.include_router(services_api_router)
 

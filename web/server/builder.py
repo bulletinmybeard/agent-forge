@@ -52,6 +52,7 @@ from agentforge.review.gather import gather_review_context
 from agentforge.review.loop import extract_agent_loop_output
 from agentforge.review.style import resolve_review_max_workers
 from agentforge.review.tools import REVIEW_TOOLS
+from agentforge.tools.registry import submit_with_context
 from web.server import protocol
 from web.server.agent_bridge import AgentBridge
 from web.server.confirm import ConfirmationBroker
@@ -895,7 +896,9 @@ async def _execute_plan(
                 _mark_progress_file(progress_path, task.id, "running", "", progress_lock)
         snapshot = set(complete_ids)
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="build") as pool:
-            futs = {pool.submit(_run_task, task, "", snapshot): task for task in run_tasks}
+            futs = {
+                submit_with_context(pool, _run_task, task, "", snapshot): task for task in run_tasks
+            }
             for fut in as_completed(futs):
                 task = futs[fut]
                 try:

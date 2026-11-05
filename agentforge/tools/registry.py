@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import inspect
 import typing
 from collections.abc import Callable
@@ -34,6 +35,18 @@ from agentforge.tools.routing import (
 from agentforge.typing_utils import ToolCallable, callable_name
 
 logger = get_logger(__name__)
+
+
+def submit_with_context(executor: concurrent.futures.Executor, fn: Callable, /, *args: Any):
+    """Submit *fn* so the pool thread keeps the caller's contextvars.
+
+    ``ThreadPoolExecutor`` does not copy context. Live tool callbacks are
+    bound to the current run with a ``ContextVar``; a bare ``submit`` runs
+    them with an empty context and the event is dropped (or, with a single
+    shared handler, delivered to whichever run installed it last).
+    """
+    ctx = contextvars.copy_context()
+    return executor.submit(ctx.run, fn, *args)
 
 _saq_dispatch_tool: Callable[..., str] | None = None
 try:

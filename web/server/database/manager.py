@@ -14,7 +14,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import create_engine, event, func
+from sqlalchemy import create_engine, event, func, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
@@ -265,6 +265,34 @@ class ChatDatabase:
         for child in children:
             self._delete_session_tree(session, child)
         session.delete(chat)
+
+    def delete_user_chat_data(self) -> dict[str, int]:
+        """Delete chat sessions, facts, instructions, and canvas items.
+
+        Messages go with their session. Connections, bookmarks, command
+        permissions, scheduled jobs, and monitor jobs stay. Bookmark rows
+        lose their session id via ON DELETE SET NULL.
+        """
+        with self.SessionLocal() as session:
+            sessions = session.query(ChatSession).count()
+            facts = session.query(UserFact).delete(synchronize_session=False)
+            instructions = session.query(SessionInstruction).delete(synchronize_session=False)
+            canvas_items = 0
+            if "canvas_items" in inspect(session.get_bind()).get_table_names():
+                canvas_items = session.execute(text("SELECT COUNT(*) FROM canvas_items")).scalar() or 0
+                session.execute(text("DELETE FROM canvas_items"))
+            roots = session.query(ChatSession).filter(ChatSession.parent_session_id.is_(None)).all()
+            for chat in roots:
+                self._delete_session_tree(session, chat)
+            for chat in session.query(ChatSession).all():
+                session.delete(chat)
+            session.commit()
+        return {
+            "sessions": int(sessions),
+            "facts": int(facts),
+            "instructions": int(instructions),
+            "canvas_items": int(canvas_items),
+        }
 
     # -- Messages --------------------------------------------------------------
 

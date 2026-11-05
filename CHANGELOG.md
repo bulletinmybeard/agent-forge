@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-05
+
+### Added
+
+- The agent loop names the model call in flight. `agent.thinking` carries `model`, `profile`, `provider`, `messages`, and `purpose` (`final` when the loop forces a closing answer with tools off). A fallback hop emits `agent.model_fallback` before the call returns, and that event is persisted
+- `pipeline.step` (running only) before profile selection, parallel planning, parallel synthesis, the `@coding` planner and parameter extractor, and opening-prompt refinement. Chat's `agent.progress` text includes the model
+- `@review` specialists stream `review.progress` phases `model`, `tool`, and `fallback`. The `starting` payload includes each specialist's model
+- Worker broadcasts now include `agent.progress`, `pipeline.step`, and `parallel.group`. `agent.model_fallback` stays off that list so a persisted hop is delivered once
+
+### Changed
+
+- A second `query` on `/ws/chat` (a follow-up, Run now, or `query.reroute`) waits until the in-flight turn's `agent.cancelled` card is stored before the new prompt is classified. Inline runs are cancelled and awaited. Worker wait-tasks stay up: the job is marked cancelled, and a later worker `done` or `running` does not overwrite that, so the waiter does not send `run.idle` into the next turn. If no card shows up in time, one is written and a later worker copy for those job ids is dropped. A leftover job row with no live task is cancelled and suppressed without a card
+- `#remember` and `#forget` send `run.idle` when they return, so a client that queues the next prompt is not left waiting. `instruction.cleared` still does not end a turn by itself
+
+### Fixed
+
+- Live `tool.call`, `tool.calls.flush`, and confirm events stay on the run that is executing the tool. The shared registry handler used to close over whichever run called `setup_registry` last, so a second session in flight received the first session's live tool calls. Pool threads (research, review, parallel tool calls, discover, `@build`) keep that binding. The stored transcript was already per session
+
 ## [0.17.0] - 2026-10-24
 
 ### Added

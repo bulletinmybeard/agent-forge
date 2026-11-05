@@ -150,6 +150,9 @@ class HttpCallbackSocket:
             "agent.tool_exec",
             "agent.iteration",
             "agent.thinking",
+            "agent.progress",
+            "pipeline.step",
+            "parallel.group",
             "research.progress",
             "research.activity",
             "review.progress",
@@ -450,8 +453,10 @@ class _NullDatabase:
         session_id: str,
         conversation_history: list[dict] | None = None,
         incognito_history: bool = False,
+        job_id: str | None = None,
     ) -> None:
         self._session_id = session_id
+        self._job_id = job_id
         # Pre-loaded conversation history injected at enqueue time from
         # agentforge-web's real ChatDatabase. Returned by get_messages() so that
         # _build_conversation_history can reconstruct multi-turn context for
@@ -488,6 +493,8 @@ class _NullDatabase:
             "tool_calls": tool_calls,
             "is_incognito": is_incognito,
         }
+        if self._job_id:
+            payload["job_id"] = self._job_id
         try:
             _get_sync_http().post(f"/internal/sessions/{session_id}/event", json=payload)
         except Exception as exc:

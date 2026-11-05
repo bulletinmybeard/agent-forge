@@ -480,7 +480,7 @@ def research_activity(
 
 def agent_iteration(
     iteration: int,
-    max_iterations: int,
+    max_iterations: int | None,
     messages_in_context: int,
     elapsed: float,
 ) -> dict:
@@ -494,14 +494,40 @@ def agent_iteration(
     }
 
 
-def agent_thinking(iteration: int, status: str, elapsed: float) -> dict:
-    """Notify the client that the model is generating a response."""
-    return {
+def agent_thinking(
+    iteration: int,
+    status: str,
+    elapsed: float,
+    *,
+    model: str = "",
+    profile: str = "",
+    provider: str = "",
+    messages: int | None = None,
+    purpose: str = "",
+) -> dict:
+    """Notify the client that the model is generating a response.
+
+    ``model`` / ``profile`` / ``provider`` name the request in flight.
+    ``messages`` is the context size for that call. ``purpose`` is
+    ``"final"`` when the loop is forcing a closing answer with tools off.
+    """
+    msg: dict[str, Any] = {
         "type": "agent.thinking",
         "iteration": iteration,
         "status": status,
         "elapsed": round(elapsed, 2),
     }
+    if model:
+        msg["model"] = model
+    if profile:
+        msg["profile"] = profile
+    if provider:
+        msg["provider"] = provider
+    if messages is not None:
+        msg["messages"] = messages
+    if purpose:
+        msg["purpose"] = purpose
+    return msg
 
 
 def agent_tool_exec(

@@ -110,11 +110,15 @@ class JobStore:
             values.append(error)
 
         values.append(job_id)
+        # A cancel already won. A late worker "done"/"running" must not hide
+        # it, or the session waiter treats the job as finished and sends
+        # run.idle into the next turn.
+        sql = f"UPDATE agent_jobs SET {', '.join(updates)} WHERE job_id = ?"
+        if status != JobStatus.CANCELLED:
+            sql += " AND status != ?"
+            values.append(JobStatus.CANCELLED.value)
         with self._lock, self._conn() as conn:
-            conn.execute(
-                f"UPDATE agent_jobs SET {', '.join(updates)} WHERE job_id = ?",
-                values,
-            )
+            conn.execute(sql, values)
 
     # ── Query ───────────────────────────────────────────────────────
 
@@ -134,10 +138,21 @@ class JobStore:
             ).fetchone()
         return self._row_to_job(row) if row else None
 
-    def cancel_active_jobs(self, session_id: str) -> int:
-        """Cancel all pending/running jobs for a session (e.g., user hit Stop)."""
+    def cancel_active_jobs(self, session_id: str) -> list[str]:
+        """Cancel all pending/running jobs for a session (e.g., user hit Stop).
+
+        Returns the job ids that were flipped to cancelled.
+        """
         with self._lock, self._conn() as conn:
-            cursor = conn.execute(
+            rows = conn.execute(
+                """SELECT job_id FROM agent_jobs
+                   WHERE session_id = ? AND status IN (?, ?)""",
+                (session_id, JobStatus.PENDING.value, JobStatus.RUNNING.value),
+            ).fetchall()
+            ids = [row["job_id"] for row in rows]
+            if not ids:
+                return []
+            conn.execute(
                 """UPDATE agent_jobs SET status = ?, completed_at = ?
                    WHERE session_id = ? AND status IN (?, ?)""",
                 (
@@ -148,7 +163,7 @@ class JobStore:
                     JobStatus.RUNNING.value,
                 ),
             )
-            return cursor.rowcount
+            return ids
 
     def active_job_count(self, session_id: str) -> int:
         """Return the number of non-terminal jobs for a session without mutating state.

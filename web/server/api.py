@@ -196,6 +196,10 @@ def get_db() -> ChatDatabase:
     return _db
 
 
+def get_upload_base() -> Path | None:
+    return _upload_base
+
+
 # -- Welcome message -----------------------------------------------------------
 
 _USER_CONTEXT_CACHE: dict[str, str] = {}  # key: "name" → first name
@@ -665,6 +669,7 @@ class _EventBody(BaseModel):
     content: str | None = None
     tool_calls: list[dict] | None = None
     is_incognito: bool = False
+    job_id: str | None = None
 
 
 class _StatusBody(BaseModel):
@@ -801,6 +806,15 @@ async def push_worker_event(session_id: str, body: _EventBody):
     Called by HttpCallbackSocket in jobs_common.py for every send_and_persist call.
     """
     db = get_db()
+
+    msg_type = body.msg_type or (body.msg or {}).get("type")
+    if (
+        body.job_id
+        and msg_type in ("cancelled", "agent.cancelled")
+        and body.job_id in state.suppress_cancel_jobs
+    ):
+        state.suppress_cancel_jobs.discard(body.job_id)
+        return {"ok": True, "suppressed": True}
 
     # Ensure the session row exists. Stamp source and parent from the active
     # job's overrides when present so external clients are not mis-tagged.
@@ -1314,18 +1328,20 @@ async def list_agents():
     try:
         rt = get_runtime()
         for agent in rt.list_custom_agents():
-            custom.append(
-                {
-                    "id": agent["id"],
-                    "type": "custom",
-                    "aliases": agent.get("aliases", []),
-                    "description": agent.get("description", agent["id"]),
-                    "profile": agent.get("profile", "cloud-heavy"),
-                    "tools": agent.get("tools", []),
-                    "max_iterations": agent.get("max_iterations", 10),
-                    "source": agent.get("source"),
-                }
-            )
+            row = {
+                "id": agent["id"],
+                "type": "custom",
+                "aliases": agent.get("aliases", []),
+                "description": agent.get("description", agent["id"]),
+                "profile": agent.get("profile", "cloud-heavy"),
+                "tools": agent.get("tools", []),
+                "max_iterations": agent.get("max_iterations", 10),
+                "source": agent.get("source"),
+            }
+            group = agent.get("group")
+            if isinstance(group, str) and group.strip():
+                row["group"] = group.strip()
+            custom.append(row)
     except RuntimeError:
         # Runtime not yet initialised (server still starting up)
         pass

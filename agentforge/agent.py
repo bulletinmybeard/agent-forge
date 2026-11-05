@@ -45,6 +45,7 @@ from .client import AIClient, ChatResponse, add_model_used
 from .config import get_config
 from .context import PipelineContext
 from .tools import ToolRegistry
+from .tools.registry import submit_with_context
 
 logger = get_logger(__name__)
 
@@ -358,7 +359,7 @@ class AgentLoop:
         system_prompt: str = DEFAULT_AGENT_SYSTEM_PROMPT,
         system_prompt_condensed: str | None = None,
         tools: list[str] | None = None,
-        max_iterations: int = 10,
+        max_iterations: int | None = 10,
         deep_think: bool = False,
         temperature: float | None = None,
         verbose: bool = False,
@@ -376,7 +377,9 @@ class AgentLoop:
         self._system_prompt = system_prompt
         self._system_prompt_condensed = system_prompt_condensed
         self._tool_names = tools
-        self._max_iterations = max_iterations
+        # 0 or None: no round cap. The loop still stops when the model
+        # answers, the user cancels, or a stuck-loop guard fires.
+        self._max_iterations = max_iterations if max_iterations and max_iterations > 0 else None
         self._deep_think = deep_think
         self._temperature = temperature
         self._verbose = verbose
@@ -398,6 +401,51 @@ class AgentLoop:
         # the error and inject results as context for one final attempt.
         self._search_escalation = bool(cfg.get("agent.search_escalation.enabled", True))
         self._search_escalation_threshold = int(cfg.get("agent.search_escalation.after_errors", 3))
+
+    def _model_call_payload(self, messages: list, *, purpose: str = "") -> dict[str, Any]:
+        """Fields for an in-flight model call. The WebUI status line reads these."""
+        profile = getattr(self._client, "profile", None)
+        payload: dict[str, Any] = {
+            "status": "calling_model",
+            "model": getattr(profile, "model", "") or getattr(self._client, "model", "") or "",
+            "profile": getattr(profile, "name", "") or "",
+            "provider": getattr(profile, "provider", "") or "",
+            "messages": len(messages),
+        }
+        if purpose:
+            payload["purpose"] = purpose
+        return payload
+
+    def _on_model_fallback(self, prev_name: str, next_name: str, exc: BaseException) -> None:
+        """Surface a fallback hop while the model call is still in flight."""
+        prev_model = next_model = provider = ""
+        reason = str(exc)[:200]
+        try:
+            from agentforge.backends._retry import classify_model_error
+
+            reason = classify_model_error(exc).reason or reason
+        except Exception:
+            logger.debug("[Agent] fallback classify failed", exc_info=True)
+        try:
+            cfg = self._client._config
+            prev = cfg.get_profile(prev_name)
+            nxt = cfg.get_profile(next_name)
+            prev_model = prev.model
+            next_model = nxt.model
+            provider = nxt.provider
+        except Exception:
+            logger.debug("[Agent] fallback profile lookup failed", exc_info=True)
+        self._on_event(
+            "model_fallback",
+            {
+                "prev_profile": prev_name,
+                "prev_model": prev_model,
+                "next_profile": next_name,
+                "next_model": next_model,
+                "reason": reason,
+                "provider": provider,
+            },
+        )
 
     # -- error detection helpers --------------------------------------------
 
@@ -930,14 +978,36 @@ class AgentLoop:
         _search_escalation_fired = False  # only fire once per run
         _tool_calls_used = 0
 
-        for i in range(1, self._max_iterations + 1):
+        i = 0
+        while True:
+            i += 1
+            if self._max_iterations is not None and i > self._max_iterations:
+                ctx.add_error(f"Agent reached max iterations ({self._max_iterations}) without a final answer")
+                if not ctx.result and iterations:
+                    best = _best_answer_from_iterations(iterations, ctx_thinking=ctx.thinking)
+                    if best:
+                        ctx.result = best
+                        logger.info(
+                            "[Agent] Max iterations — using best leftover content/thinking (%d chars)",
+                            len(best),
+                        )
+                break
+
             # Check for external cancellation
             if self._cancel_event and self._cancel_event.is_set():
                 logger.info("[Agent] Cancelled at iteration %d", i)
                 ctx.result = "(cancelled by user)"
                 break
 
-            logger.debug("[Agent] Iteration %d/%d — %d messages in context", i, self._max_iterations, len(ctx.messages))
+            if self._max_iterations is None:
+                logger.debug("[Agent] Iteration %d — %d messages in context", i, len(ctx.messages))
+            else:
+                logger.debug(
+                    "[Agent] Iteration %d/%d — %d messages in context",
+                    i,
+                    self._max_iterations,
+                    len(ctx.messages),
+                )
             iter_start = time.perf_counter()
             iteration = AgentIteration(iteration=i)
 
@@ -956,7 +1026,7 @@ class AgentLoop:
             # Retry transient errors (503, connection reset) up to 3 times.
             response = None
             _model_call_failed = False
-            self._on_event("thinking", {"iteration": i, "status": "calling_model"})
+            self._on_event("thinking", {"iteration": i, **self._model_call_payload(ctx.messages)})
             for _attempt in range(1, _MODEL_RETRIES + 1):
                 try:
                     # Run in a copy of the current context so request-scoped
@@ -972,6 +1042,7 @@ class AgentLoop:
                         tools=callables if callables else None,
                         deep_think=self._deep_think,
                         temperature=self._temperature,
+                        on_fallback=self._on_model_fallback,
                     )
                     # Poll for completion with cancel-event checks instead of
                     # blocking on future.result() for up to _ITER_TIMEOUT seconds.
@@ -1500,7 +1571,9 @@ class AgentLoop:
                 logger.debug("[Agent] Executing %d tool calls in parallel", n_calls)
                 with concurrent.futures.ThreadPoolExecutor(max_workers=min(n_calls, 4)) as exec_pool:
                     # Submit all calls; preserve ordering.
-                    futures = [exec_pool.submit(_execute_single, tc) for tc in response.tool_calls]
+                    futures = [
+                    submit_with_context(exec_pool, _execute_single, tc) for tc in response.tool_calls
+                ]
                     tool_results = [f.result() for f in futures]
             else:
                 tool_results = [_execute_single(tc) for tc in response.tool_calls]
@@ -1808,7 +1881,7 @@ class AgentLoop:
             # text turn (no tools). Thinking models often burn the budget on
             # tool_calls + empty content; without this we hit for/else salvage.
             over_tool_budget = self._max_tool_calls is not None and _tool_calls_used >= self._max_tool_calls
-            over_iter_budget = i >= self._max_iterations
+            over_iter_budget = self._max_iterations is not None and i >= self._max_iterations
             if (over_tool_budget or over_iter_budget) and not ctx.result:
                 if over_tool_budget:
                     budget_label = f"tool-call budget ({self._max_tool_calls})"
@@ -1833,6 +1906,10 @@ class AgentLoop:
                         "message": f"{budget_label} — forcing final answer",
                     },
                 )
+                self._on_event(
+                    "thinking",
+                    {"iteration": i, **self._model_call_payload(ctx.messages, purpose="final")},
+                )
                 try:
                     _call_ctx = contextvars.copy_context()
                     future = _model_pool.submit(
@@ -1843,6 +1920,7 @@ class AgentLoop:
                         tools=None,
                         deep_think=self._deep_think,
                         temperature=self._temperature,
+                        on_fallback=self._on_model_fallback,
                     )
                     force_resp = future.result(timeout=_ITER_TIMEOUT)
                     if not isinstance(force_resp, ChatResponse):
@@ -1872,20 +1950,6 @@ class AgentLoop:
                 except Exception as exc:
                     logger.warning("[Agent] Force-final turn failed: %s", exc)
                 break
-
-        else:
-            # Max iterations reached without a final answer (no tools on last
-            # turn either — empty content / only thinking already handled above,
-            # or the model never produced anything usable).
-            ctx.add_error(f"Agent reached max iterations ({self._max_iterations}) without a final answer")
-            if not ctx.result and iterations:
-                best = _best_answer_from_iterations(iterations, ctx_thinking=ctx.thinking)
-                if best:
-                    ctx.result = best
-                    logger.info(
-                        "[Agent] Max iterations — using best leftover content/thinking (%d chars)",
-                        len(best),
-                    )
 
         # Safety net: prefer thinking/content leftovers over raw tool dumps.
         if not ctx.result and iterations:
