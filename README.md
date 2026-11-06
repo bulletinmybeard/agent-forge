@@ -157,6 +157,12 @@ user's browser there with no key. Those two are still tied to a `state` issued b
 
 For public deploys, `AGENTFORGE_REQUIRE_AUTH=1` refuses to boot without keys (and the app already fails closed when the Docker socket is mounted with none)! `AGENTFORGE_ALLOW_INSECURE=1` is the trusted-network escape hatch. See [docs/SECURITY.md](docs/SECURITY.md) for the full checklist and [deploy.example.env](deploy.example.env) for every knob.
 
+### Model instructions
+
+`user_context` in `config.yaml` points at a Markdown file (default `user_context.md`, gitignored; start from `user_context.example.md`). That file is the admin user's instructions. It is appended to that caller's system prompt, and a `Name:` line is the first name on `GET /api/welcome`. The file is read when the prompt is built, so an edit on disk shows up on the next run.
+
+Another signed-in user does not receive that file. Their text is the `instructions` column on their user row, edited from the WebUI Account page (`GET` / `PUT /api/auth/instructions`). An empty value sends nothing, and the greeting has no first name. A save never writes `user_context.md`. With no caller, the file is used. While an admin is impersonating, the target user's text is the one that is injected.
+
 ## Custom tools
 
 Add your own tools without forking: expose a `register(registry)` function and advertise it under the `agentforge.tools` entry-point group (or point `AGENTFORGE_TOOL_PLUGINS` at it).

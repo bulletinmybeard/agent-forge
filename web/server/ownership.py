@@ -35,3 +35,17 @@ def session_writable(session_id: str) -> bool:
     if not actor:
         return True
     return owner is None or owner == actor
+
+
+def session_unavailable_reason(owner: str | None, actor: str | None) -> str:
+    """Why a session read came back empty.
+
+    ``missing`` is no row. ``denied`` is a row owned by someone else.
+    ``unavailable`` is the leftover: auth is off, or the owner matches, and
+    the row was still hidden. Log this. Do not put it on the response.
+    """
+    if owner is None:
+        return "missing"
+    if actor and owner != actor:
+        return "denied"
+    return "unavailable"

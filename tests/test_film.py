@@ -2,14 +2,32 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from agentforge.film.import_simkl import import_watchlist
+from agentforge.film.oauth import get_valid_token
 from agentforge.film.recommend import merge_candidates
 from agentforge.film.simkl import extract_media, normalize_username
 from agentforge.film.store import FilmStore
 from agentforge.film.tmdb import episodes_from_season_payload
 from agentforge.film.vectors import collection_name
+from agentforge.tools.film import film_list_show, film_lists
+from web.server.identity import ADMIN_USER_ID, reset_current_user, set_current_user
+
+_OTHER_USER_ID = "00000000-0000-0000-0000-0000000000aa"
+
+
+@contextmanager
+def _signed_in(user_id: str | None):
+    token = set_current_user(user_id)
+    try:
+        yield
+    finally:
+        reset_current_user(token)
 
 
 def test_upsert_and_get(tmp_path: Path, monkeypatch):
@@ -477,3 +495,129 @@ def test_default_collection_is_media_fingerprints(monkeypatch):
 
     monkeypatch.setattr("agentforge.film.vectors.get_config", lambda: _Cfg())
     assert collection_name() == "media_fingerprints"
+
+
+def test_film_scope_is_per_user(tmp_path: Path, monkeypatch):
+    db = tmp_path / "film.sqlite"
+    monkeypatch.setenv("AGENTFORGE_FILM_DB", str(db))
+    store = FilmStore(db)
+    with _signed_in(ADMIN_USER_ID):
+        alien = store.upsert_media(
+            {"type": "movie", "title": "Alien", "year": 1979, "tmdb_id": 348},
+            status="plantowatch",
+        )
+        private = store.create_list("Ingrids Filme")
+        assert store.add_to_list(int(private["id"]), int(alien["id"]))
+        assert "Ingrids Filme" in film_lists()
+
+    with _signed_in(_OTHER_USER_ID):
+        assert store.list_lists() == []
+        assert store.resolve_list("Ingrids Filme") is None
+        assert store.resolve_list(str(private["id"])) is None
+        assert store.list_items(int(private["id"])) == []
+        assert store.delete_list(int(private["id"])) is False
+        assert store.add_to_list(int(private["id"]), int(alien["id"])) is False
+        assert store.get_by_tmdb_id(348) is None
+        assert store.search("Alien") == []
+        assert store.library_tmdb_ids() == set()
+        assert store.stats()["total"] == 0
+        assert film_lists() == "No lists yet. Create one with film_list_create."
+        hidden = film_list_show("Ingrids Filme")
+        assert hidden.startswith("No list matching")
+        assert "Alien" not in hidden
+        assert store.set_status_all("completed") == 0
+        arrival = store.upsert_media(
+            {"type": "movie", "title": "Arrival", "year": 2016, "tmdb_id": 329865},
+            status="plantowatch",
+        )
+        store.create_list("Mine")
+        assert store.set_status_all("completed") == 1
+        assert [row["name"] for row in store.list_lists()] == ["Mine"]
+        listed = film_lists()
+        assert "Mine" in listed
+        assert "Ingrids Filme" not in listed
+        assert store.get_by_tmdb_id(329865)["status"] == "completed"
+        assert store.library_tmdb_ids() == {329865}
+        assert arrival["id"] == store.get_by_tmdb_id(329865)["id"]
+
+    with _signed_in(ADMIN_USER_ID):
+        assert [row["name"] for row in store.list_lists()] == ["Ingrids Filme"]
+        assert store.get_by_tmdb_id(348)["status"] == "plantowatch"
+        assert store.get_by_tmdb_id(329865) is None
+        assert store.library_tmdb_ids() == {348}
+        listed = film_lists()
+        assert "Ingrids Filme" in listed
+        assert "Mine" not in listed
+
+    with _signed_in(None):
+        assert {row["name"] for row in store.list_lists()} == {"Ingrids Filme", "Mine"}
+        assert store.library_tmdb_ids() == {348, 329865}
+
+
+def test_old_lists_belong_to_admin(tmp_path: Path):
+    path = tmp_path / "old.sqlite"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """CREATE TABLE lists (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT
+        )"""
+    )
+    conn.execute("INSERT INTO lists (name, description) VALUES ('Ingrids Filme', 'private')")
+    conn.commit()
+    conn.close()
+    store = FilmStore(path)
+    with _signed_in(_OTHER_USER_ID):
+        assert store.list_lists() == []
+        assert store.resolve_list("Ingrids Filme") is None
+        assert store.resolve_list("1") is None
+    with _signed_in(ADMIN_USER_ID):
+        rows = store.list_lists()
+        assert [row["name"] for row in rows] == ["Ingrids Filme"]
+        assert rows[0]["user_id"] == ADMIN_USER_ID
+    with _signed_in(None):
+        assert [row["name"] for row in store.list_lists()] == ["Ingrids Filme"]
+
+
+def test_simkl_token_is_not_shared(tmp_path: Path, monkeypatch):
+    db = tmp_path / "film.sqlite"
+    monkeypatch.setenv("AGENTFORGE_FILM_DB", str(db))
+    monkeypatch.delenv("SIMKL_ACCESS_TOKEN", raising=False)
+
+    class _Cfg:
+        def get(self, key, default=None):
+            return ""
+
+    monkeypatch.setattr("agentforge.film.oauth.get_config", lambda: _Cfg())
+    db.with_name("simkl_oauth.json").write_text(
+        json.dumps(
+            {
+                "access_token": "admin-tok",
+                "expires_in": 999999,
+                "obtained_at": int(time.time()),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _refused() -> None:
+        try:
+            get_valid_token()
+            raise AssertionError("expected RuntimeError")
+        except RuntimeError as exc:
+            assert "not connected" in str(exc)
+
+    with _signed_in(None):
+        assert get_valid_token() == "admin-tok"
+    with _signed_in(ADMIN_USER_ID):
+        assert get_valid_token() == "admin-tok"
+    with _signed_in(_OTHER_USER_ID):
+        _refused()
+    monkeypatch.setenv("SIMKL_ACCESS_TOKEN", "shared-tok")
+    with _signed_in(_OTHER_USER_ID):
+        _refused()
+    with _signed_in(ADMIN_USER_ID):
+        assert get_valid_token() == "shared-tok"
+    with _signed_in(None):
+        assert get_valid_token() == "shared-tok"

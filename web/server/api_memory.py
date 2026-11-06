@@ -23,6 +23,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
+from web.server.database.models import _iso
 from web.server.identity import current_user_id
 
 from .api import get_db
@@ -86,8 +87,8 @@ def list_facts() -> list[dict[str, Any]]:
             "fact_type": f.fact_type,
             "confidence": f.confidence,
             "source_session": f.source_session,
-            "updated_at": f.updated_at.isoformat() if f.updated_at else None,
-            "created_at": f.created_at.isoformat() if f.created_at else None,
+            "updated_at": _iso(f.updated_at),
+            "created_at": _iso(f.created_at),
         }
         for f in facts
     ]

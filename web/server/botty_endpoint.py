@@ -54,6 +54,7 @@ from app.security import negotiate_ws
 
 from . import protocol
 from .database import ChatDatabase
+from .database.models import _iso
 from .session_events import SessionEventSubscriber
 
 logger = logging.getLogger(__name__)
@@ -312,7 +313,7 @@ class BottyEngine:
             "query": (getattr(s, "title", "") or "").strip(),
             "preview": f"{getattr(s, 'message_count', 0) or 0} messages",
             "score": score,
-            "timestamp": updated.isoformat() if updated else "",
+            "timestamp": _iso(updated) or "",
         }
 
     async def search_sessions(self, query: str) -> list[dict[str, Any]]:

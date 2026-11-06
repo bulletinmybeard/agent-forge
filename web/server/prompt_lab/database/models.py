@@ -12,6 +12,8 @@ from datetime import datetime
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, relationship
 
+from web.server.database.models import _iso
+
 
 def _now() -> datetime:
     return datetime.now()
@@ -43,7 +45,7 @@ class PromptLabRun(Base):
             "system": self.system,
             "prompt": self.prompt,
             "total_latency_ms": int(self.total_latency_ms or 0),
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": _iso(self.created_at),
         }
         if include_results:
             out["results"] = [r.to_dict() for r in (self.results or [])]

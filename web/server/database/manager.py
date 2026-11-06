@@ -271,6 +271,25 @@ class ChatDatabase:
             session.expunge(user)
             return user
 
+    def set_user_instructions(self, user_id: str, text: str) -> User:
+        """Replace one user's model instructions.
+
+        The admin row is refused. That text stays in the user context file.
+        Raises ``ValueError`` with ``user not found`` or
+        ``cannot edit the admin user``.
+        """
+        with self.SessionLocal() as session:
+            user = session.get(User, user_id)
+            if user is None:
+                raise ValueError("user not found")
+            if user.is_admin or user.id == ADMIN_USER_ID:
+                raise ValueError("cannot edit the admin user")
+            user.instructions = text
+            session.commit()
+            session.refresh(user)
+            session.expunge(user)
+            return user
+
     def delete_user(self, user_id: str) -> list[str]:
         """Delete a non-admin user and the rows that belong to them.
 
