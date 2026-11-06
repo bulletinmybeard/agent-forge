@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-06
+
 ### Fixed
 
 - **Model instructions.** `user_context.md` (`user_context` in `config.yaml`) is the admin user's text. The home greeting and the system prompt read it for the admin and when there is no caller, on each request. A `Name:` line supplies the first name. Another user gets the `instructions` column on their row (`GET`/`PUT /api/auth/instructions`). Empty text sends no personal block and the greeting has no first name. A save does not write the file, and the admin row's column is ignored. While impersonating, the target's text is the one that is used. Migration `009_user_instructions`
