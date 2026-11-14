@@ -47,6 +47,15 @@ def internal_auth_headers() -> dict[str, str]:
     return {"X-Internal-Token": INTERNAL_TOKEN} if INTERNAL_TOKEN else {}
 
 
+def _stamp_outbound_user(request: httpx.Request) -> None:
+    """Attach the job's user id. The web process checks it against the session owner."""
+    from web.server.identity import current_user_id
+
+    user_id = current_user_id()
+    if user_id:
+        request.headers["X-AgentForge-User"] = user_id
+
+
 # ---------------------------------------------------------------------------
 # Persistent HTTP clients (TCP/TLS reuse across all callbacks).
 # ---------------------------------------------------------------------------
@@ -68,6 +77,7 @@ def _get_sync_http() -> httpx.Client:
             timeout=5.0,
             headers=internal_auth_headers(),
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+            event_hooks={"request": [_stamp_outbound_user]},
         )
         return _sync_http
 
@@ -93,6 +103,7 @@ def _get_async_http() -> httpx.AsyncClient:
             timeout=10.0,
             headers=internal_auth_headers(),
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+            event_hooks={"request": [_stamp_outbound_user]},
         )
         _async_clients[lid] = client
         return client
@@ -150,6 +161,9 @@ class HttpCallbackSocket:
             "agent.tool_exec",
             "agent.iteration",
             "agent.thinking",
+            "agent.progress",
+            "pipeline.step",
+            "parallel.group",
             "research.progress",
             "research.activity",
             "review.progress",
@@ -450,8 +464,10 @@ class _NullDatabase:
         session_id: str,
         conversation_history: list[dict] | None = None,
         incognito_history: bool = False,
+        job_id: str | None = None,
     ) -> None:
         self._session_id = session_id
+        self._job_id = job_id
         # Pre-loaded conversation history injected at enqueue time from
         # agentforge-web's real ChatDatabase. Returned by get_messages() so that
         # _build_conversation_history can reconstruct multi-turn context for
@@ -488,6 +504,8 @@ class _NullDatabase:
             "tool_calls": tool_calls,
             "is_incognito": is_incognito,
         }
+        if self._job_id:
+            payload["job_id"] = self._job_id
         try:
             _get_sync_http().post(f"/internal/sessions/{session_id}/event", json=payload)
         except Exception as exc:

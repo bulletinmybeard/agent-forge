@@ -68,7 +68,9 @@ The variables the scripts read:
 | `REMOTE_REDIS_URL`           | Redis URL the containers use (host-native Redis on remote)                                |
 | `AGENTFORGE_DISPATCH_MODE`   | `split` (multi-host) or `in_process` (single box)                                         |
 | `AGENTFORGE_TOOL_PLUGINS`    | Comma-separated private tool plugins to load                                              |
-| `AGENTFORGE_API_KEYS`        | Comma-separated API keys required on the HTTP/WS surface (wins over `config.yaml`)        |
+| `AGENTFORGE_API_KEYS`        | Leave blank. A non-empty value replaces `config.yaml` `security.api_keys`. A blank value does not |
+| `AGENTFORGE_ADMIN_USERNAME`  | WebUI login name for the admin user. Empty keeps `admin`. Not an email                    |
+| `AGENTFORGE_ADMIN_PASSWORD`  | WebUI password for that user, applied when the web process starts                         |
 | `AGENTFORGE_REQUIRE_AUTH`    | `1` = refuse to boot without API keys (use on public deploys)                             |
 | `AGENTFORGE_ALLOW_INSECURE`  | `1` = boot open even with the Docker socket mounted / no keys (trusted-network escape hatch) |
 | `AGENTFORGE_INTERNAL_TOKEN`  | Shared secret for `/internal/*` worker callbacks (sent as `X-Internal-Token`)             |

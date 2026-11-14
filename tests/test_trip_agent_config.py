@@ -88,12 +88,14 @@ def test_wiki_place_image_returns_https_thumbnail(monkeypatch):
     monkeypatch.setattr(
         trip_tools,
         "_wiki_summary",
-        lambda name, lang: {
-            "title": "Rheinturm",
-            "thumbnail": {"source": "https://upload.wikimedia.org/wikipedia/commons/r.jpg"},
-        }
-        if lang == "de"
-        else None,
+        lambda name, lang: (
+            {
+                "title": "Rheinturm",
+                "thumbnail": {"source": "https://upload.wikimedia.org/wikipedia/commons/r.jpg"},
+            }
+            if lang == "de"
+            else None
+        ),
     )
     payload = json.loads(trip_tools.wiki_place_image("Rheinturm"))
     assert payload["image_url"].startswith("https://upload.wikimedia.org/")

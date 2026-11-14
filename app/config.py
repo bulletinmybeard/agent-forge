@@ -564,9 +564,9 @@ class HashtagRoutesSettings(BaseSettings):
 class SecuritySettings(BaseSettings):
     """Optional API-key auth for the HTTP + WebSocket surface.
 
-    Empty list = disabled (open) — the default. Add keys to require them on
-    every request. The ``AGENTFORGE_API_KEYS`` env var (comma-separated)
-    overrides this list; that override is applied in ``app.security``.
+    Empty list = no script keys. The WebUI wall is separate: it is on when
+    ``AGENTFORGE_ADMIN_PASSWORD`` is set. ``AGENTFORGE_API_KEYS`` replaces
+    this list only when it contains a key. A blank value does not.
     """
 
     model_config = SettingsConfigDict(env_prefix="SECURITY_")

@@ -20,6 +20,12 @@ from qdrant_client.models import (
 )
 
 from app.config import settings
+from app.services.qdrant_owner import (
+    backfill_missing_owner,
+    hash_material,
+    owner_condition,
+    payload_visible,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +35,16 @@ DISTANCE_MAP = {
     "Dot": Distance.DOT,
 }
 
-PAYLOAD_INDEXES_KEYWORD = ["content_type", "language", "tags", "source_url", "project", "parent_id", "is_chunk"]
+PAYLOAD_INDEXES_KEYWORD = [
+    "content_type",
+    "language",
+    "tags",
+    "source_url",
+    "project",
+    "parent_id",
+    "is_chunk",
+    "user_id",
+]
 PAYLOAD_INDEXES_DATETIME = ["created_at", "updated_at"]
 
 
@@ -86,6 +101,21 @@ class KnowledgeVectorService:
             except Exception:
                 logger.debug("Payload index '%s' already exists or failed", field_name)
 
+        try:
+            stamped = backfill_missing_owner(client, self._collection)
+            if stamped:
+                logger.info("Stamped user_id on %d points in %s", stamped, self._collection)
+        except Exception as exc:
+            logger.warning("user_id backfill skipped for %s: %s", self._collection, exc)
+
+    def _must(self, conditions: list | None) -> list | None:
+        owner = owner_condition()
+        base = list(conditions or [])
+        if owner is None:
+            return base or None
+        base.append(owner)
+        return base
+
     def upsert_batch(self, points: list[PointStruct]) -> None:
         if not points:
             return
@@ -105,6 +135,8 @@ class KnowledgeVectorService:
             if not points:
                 return None
             p = points[0]
+            if not payload_visible(p.payload):
+                return None
             return {"id": str(p.id), "payload": dict(p.payload) if p.payload else {}}
         except Exception as e:
             logger.warning("Failed to retrieve point '%s': %s", point_id, e)
@@ -154,7 +186,7 @@ class KnowledgeVectorService:
         # Exclude page chunks from top-level search results
         must_not = [FieldCondition(key="is_chunk", match=MatchValue(value=True))]
 
-        query_filter = Filter(must=conditions or None, must_not=must_not)
+        query_filter = Filter(must=self._must(conditions), must_not=must_not)
 
         response = client.query_points(
             collection_name=self._collection,
@@ -188,12 +220,16 @@ class KnowledgeVectorService:
                 with_payload=["content_hash"],
                 with_vectors=False,
             )
-            return {str(p.id): p.payload.get("content_hash", "") for p in points if p.payload}
+            return {
+                str(p.id): p.payload.get("content_hash", "") for p in points if p.payload and payload_visible(p.payload)
+            }
         except Exception as e:
             logger.warning("Failed to retrieve content hashes: %s", e)
             return {}
 
     def delete_point(self, point_id: str) -> None:
+        if owner_condition() is not None and self.get_by_id(point_id) is None:
+            return
         client = self._get_client()
         client.delete(
             collection_name=self._collection,
@@ -226,7 +262,7 @@ class KnowledgeVectorService:
 
         client.delete(
             collection_name=self._collection,
-            points_selector=Filter(must=conditions),
+            points_selector=Filter(must=self._must(conditions)),
         )
         logger.info("Deleted points matching filter from '%s'", self._collection)
         return -1  # Qdrant delete doesn't return count; caller checks collection info
@@ -254,7 +290,7 @@ class KnowledgeVectorService:
         # Exclude page chunks from filter results
         must_not = [FieldCondition(key="is_chunk", match=MatchValue(value=True))]
 
-        query_filter = Filter(must=conditions or None, must_not=must_not)
+        query_filter = Filter(must=self._must(conditions), must_not=must_not)
         points, _ = client.scroll(
             collection_name=self._collection,
             scroll_filter=query_filter,
@@ -273,7 +309,7 @@ class KnowledgeVectorService:
         must_not = [FieldCondition(key="is_chunk", match=MatchValue(value=True))]
         points, _ = client.scroll(
             collection_name=self._collection,
-            scroll_filter=Filter(must_not=must_not),
+            scroll_filter=Filter(must=self._must(None), must_not=must_not),
             limit=limit,
             with_payload=[
                 "title",
@@ -297,10 +333,12 @@ class KnowledgeVectorService:
         """Vector search within page chunks belonging to a parent entry."""
         client = self._get_client()
         query_filter = Filter(
-            must=[
-                FieldCondition(key="parent_id", match=MatchValue(value=parent_id)),
-                FieldCondition(key="is_chunk", match=MatchValue(value=True)),
-            ]
+            must=self._must(
+                [
+                    FieldCondition(key="parent_id", match=MatchValue(value=parent_id)),
+                    FieldCondition(key="is_chunk", match=MatchValue(value=True)),
+                ]
+            )
         )
         response = client.query_points(
             collection_name=self._collection,
@@ -318,10 +356,12 @@ class KnowledgeVectorService:
         """Scroll all page chunks belonging to a parent entry."""
         client = self._get_client()
         query_filter = Filter(
-            must=[
-                FieldCondition(key="parent_id", match=MatchValue(value=parent_id)),
-                FieldCondition(key="is_chunk", match=MatchValue(value=True)),
-            ]
+            must=self._must(
+                [
+                    FieldCondition(key="parent_id", match=MatchValue(value=parent_id)),
+                    FieldCondition(key="is_chunk", match=MatchValue(value=True)),
+                ]
+            )
         )
         points, _ = client.scroll(
             collection_name=self._collection,
@@ -338,10 +378,12 @@ class KnowledgeVectorService:
         client.delete(
             collection_name=self._collection,
             points_selector=Filter(
-                must=[
-                    FieldCondition(key="parent_id", match=MatchValue(value=parent_id)),
-                    FieldCondition(key="is_chunk", match=MatchValue(value=True)),
-                ]
+                must=self._must(
+                    [
+                        FieldCondition(key="parent_id", match=MatchValue(value=parent_id)),
+                        FieldCondition(key="is_chunk", match=MatchValue(value=True)),
+                    ]
+                )
             ),
         )
         logger.debug("Deleted chunks for parent '%s'", parent_id)
@@ -349,9 +391,11 @@ class KnowledgeVectorService:
     def facet_tags(self, limit: int = 2000) -> list[dict]:
         client = self._get_client()
         try:
+            owner = owner_condition()
             response = client.facet(
                 collection_name=self._collection,
                 key="tags",
+                facet_filter=Filter(must=[owner]) if owner is not None else None,
                 limit=limit,
                 exact=True,
             )
@@ -364,9 +408,18 @@ class KnowledgeVectorService:
         client = self._get_client()
         try:
             info = client.get_collection(self._collection)
+            points_count = getattr(info, "points_count", None)
+            owner = owner_condition()
+            if owner is not None:
+                counted = client.count(
+                    collection_name=self._collection,
+                    count_filter=Filter(must=[owner]),
+                    exact=True,
+                )
+                points_count = int(getattr(counted, "count", 0) or 0)
             return {
                 "name": self._collection,
-                "points_count": getattr(info, "points_count", None),
+                "points_count": points_count,
                 "status": info.status.value if getattr(info, "status", None) else "unknown",
             }
         except Exception:
@@ -375,9 +428,11 @@ class KnowledgeVectorService:
     def count_by_content_type(self) -> dict[str, int]:
         client = self._get_client()
         try:
+            owner = owner_condition()
             response = client.facet(
                 collection_name=self._collection,
                 key="content_type",
+                facet_filter=Filter(must=[owner]) if owner is not None else None,
                 limit=100,
                 exact=True,
             )
@@ -396,7 +451,9 @@ class KnowledgeVectorService:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
             result = client.count(
                 collection_name=self._collection,
-                count_filter=Filter(must=[FieldCondition(key="created_at", range=DatetimeRange(gte=cutoff))]),
+                count_filter=Filter(
+                    must=self._must([FieldCondition(key="created_at", range=DatetimeRange(gte=cutoff))])
+                ),
                 exact=True,
             )
             return result.count
@@ -406,7 +463,7 @@ class KnowledgeVectorService:
 
     @staticmethod
     def generate_point_id(content_hash: str) -> str:
-        h = hashlib.md5(content_hash.encode()).hexdigest()
+        h = hashlib.md5(hash_material(content_hash).encode()).hexdigest()
         return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}"
 
 

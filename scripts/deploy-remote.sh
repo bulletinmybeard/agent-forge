@@ -13,7 +13,7 @@
 # Flow:
 #   1. Rsync repo to the remote (configs go along; no SPA build, no yq merge)
 #   2. docker compose up -d --build (overlay: Traefik + host Redis)
-#   3. Prune unused build cache + unused images (containers + volumes kept)
+#   3. Prune dangling build cache + dangling images (tagged images kept)
 #   4. Install / refresh the native local worker (macOS launchd)
 #
 # Settings (SSH host, dir, domains, proxy network, host Redis) come from
@@ -113,7 +113,7 @@ resolve_deploy
 # Vars the compose overlay interpolates — passed through to the remote compose.
 # COMPOSE_PROFILES picks which services run; REMOTE_REDIS_URL stays the authoritative
 # host-Redis knob on the remote (overlay reads it). Host Qdrant only when requested.
-COMPOSE_ENV="COMPOSE_PROFILES='${RESOLVED_COMPOSE_PROFILES}' PUBLIC_DOMAIN='${PUBLIC_DOMAIN}' API_DOMAIN='${API_DOMAIN}' QDRANT_DOMAIN='${QDRANT_DOMAIN}' SAQ_DOMAIN='${SAQ_DOMAIN}' PROXY_NETWORK='${PROXY_NETWORK}' REMOTE_REDIS_URL='${REMOTE_REDIS_URL}' AGENTFORGE_DISPATCH_MODE='${RESOLVED_DISPATCH_MODE}' AGENTFORGE_TOOL_PLUGINS='${AGENTFORGE_TOOL_PLUGINS:-}' AGENTFORGE_ALLOW_INSECURE='${AGENTFORGE_ALLOW_INSECURE:-}' AGENTFORGE_API_KEYS='${AGENTFORGE_API_KEYS:-}' AGENTFORGE_REQUIRE_AUTH='${AGENTFORGE_REQUIRE_AUTH:-}' SIDECAR_AUTH_TOKEN='${SIDECAR_AUTH_TOKEN:-}' AGENTFORGE_INTERNAL_TOKEN='${AGENTFORGE_INTERNAL_TOKEN:-}' LOKI_URL='${LOKI_URL:-}'"
+COMPOSE_ENV="COMPOSE_PROFILES='${RESOLVED_COMPOSE_PROFILES}' PUBLIC_DOMAIN='${PUBLIC_DOMAIN}' API_DOMAIN='${API_DOMAIN}' QDRANT_DOMAIN='${QDRANT_DOMAIN}' SAQ_DOMAIN='${SAQ_DOMAIN}' PROXY_NETWORK='${PROXY_NETWORK}' REMOTE_REDIS_URL='${REMOTE_REDIS_URL}' AGENTFORGE_DISPATCH_MODE='${RESOLVED_DISPATCH_MODE}' AGENTFORGE_TOOL_PLUGINS='${AGENTFORGE_TOOL_PLUGINS:-}' AGENTFORGE_ALLOW_INSECURE='${AGENTFORGE_ALLOW_INSECURE:-}' AGENTFORGE_API_KEYS='${AGENTFORGE_API_KEYS:-}' AGENTFORGE_ADMIN_USERNAME='${AGENTFORGE_ADMIN_USERNAME:-}' AGENTFORGE_ADMIN_PASSWORD='${AGENTFORGE_ADMIN_PASSWORD:-}' AGENTFORGE_REQUIRE_AUTH='${AGENTFORGE_REQUIRE_AUTH:-}' SIDECAR_AUTH_TOKEN='${SIDECAR_AUTH_TOKEN:-}' AGENTFORGE_INTERNAL_TOKEN='${AGENTFORGE_INTERNAL_TOKEN:-}' LOKI_URL='${LOKI_URL:-}'"
 if [ -n "${RESOLVED_QDRANT_HOST}" ]; then
     COMPOSE_ENV="${COMPOSE_ENV} QDRANT_HOST='${RESOLVED_QDRANT_HOST}' QDRANT_PORT='${RESOLVED_QDRANT_PORT}'"
 fi
@@ -211,19 +211,23 @@ ensure_custom_agent_files() {
     fi
 }
 
-# Drop unused BuildKit cache + images not referenced by any container.
-# Leaves containers (including exited ones) and volumes alone — stopped stacks
-# stay pinned. Restart-only / config-only paths skip this.
+# Dangling cache and dangling images only. `-a` on either prune is what
+# made the next deploy rebuild from scratch:
+#   image prune -a   deletes tagged images no container references, including
+#                    python:3.12-slim, so the next build re-pulls that tag
+#   builder prune -a deletes the BuildKit cache once the build has finished,
+#                    so the next build reruns pip + playwright
+# Restart-only / config-only paths skip this.
 prune_remote_docker() {
-    echo -e "\n${GREEN}Pruning unused Docker build cache + images (containers/volumes kept)...${NC}"
+    echo -e "\n${GREEN}Pruning dangling build cache + images (tagged images, containers, volumes kept)...${NC}"
     if ! ${SSH_CMD} "${SSH_HOST}" '
       set +e
       echo "Before:"
       docker system df
       echo
-      docker builder prune -af
+      docker builder prune -f
       echo
-      docker image prune -af
+      docker image prune -f
       echo
       echo "After:"
       docker system df
@@ -398,7 +402,7 @@ if ! ${SSH_CMD} "${SSH_HOST}" "
     echo -e "${YELLOW}[warn] health probe SSH step failed — check: ssh ${SSH_HOST} 'docker ps'${NC}"
 fi
 
-prune_remote_docker
+#prune_remote_docker
 
 setup_local_worker || echo -e "${YELLOW}[warn] setup_local_worker returned non-zero${NC}"
 close_ssh || true

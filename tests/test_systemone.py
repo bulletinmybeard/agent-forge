@@ -6,13 +6,16 @@ import asyncio
 import base64
 import json
 import types
+from typing import cast
 
 import pytest
 from ollama import ResponseError
 
+from agentforge.backends.base import Backend
 from agentforge.backends.ollama import OllamaBackend
 from agentforge.backends.systemone import SystemOneError, build_systemone_body
 from agentforge.client import AIClient, get_models_used, reset_models_used
+from agentforge.config import AIProfile
 from agentforge.tools.decision_tools import decide
 
 _NOUL = {"greet": {"type": "noul", "instructions": "Is this a greeting?"}}
@@ -66,7 +69,7 @@ def test_rejects_jsonish_state_that_does_not_parse():
 
 def _backend() -> OllamaBackend:
     backend = object.__new__(OllamaBackend)
-    backend._profile = types.SimpleNamespace(model="clef:cloud")
+    backend._profile = cast(AIProfile, types.SimpleNamespace(model="clef:cloud"))
     return backend
 
 
@@ -129,21 +132,21 @@ def test_asystemone_posts():
 
 def test_client_systemone_unsupported():
     client = object.__new__(AIClient)
-    client._backend = object()
-    client._profile = types.SimpleNamespace(name="openai-default", provider="openai", model="gpt")
+    client._backend = cast(Backend, object())
+    client._profile = cast(AIProfile, types.SimpleNamespace(name="openai-default", provider="openai", model="gpt"))
     with pytest.raises(NotImplementedError):
         client.systemone("state", _NOUL)
 
 
 def test_client_records_model():
     client = object.__new__(AIClient)
-    client._profile = types.SimpleNamespace(name="ollama-clef", provider="ollama", model="clef:cloud")
+    client._profile = cast(AIProfile, types.SimpleNamespace(name="ollama-clef", provider="ollama", model="clef:cloud"))
 
     class _Backend:
         def systemone(self, state, questions, images=None):
             return {"answers": {}}
 
-    client._backend = _Backend()
+    client._backend = cast(Backend, _Backend())
     reset_models_used()
     client.systemone("hi", _NOUL)
     assert get_models_used() == ["clef:cloud"]

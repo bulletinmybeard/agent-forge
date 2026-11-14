@@ -11,17 +11,29 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import create_engine, event, func
+from sqlalchemy import create_engine, event, func, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
 from web.server.database.migrate import upgrade as alembic_upgrade
+from web.server.identity import (
+    ADMIN_USER_ID,
+    admin_username,
+    current_user_id,
+    hash_secret,
+    new_api_key,
+    new_session_token,
+    verify_password,
+)
 
 from .models import (
+    ApiKey,
+    AuthSession,
     Base,
     ChatMessage,
     ChatSession,
@@ -29,12 +41,14 @@ from .models import (
     CommandPermissionActive,
     CommandPermissionProfileRow,
     CommandPolicyOverride,
+    Connection,
     MonitorCheck,
     MonitorJob,
     MonitorSnapshot,
     ScheduledJob,
     ScheduledJobRun,
     SessionInstruction,
+    User,
     UserFact,
 )
 
@@ -87,11 +101,338 @@ class ChatDatabase:
         See ``web.server.database.migrate`` and ``agentforge-db`` CLI.
         """
         alembic_upgrade(self.db_path)
+        self.ensure_admin()
         logger.info("Database schema ready (Alembic head) at %s", self.db_path)
 
     def drop_tables(self) -> None:
         """Drop all tables (destructive — for testing/reset)."""
         Base.metadata.drop_all(bind=self.engine)
+
+    # -- Owner -----------------------------------------------------------------
+
+    def _actor(self) -> str | None:
+        """User id to filter on. ``None`` means auth is off and rows are shared."""
+        return current_user_id()
+
+    def _owner_id(self) -> str:
+        return self._actor() or ADMIN_USER_ID
+
+    def _scoped(self, query, column):
+        """Keep ``query`` as-is when auth is off. Otherwise only this user's rows."""
+        actor = self._actor()
+        if actor:
+            return query.filter(column == actor)
+        return query
+
+    def _visible(self, session, session_id: str) -> bool:
+        actor = self._actor()
+        if not actor:
+            return True
+        owner = session.query(ChatSession.user_id).filter(ChatSession.id == session_id).scalar()
+        return owner == actor
+
+    def list_session_ids(self) -> list[str]:
+        """Every session id the current actor can see. Unfiltered when auth is off."""
+        with self.SessionLocal() as session:
+            query = session.query(ChatSession.id)
+            actor = self._actor()
+            if actor:
+                query = query.filter(ChatSession.user_id == actor)
+            return [row[0] for row in query.all()]
+
+    def get_session_owner(self, session_id: str) -> str | None:
+        """Owner id, ignoring the actor filter. ``None`` when the session does not exist."""
+        with self.SessionLocal() as session:
+            return session.query(ChatSession.user_id).filter(ChatSession.id == session_id).scalar()
+
+    # -- Users and credentials -------------------------------------------------
+
+    def ensure_admin(self) -> None:
+        """Insert the fixed admin row when it is missing.
+
+        The name comes from ``AGENTFORGE_ADMIN_USERNAME`` (default ``admin``).
+        An existing row is left alone. Does not touch the password.
+        """
+        with self.SessionLocal() as session:
+            if session.get(User, ADMIN_USER_ID) is not None:
+                return
+            session.add(
+                User(
+                    id=ADMIN_USER_ID,
+                    username=admin_username(),
+                    password_hash="",
+                    is_admin=True,
+                    created_at=datetime.now(),
+                )
+            )
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise ValueError("username already exists") from exc
+
+    def set_admin_username(self, username: str) -> None:
+        """Rename the fixed admin row. No-op when the name already matches."""
+        name = (username or "").strip().lower()
+        with self.SessionLocal() as session:
+            user = session.get(User, ADMIN_USER_ID)
+            if user is None or user.username == name:
+                return
+            user.username = name
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise ValueError("username already exists") from exc
+
+    def set_user_password(self, user_id: str, password_hash: str) -> None:
+        with self.SessionLocal() as session:
+            user = session.get(User, user_id)
+            if user is None:
+                return
+            user.password_hash = password_hash
+            session.commit()
+
+    def authenticate(self, username: str, password: str) -> User | None:
+        name = (username or "").strip().lower()
+        if not name or not password:
+            return None
+        with self.SessionLocal() as session:
+            user = session.query(User).filter(User.username == name).first()
+            if user is None or not user.password_hash:
+                return None
+            if not verify_password(password, user.password_hash):
+                return None
+            session.expunge(user)
+            return user
+
+    def get_user(self, user_id: str) -> User | None:
+        with self.SessionLocal() as session:
+            user = session.get(User, user_id)
+            if user is not None:
+                session.expunge(user)
+            return user
+
+    def user_exists(self, user_id: str) -> bool:
+        with self.SessionLocal() as session:
+            return session.get(User, user_id) is not None
+
+    def list_users(self) -> list[User]:
+        with self.SessionLocal() as session:
+            users = session.query(User).order_by(User.created_at.asc()).all()
+            session.expunge_all()
+            return users
+
+    def create_user(self, username: str, password_hash: str) -> User:
+        """Create a non-admin user. Raises ``ValueError`` when the name is taken."""
+        name = (username or "").strip().lower()
+        with self.SessionLocal() as session:
+            user = User(
+                id=str(uuid.uuid4()),
+                username=name,
+                password_hash=password_hash,
+                is_admin=False,
+                created_at=datetime.now(),
+            )
+            session.add(user)
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise ValueError("username already exists") from exc
+            session.refresh(user)
+            session.expunge(user)
+            return user
+
+    def update_user(self, user_id: str, *, username: str | None = None, password_hash: str | None = None) -> User:
+        """Rename a user or replace the password hash.
+
+        The admin row is refused. The name and password come from the
+        environment and are applied again on the next start. Raises
+        ``ValueError`` with ``user not found``, ``cannot edit the admin user``,
+        or ``username already exists``.
+        """
+        with self.SessionLocal() as session:
+            user = session.get(User, user_id)
+            if user is None:
+                raise ValueError("user not found")
+            if user.is_admin:
+                raise ValueError("cannot edit the admin user")
+            if username:
+                user.username = username.strip().lower()
+            if password_hash:
+                user.password_hash = password_hash
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise ValueError("username already exists") from exc
+            session.refresh(user)
+            session.expunge(user)
+            return user
+
+    def delete_user(self, user_id: str) -> list[str]:
+        """Delete a non-admin user and the rows that belong to them.
+
+        Returns the session ids that were removed, so the caller can drop
+        upload directories. Raises ``ValueError`` with ``user not found`` or
+        ``cannot delete the admin user``.
+        """
+        with self.SessionLocal() as session:
+            user = session.get(User, user_id)
+            if user is None:
+                raise ValueError("user not found")
+            if user.is_admin:
+                raise ValueError("cannot delete the admin user")
+            owned_ids = [row[0] for row in session.query(ChatSession.id).filter(ChatSession.user_id == user_id).all()]
+            session.query(UserFact).filter(UserFact.user_id == user_id).delete(synchronize_session=False)
+            session.query(SessionInstruction).filter(SessionInstruction.user_id == user_id).delete(
+                synchronize_session=False
+            )
+            session.query(CommandNote).filter(CommandNote.user_id == user_id).delete(synchronize_session=False)
+            if "canvas_items" in inspect(session.get_bind()).get_table_names():
+                for sid in owned_ids:
+                    session.execute(text("DELETE FROM canvas_items WHERE session_id = :sid"), {"sid": sid})
+            roots = (
+                session.query(ChatSession)
+                .filter(ChatSession.user_id == user_id, ChatSession.parent_session_id.is_(None))
+                .all()
+            )
+            for chat in roots:
+                self._delete_session_tree(session, chat)
+            for chat in session.query(ChatSession).filter(ChatSession.user_id == user_id).all():
+                session.delete(chat)
+            session.query(ApiKey).filter(ApiKey.user_id == user_id).delete(synchronize_session=False)
+            session.query(AuthSession).filter(AuthSession.user_id == user_id).delete(synchronize_session=False)
+            session.query(Connection).filter(Connection.user_id == user_id).delete(synchronize_session=False)
+            scheduled_ids = [
+                row[0] for row in session.query(ScheduledJob.id).filter(ScheduledJob.user_id == user_id).all()
+            ]
+            if scheduled_ids:
+                session.query(ScheduledJobRun).filter(ScheduledJobRun.job_id.in_(scheduled_ids)).delete(
+                    synchronize_session=False
+                )
+                session.query(ScheduledJob).filter(ScheduledJob.user_id == user_id).delete(synchronize_session=False)
+            monitor_ids = [row[0] for row in session.query(MonitorJob.id).filter(MonitorJob.user_id == user_id).all()]
+            if monitor_ids:
+                session.query(MonitorCheck).filter(MonitorCheck.job_id.in_(monitor_ids)).delete(
+                    synchronize_session=False
+                )
+                session.query(MonitorSnapshot).filter(MonitorSnapshot.job_id.in_(monitor_ids)).delete(
+                    synchronize_session=False
+                )
+                session.query(MonitorJob).filter(MonitorJob.user_id == user_id).delete(synchronize_session=False)
+            session.delete(user)
+            session.commit()
+            return owned_ids
+
+    def create_api_key(self, user_id: str, name: str) -> tuple[ApiKey, str]:
+        """Insert a key for ``user_id``. Returns the row and the secret (once)."""
+        secret, prefix, digest = new_api_key()
+        with self.SessionLocal() as session:
+            row = ApiKey(
+                id=str(uuid.uuid4()),
+                user_id=user_id,
+                name=(name or "").strip()[:128],
+                prefix=prefix,
+                key_hash=digest,
+                created_at=datetime.now(),
+            )
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            session.expunge(row)
+            return row, secret
+
+    def list_api_keys(self, user_id: str) -> list[ApiKey]:
+        with self.SessionLocal() as session:
+            rows = (
+                session.query(ApiKey)
+                .filter(ApiKey.user_id == user_id, ApiKey.revoked_at.is_(None))
+                .order_by(ApiKey.created_at.desc())
+                .all()
+            )
+            session.expunge_all()
+            return rows
+
+    def revoke_api_key(self, key_id: str, *, actor_id: str, as_admin: bool) -> bool:
+        with self.SessionLocal() as session:
+            row = session.get(ApiKey, key_id)
+            if row is None or row.revoked_at is not None:
+                return False
+            if row.user_id != actor_id and not as_admin:
+                return False
+            row.revoked_at = datetime.now()
+            session.commit()
+            return True
+
+    def user_id_for_api_key(self, raw: str) -> str | None:
+        """Resolve a presented user key. Config keys are not stored here."""
+        if not raw:
+            return None
+        digest = hash_secret(raw)
+        now = datetime.now()
+        with self.SessionLocal() as session:
+            row = session.query(ApiKey).filter(ApiKey.key_hash == digest, ApiKey.revoked_at.is_(None)).first()
+            if row is None:
+                return None
+            if row.last_used_at is None or (now - row.last_used_at) > timedelta(minutes=5):
+                row.last_used_at = now
+                session.commit()
+            return row.user_id
+
+    def create_auth_session(self, user_id: str, *, impersonator_user_id: str | None = None) -> str:
+        """Persist a WebUI session and return the cookie secret.
+
+        ``impersonator_user_id`` is the admin whose browser session was
+        replaced. A normal login leaves it empty.
+        """
+        raw, digest = new_session_token()
+        with self.SessionLocal() as session:
+            session.add(
+                AuthSession(
+                    id=str(uuid.uuid4()),
+                    user_id=user_id,
+                    impersonator_user_id=impersonator_user_id,
+                    token_hash=digest,
+                    created_at=datetime.now(),
+                    expires_at=datetime.now() + timedelta(days=30),
+                )
+            )
+            session.commit()
+            return raw
+
+    def get_live_auth_session(self, raw: str) -> AuthSession | None:
+        """The session for a cookie value, or None when it is missing or expired."""
+        if not raw:
+            return None
+        digest = hash_secret(raw)
+        now = datetime.now()
+        with self.SessionLocal() as session:
+            row = (
+                session.query(AuthSession)
+                .filter(AuthSession.token_hash == digest, AuthSession.revoked_at.is_(None))
+                .first()
+            )
+            if row is None or row.expires_at <= now:
+                return None
+            session.expunge(row)
+            return row
+
+    def user_id_for_session_token(self, raw: str) -> str | None:
+        row = self.get_live_auth_session(raw)
+        return row.user_id if row else None
+
+    def revoke_session_token(self, raw: str) -> None:
+        if not raw:
+            return
+        digest = hash_secret(raw)
+        with self.SessionLocal() as session:
+            row = session.query(AuthSession).filter(AuthSession.token_hash == digest).first()
+            if row is None or row.revoked_at is not None:
+                return
+            row.revoked_at = datetime.now()
+            session.commit()
 
     # -- Sessions --------------------------------------------------------------
 
@@ -128,15 +469,23 @@ class ChatDatabase:
         if len(title) > 255:
             title = title[:255]
 
+        owner = self._owner_id()
         with self.SessionLocal() as session:
             if parent_session_id:
-                parent = session.query(ChatSession).filter_by(id=parent_session_id).first()
+                parent_query = session.query(ChatSession).filter_by(id=parent_session_id)
+                actor = self._actor()
+                if actor:
+                    parent_query = parent_query.filter(ChatSession.user_id == actor)
+                parent = parent_query.first()
                 if parent is None:
                     raise ValueError("parent session does not exist")
                 if parent.parent_session_id:
                     raise ValueError("parent session is already a child")
+                if parent.user_id != owner:
+                    raise ValueError("parent session does not exist")
             chat = ChatSession(
                 id=session_id,
+                user_id=owner,
                 title=title,
                 provider_override=(provider_override.strip().lower() or None) if provider_override else None,
                 source=(source.strip().lower() or "web") if source else "web",
@@ -155,7 +504,11 @@ class ChatDatabase:
     def get_session(self, session_id: str) -> ChatSession | None:
         """Get a session by ID, or None if not found."""
         with self.SessionLocal() as session:
-            chat = session.query(ChatSession).filter_by(id=session_id).first()
+            query = session.query(ChatSession).filter_by(id=session_id)
+            actor = self._actor()
+            if actor:
+                query = query.filter(ChatSession.user_id == actor)
+            chat = query.first()
             if chat:
                 session.expunge(chat)
             return chat
@@ -179,6 +532,9 @@ class ChatDatabase:
         parent_id = (parent_id or "").strip() or None
         with self.SessionLocal() as session:
             query = session.query(ChatSession)
+            actor = self._actor()
+            if actor:
+                query = query.filter(ChatSession.user_id == actor)
             if sources is not None:
                 query = query.filter(ChatSession.source.in_(sources))
             if parent_id:
@@ -195,13 +551,13 @@ class ChatDatabase:
         if not q:
             return []
         with self.SessionLocal() as session:
-            rows = (
-                session.query(ChatMessage.session_id)
-                .filter(ChatMessage.content.ilike(f"%{q}%"))
-                .distinct()
-                .limit(limit)
-                .all()
+            rows_query = session.query(ChatMessage.session_id).join(
+                ChatSession, ChatMessage.session_id == ChatSession.id
             )
+            actor = self._actor()
+            if actor:
+                rows_query = rows_query.filter(ChatSession.user_id == actor)
+            rows = rows_query.filter(ChatMessage.content.ilike(f"%{q}%")).distinct().limit(limit).all()
             return [r[0] for r in rows]
 
     def update_session(self, session_id: str, **fields) -> ChatSession | None:
@@ -219,7 +575,11 @@ class ChatDatabase:
                 )
                 fields.pop(write_once, None)
         with self.SessionLocal() as session:
-            chat = session.query(ChatSession).filter_by(id=session_id).first()
+            query = session.query(ChatSession).filter_by(id=session_id)
+            actor = self._actor()
+            if actor:
+                query = query.filter(ChatSession.user_id == actor)
+            chat = query.first()
             if not chat:
                 return None
             for key, value in fields.items():
@@ -241,6 +601,8 @@ class ChatDatabase:
         if prompt_tokens <= 0 and completion_tokens <= 0:
             return
         with self.SessionLocal() as session:
+            if not self._visible(session, session_id):
+                return
             chat = session.query(ChatSession).filter_by(id=session_id).first()
             if not chat:
                 return
@@ -253,6 +615,8 @@ class ChatDatabase:
     def delete_session(self, session_id: str) -> bool:
         """Delete a session, its messages, and any child sessions."""
         with self.SessionLocal() as session:
+            if not self._visible(session, session_id):
+                return False
             chat = session.query(ChatSession).filter_by(id=session_id).first()
             if not chat:
                 return False
@@ -261,10 +625,67 @@ class ChatDatabase:
             return True
 
     def _delete_session_tree(self, session, chat: ChatSession) -> None:
-        children = session.query(ChatSession).filter_by(parent_session_id=chat.id).all()
+        children = session.query(ChatSession).filter(
+            ChatSession.parent_session_id == chat.id,
+            ChatSession.user_id == chat.user_id,
+        )
         for child in children:
             self._delete_session_tree(session, child)
         session.delete(chat)
+
+    def delete_user_chat_data(self) -> dict[str, int]:
+        """Delete chat sessions, facts, instructions, and canvas items.
+
+        Messages go with their session. Connections, bookmarks, command
+        permissions, scheduled jobs, and monitor jobs stay. Bookmark rows
+        lose their session id via ON DELETE SET NULL.
+        """
+        with self.SessionLocal() as session:
+            actor = self._actor()
+            sessions_query = session.query(ChatSession)
+            facts_query = session.query(UserFact)
+            instructions_query = session.query(SessionInstruction)
+            if actor:
+                sessions_query = sessions_query.filter(ChatSession.user_id == actor)
+                facts_query = facts_query.filter(UserFact.user_id == actor)
+                instructions_query = instructions_query.filter(SessionInstruction.user_id == actor)
+            owned_ids = [row[0] for row in sessions_query.with_entities(ChatSession.id).all()]
+            sessions = len(owned_ids)
+            facts = facts_query.delete(synchronize_session=False)
+            instructions = instructions_query.delete(synchronize_session=False)
+            canvas_items = 0
+            if "canvas_items" in inspect(session.get_bind()).get_table_names():
+                if actor:
+                    for sid in owned_ids:
+                        canvas_items += (
+                            session.execute(
+                                text("SELECT COUNT(*) FROM canvas_items WHERE session_id = :sid"),
+                                {"sid": sid},
+                            ).scalar()
+                            or 0
+                        )
+                        session.execute(
+                            text("DELETE FROM canvas_items WHERE session_id = :sid"),
+                            {"sid": sid},
+                        )
+                else:
+                    canvas_items = session.execute(text("SELECT COUNT(*) FROM canvas_items")).scalar() or 0
+                    session.execute(text("DELETE FROM canvas_items"))
+            roots = sessions_query.filter(ChatSession.parent_session_id.is_(None)).all()
+            for chat in roots:
+                self._delete_session_tree(session, chat)
+            leftovers = session.query(ChatSession)
+            if actor:
+                leftovers = leftovers.filter(ChatSession.user_id == actor)
+            for chat in leftovers.all():
+                session.delete(chat)
+            session.commit()
+        return {
+            "sessions": int(sessions),
+            "facts": int(facts),
+            "instructions": int(instructions),
+            "canvas_items": int(canvas_items),
+        }
 
     # -- Messages --------------------------------------------------------------
 
@@ -295,6 +716,8 @@ class ChatDatabase:
                 pass  # graceful fallback — never block persistence
 
         with self.SessionLocal() as session:
+            if not self._visible(session, session_id):
+                raise ValueError("session not found")
             # Get next sequence number
             max_seq = session.query(func.max(ChatMessage.sequence)).filter_by(session_id=session_id).scalar()
             next_seq = (max_seq or 0) + 1
@@ -326,6 +749,8 @@ class ChatDatabase:
     def get_messages(self, session_id: str) -> list[ChatMessage]:
         """Get all messages for a session, ordered by sequence."""
         with self.SessionLocal() as session:
+            if not self._visible(session, session_id):
+                return []
             messages = (
                 session.query(ChatMessage).filter_by(session_id=session_id).order_by(ChatMessage.sequence.asc()).all()
             )
@@ -345,6 +770,8 @@ class ChatDatabase:
         ``True`` when older messages exist beyond this page.
         """
         with self.SessionLocal() as session:
+            if not self._visible(session, session_id):
+                return [], False
             q = session.query(ChatMessage).filter_by(session_id=session_id)
             if before_sequence is not None:
                 q = q.filter(ChatMessage.sequence < before_sequence)
@@ -364,6 +791,8 @@ class ChatDatabase:
         persisted by the worker while the client was disconnected.
         """
         with self.SessionLocal() as session:
+            if not self._visible(session, session_id):
+                return []
             messages = (
                 session.query(ChatMessage)
                 .filter_by(session_id=session_id)
@@ -390,6 +819,8 @@ class ChatDatabase:
         half = window // 2
 
         with self.SessionLocal() as session:
+            if not self._visible(session, session_id):
+                return [], False, False
             # Find the message whose created_at is closest to (and >= ) target_dt
             anchor = (
                 session.query(ChatMessage)
@@ -446,6 +877,8 @@ class ChatDatabase:
     def get_max_sequence(self, session_id: str) -> int:
         """Return the highest sequence number for a session, or 0 if empty."""
         with self.SessionLocal() as session:
+            if not self._visible(session, session_id):
+                return 0
             result = session.query(func.max(ChatMessage.sequence)).filter_by(session_id=session_id).scalar()
             return result or 0
 
@@ -463,6 +896,8 @@ class ChatDatabase:
         Returns ``True`` if a message was found and updated.
         """
         with self.SessionLocal() as session:
+            if not self._visible(session, session_id):
+                return False
             msg = (
                 session.query(ChatMessage)
                 .filter_by(session_id=session_id, type=msg_type)
@@ -637,7 +1072,10 @@ class ChatDatabase:
     ) -> CommandNote:
         """Save a new command note (tool calls) or answer bookmark."""
         with self.SessionLocal() as session:
+            if session_id and not self._visible(session, session_id):
+                raise ValueError("session not found")
             note = CommandNote(
+                user_id=self._owner_id(),
                 session_id=session_id,
                 title=title,
                 kind=kind,
@@ -654,23 +1092,35 @@ class ChatDatabase:
     def list_command_notes(self, limit: int = 200, offset: int = 0) -> list[CommandNote]:
         """List all command notes, newest first."""
         with self.SessionLocal() as session:
-            notes = session.query(CommandNote).order_by(CommandNote.created_at.desc()).offset(offset).limit(limit).all()
+            query = session.query(CommandNote)
+            actor = self._actor()
+            if actor:
+                query = query.filter(CommandNote.user_id == actor)
+            notes = query.order_by(CommandNote.created_at.desc()).offset(offset).limit(limit).all()
             session.expunge_all()
             return notes
 
     def get_session_command_notes(self, session_id: str) -> list[CommandNote]:
         """Get all command notes for a specific session."""
         with self.SessionLocal() as session:
-            notes = (
-                session.query(CommandNote).filter_by(session_id=session_id).order_by(CommandNote.created_at.asc()).all()
-            )
+            if not self._visible(session, session_id):
+                return []
+            query = session.query(CommandNote).filter_by(session_id=session_id)
+            actor = self._actor()
+            if actor:
+                query = query.filter(CommandNote.user_id == actor)
+            notes = query.order_by(CommandNote.created_at.asc()).all()
             session.expunge_all()
             return notes
 
     def delete_command_note(self, note_id: int) -> bool:
         """Delete a command note by ID. Returns True if deleted."""
         with self.SessionLocal() as session:
-            note = session.query(CommandNote).filter_by(id=note_id).first()
+            query = session.query(CommandNote).filter_by(id=note_id)
+            actor = self._actor()
+            if actor:
+                query = query.filter(CommandNote.user_id == actor)
+            note = query.first()
             if not note:
                 return False
             session.delete(note)
@@ -686,7 +1136,9 @@ class ChatDatabase:
         session.  Pass a session_id for session-scoped instructions.
         """
         with self.SessionLocal() as session:
-            instr = SessionInstruction(session_id=session_id, text=text.strip())
+            if session_id and not self._visible(session, session_id):
+                raise ValueError("session not found")
+            instr = SessionInstruction(user_id=self._owner_id(), session_id=session_id, text=text.strip())
             session.add(instr)
             session.commit()
             session.refresh(instr)
@@ -696,31 +1148,37 @@ class ChatDatabase:
     def get_session_instructions(self, session_id: str) -> list[SessionInstruction]:
         """Return all instructions active for *session_id* — session-scoped + global."""
         with self.SessionLocal() as session:
-            instrs = (
-                session.query(SessionInstruction)
-                .filter((SessionInstruction.session_id == session_id) | (SessionInstruction.session_id.is_(None)))
-                .order_by(SessionInstruction.created_at.asc())
-                .all()
+            if not self._visible(session, session_id):
+                return []
+            query = session.query(SessionInstruction).filter(
+                (SessionInstruction.session_id == session_id) | (SessionInstruction.session_id.is_(None))
             )
+            actor = self._actor()
+            if actor:
+                query = query.filter(SessionInstruction.user_id == actor)
+            instrs = query.order_by(SessionInstruction.created_at.asc()).all()
             session.expunge_all()
             return instrs
 
     def get_global_instructions(self) -> list[SessionInstruction]:
         """Return global instructions (session_id IS NULL)."""
         with self.SessionLocal() as session:
-            instrs = (
-                session.query(SessionInstruction)
-                .filter(SessionInstruction.session_id.is_(None))
-                .order_by(SessionInstruction.created_at.asc())
-                .all()
-            )
+            query = session.query(SessionInstruction).filter(SessionInstruction.session_id.is_(None))
+            actor = self._actor()
+            if actor:
+                query = query.filter(SessionInstruction.user_id == actor)
+            instrs = query.order_by(SessionInstruction.created_at.asc()).all()
             session.expunge_all()
             return instrs
 
     def delete_session_instruction(self, instruction_id: int) -> bool:
         """Delete a single instruction by ID. Returns True if deleted."""
         with self.SessionLocal() as session:
-            instr = session.query(SessionInstruction).filter_by(id=instruction_id).first()
+            query = session.query(SessionInstruction).filter_by(id=instruction_id)
+            actor = self._actor()
+            if actor:
+                query = query.filter(SessionInstruction.user_id == actor)
+            instr = query.first()
             if not instr:
                 return False
             session.delete(instr)
@@ -733,11 +1191,16 @@ class ChatDatabase:
         Returns the count of deleted rows.
         """
         with self.SessionLocal() as session:
+            if not self._visible(session, session_id):
+                return 0
             q = session.query(SessionInstruction).filter(SessionInstruction.session_id == session_id)
             if global_too:
                 q = session.query(SessionInstruction).filter(
                     (SessionInstruction.session_id == session_id) | (SessionInstruction.session_id.is_(None))
                 )
+            actor = self._actor()
+            if actor:
+                q = q.filter(SessionInstruction.user_id == actor)
             count = q.count()
             q.delete(synchronize_session=False)
             session.commit()
@@ -759,6 +1222,7 @@ class ChatDatabase:
         with self.SessionLocal() as session:
             job = ScheduledJob(
                 id=job_id,
+                user_id=self._owner_id(),
                 label=label,
                 command=command,
                 cron=cron,
@@ -773,17 +1237,20 @@ class ChatDatabase:
             return job
 
     def get_scheduled_job(self, job_id: str) -> ScheduledJob | None:
-        """Get a scheduled job by ID."""
+        """Get a scheduled job by ID. Hidden when it belongs to someone else."""
         with self.SessionLocal() as session:
-            job = session.query(ScheduledJob).filter_by(id=job_id).first()
+            job = self._scoped(session.query(ScheduledJob).filter_by(id=job_id), ScheduledJob.user_id).first()
             if job:
                 session.expunge(job)
             return job
 
     def list_scheduled_jobs(self, enabled_only: bool = False) -> list[ScheduledJob]:
-        """List all scheduled jobs, newest first."""
+        """List scheduled jobs the current actor can see, newest first.
+
+        No actor (auth off, or the scheduler thread) returns every job.
+        """
         with self.SessionLocal() as session:
-            q = session.query(ScheduledJob)
+            q = self._scoped(session.query(ScheduledJob), ScheduledJob.user_id)
             if enabled_only:
                 q = q.filter_by(enabled=True)
             jobs = q.order_by(ScheduledJob.created_at.desc()).all()
@@ -792,12 +1259,13 @@ class ChatDatabase:
 
     def update_scheduled_job(self, job_id: str, **fields) -> ScheduledJob | None:
         """Update scheduled job fields (label, cron, enabled, etc.)."""
+        fields.pop("user_id", None)
         with self.SessionLocal() as session:
-            job = session.query(ScheduledJob).filter_by(id=job_id).first()
+            job = self._scoped(session.query(ScheduledJob).filter_by(id=job_id), ScheduledJob.user_id).first()
             if not job:
                 return None
             for key, value in fields.items():
-                if hasattr(job, key):
+                if hasattr(job, key) and key != "user_id":
                     setattr(job, key, value)
             job.updated_at = datetime.now()
             session.commit()
@@ -808,7 +1276,7 @@ class ChatDatabase:
     def delete_scheduled_job(self, job_id: str) -> bool:
         """Delete a scheduled job and all its run records (cascade)."""
         with self.SessionLocal() as session:
-            job = session.query(ScheduledJob).filter_by(id=job_id).first()
+            job = self._scoped(session.query(ScheduledJob).filter_by(id=job_id), ScheduledJob.user_id).first()
             if not job:
                 return False
             session.delete(job)
@@ -888,9 +1356,16 @@ class ChatDatabase:
         source_session: str | None = None,
         confidence: float = 0.8,
     ) -> UserFact:
-        """Insert or update a user fact (deduplicated by key)."""
+        """Insert or update a user fact (deduplicated by user and key)."""
+        owner = self._owner_id()
         with self.SessionLocal() as session:
-            existing = session.query(UserFact).filter_by(key=key).first()
+            query = session.query(UserFact).filter_by(key=key)
+            actor = self._actor()
+            if actor:
+                query = query.filter(UserFact.user_id == actor)
+            else:
+                query = query.filter(UserFact.user_id == owner)
+            existing = query.first()
             if existing:
                 existing.value = value
                 existing.fact_type = fact_type
@@ -903,6 +1378,7 @@ class ChatDatabase:
                 return existing
             else:
                 fact = UserFact(
+                    user_id=owner,
                     fact_type=fact_type,
                     key=key,
                     value=value,
@@ -918,26 +1394,33 @@ class ChatDatabase:
     def get_all_facts(self, min_confidence: float = 0.0) -> list[UserFact]:
         """Get all user facts above a confidence threshold."""
         with self.SessionLocal() as session:
-            facts = (
-                session.query(UserFact)
-                .filter(UserFact.confidence >= min_confidence)
-                .order_by(UserFact.updated_at.desc())
-                .all()
-            )
+            query = session.query(UserFact).filter(UserFact.confidence >= min_confidence)
+            actor = self._actor()
+            if actor:
+                query = query.filter(UserFact.user_id == actor)
+            facts = query.order_by(UserFact.updated_at.desc()).all()
             session.expunge_all()
             return facts
 
     def get_facts_by_type(self, fact_type: str) -> list[UserFact]:
         """Get all facts of a specific type."""
         with self.SessionLocal() as session:
-            facts = session.query(UserFact).filter_by(fact_type=fact_type).order_by(UserFact.updated_at.desc()).all()
+            query = session.query(UserFact).filter_by(fact_type=fact_type)
+            actor = self._actor()
+            if actor:
+                query = query.filter(UserFact.user_id == actor)
+            facts = query.order_by(UserFact.updated_at.desc()).all()
             session.expunge_all()
             return facts
 
     def delete_fact(self, key: str) -> bool:
         """Delete a fact by key."""
         with self.SessionLocal() as session:
-            fact = session.query(UserFact).filter_by(key=key).first()
+            query = session.query(UserFact).filter_by(key=key)
+            actor = self._actor()
+            if actor:
+                query = query.filter(UserFact.user_id == actor)
+            fact = query.first()
             if not fact:
                 return False
             session.delete(fact)
@@ -947,7 +1430,11 @@ class ChatDatabase:
     def delete_all_facts(self) -> int:
         """Delete every row in ``user_facts``. Returns rows deleted."""
         with self.SessionLocal() as session:
-            count = session.query(UserFact).delete()
+            query = session.query(UserFact)
+            actor = self._actor()
+            if actor:
+                query = query.filter(UserFact.user_id == actor)
+            count = query.delete()
             session.commit()
             return int(count)
 
@@ -960,7 +1447,11 @@ class ChatDatabase:
             return 0
         cutoff = datetime.now() - timedelta(days=days)
         with self.SessionLocal() as session:
-            count = session.query(UserFact).filter(UserFact.updated_at < cutoff).delete(synchronize_session=False)
+            query = session.query(UserFact).filter(UserFact.updated_at < cutoff)
+            actor = self._actor()
+            if actor:
+                query = query.filter(UserFact.user_id == actor)
+            count = query.delete(synchronize_session=False)
             session.commit()
             return int(count)
 
@@ -969,10 +1460,18 @@ class ChatDatabase:
     def get_statistics(self) -> dict:
         """Return basic stats about the chat database."""
         with self.SessionLocal() as session:
-            total_sessions = session.query(ChatSession).count()
-            total_messages = session.query(ChatMessage).count()
+            sessions_query = session.query(ChatSession)
+            messages_query = session.query(ChatMessage)
+            actor = self._actor()
+            if actor:
+                sessions_query = sessions_query.filter(ChatSession.user_id == actor)
+                messages_query = messages_query.join(ChatSession, ChatMessage.session_id == ChatSession.id).filter(
+                    ChatSession.user_id == actor
+                )
+            total_sessions = sessions_query.count()
+            total_messages = messages_query.count()
 
-            latest = session.query(ChatSession).order_by(ChatSession.updated_at.desc()).first()
+            latest = sessions_query.order_by(ChatSession.updated_at.desc()).first()
             last_activity = latest.updated_at if latest else None
 
             return {
@@ -1002,6 +1501,7 @@ class ChatDatabase:
         with self.SessionLocal() as session:
             job = MonitorJob(
                 id=job_id,
+                user_id=self._owner_id(),
                 label=label,
                 url=url,
                 original_prompt=original_prompt,
@@ -1021,17 +1521,20 @@ class ChatDatabase:
             return job
 
     def get_monitor_job(self, job_id: str) -> MonitorJob | None:
-        """Get a monitor job by ID."""
+        """Get a monitor job by ID. Hidden when it belongs to someone else."""
         with self.SessionLocal() as session:
-            job = session.query(MonitorJob).filter_by(id=job_id).first()
+            job = self._scoped(session.query(MonitorJob).filter_by(id=job_id), MonitorJob.user_id).first()
             if job:
                 session.expunge(job)
             return job
 
     def list_monitor_jobs(self, enabled_only: bool = False) -> list[MonitorJob]:
-        """List all monitor jobs, newest first."""
+        """List monitor jobs the current actor can see, newest first.
+
+        No actor (auth off, or the scheduler thread) returns every job.
+        """
         with self.SessionLocal() as session:
-            q = session.query(MonitorJob)
+            q = self._scoped(session.query(MonitorJob), MonitorJob.user_id)
             if enabled_only:
                 q = q.filter_by(enabled=True)
             jobs = q.order_by(MonitorJob.created_at.desc()).all()
@@ -1040,12 +1543,13 @@ class ChatDatabase:
 
     def update_monitor_job(self, job_id: str, **fields) -> MonitorJob | None:
         """Update monitor job fields."""
+        fields.pop("user_id", None)
         with self.SessionLocal() as session:
-            job = session.query(MonitorJob).filter_by(id=job_id).first()
+            job = self._scoped(session.query(MonitorJob).filter_by(id=job_id), MonitorJob.user_id).first()
             if not job:
                 return None
             for key, value in fields.items():
-                if hasattr(job, key):
+                if hasattr(job, key) and key != "user_id":
                     setattr(job, key, value)
             job.updated_at = datetime.now()
             session.commit()
@@ -1078,7 +1582,7 @@ class ChatDatabase:
         was added, and SQLite doesn't enforce FKs unless the pragma is set.
         """
         with self.SessionLocal() as session:
-            job = session.query(MonitorJob).filter_by(id=job_id).first()
+            job = self._scoped(session.query(MonitorJob).filter_by(id=job_id), MonitorJob.user_id).first()
             if not job:
                 return False
             # Explicit child cleanup (safe even if CASCADE is active)

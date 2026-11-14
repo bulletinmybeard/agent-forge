@@ -50,6 +50,7 @@ from agentforge.config import (
     set_request_session_id,
 )
 from agentforge.connectors._account import account_slug, label_slug
+from agentforge.tools.registry import submit_with_context
 from agentforge.tools.search_providers import describe_search_route
 from app.models.knowledge import KnowledgeSearchRequest
 from app.services.knowledge_registry import (
@@ -63,11 +64,13 @@ from . import protocol
 from .agent_bridge import AgentBridge
 from .confirm import ConfirmationBroker, unanswered_confirm_request
 from .database import ChatDatabase
+from .identity import current_user_id as _current_user_id
 from .mode_routing import CONNECTOR_ALIASES as _CONNECTOR_ALIASES
 from .mode_routing import STICKY_MODES as _STICKY_MODES
 from .mode_routing import strip_mode_prefix as _strip_mode_prefix
 from .queue.models import JobStatus
 from .queue.store import job_store
+from .run_settle import INLINE_RUN, WAIT_JOB, settle_inflight_run
 from .secret import SecretBroker
 from .summarise import flatten_messages_for_summary
 
@@ -1072,6 +1075,10 @@ class SearchRuntime:
                     "aliases": agent_cfg.get("aliases", [f"@{agent_id}"]),
                     "prompt_text": prompt_text,
                 }
+                # Picker section. The WebUI maps test_models onto the Models list.
+                group = agent_cfg.get("group")
+                if isinstance(group, str) and group.strip():
+                    enriched["group"] = group.strip()
 
                 for alias in enriched["aliases"]:
                     self.custom_agents[alias.lower()] = enriched
@@ -1503,6 +1510,45 @@ def _conv_memory():
     return mem if mem is not None else _NullConvMemory()
 
 
+def _query_mode(msg) -> str:
+    """Mode stamped on a persisted query, if any."""
+    raw = getattr(msg, "metadata_json", None)
+    if not raw:
+        meta = getattr(msg, "metadata", None)
+        return str(meta.get("mode") or "") if isinstance(meta, dict) else ""
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return ""
+    return str(data.get("mode") or "") if isinstance(data, dict) else ""
+
+
+def _retry_prompt_matches(stored: str, sent: str, mode: str | None = None) -> bool:
+    """True when *sent* is the user-visible form of the stored query.
+
+    The client retries the text in the bubble. The row is the text after
+    mode-prefix stripping and routing-hashtag normalization (``#myservice`` →
+    the configured name), so an exact compare returns ``not_found`` for a
+    prompt the user can still see and edit.
+    """
+    stored = stored or ""
+    sent = sent or ""
+    if not stored or not sent:
+        return False
+    stripped = re.sub(r"^\s*@[\w:-]+\s+", "", sent).strip()
+    forms = {sent, stripped}
+    modes: list[str] = []
+    if mode:
+        modes.append(mode)
+    prefix = re.match(r"^\s*@([\w:-]+)", sent)
+    if prefix:
+        modes.append(prefix.group(1))
+    for md in modes:
+        forms.add(_normalize_cloud_hashtags(stripped, md))
+        forms.add(_normalize_cloud_hashtags(sent, md))
+    return stored in forms
+
+
 async def _handle_retry_query(
     *,
     ws,
@@ -1520,10 +1566,8 @@ async def _handle_retry_query(
     *resubmit*, False when a query.retry.error was already sent.
     """
     last = db.get_last_user_query(session_id)
-    sent = prompt_text or ""
-    sent_no_prefix = re.sub(r"^\s*@[\w:-]+\s+", "", sent)
-    stored = (last.content or "") if last is not None else None
-    if last is None or stored not in (sent, sent_no_prefix):
+    stored = (last.content or "") if last is not None else ""
+    if last is None or not _retry_prompt_matches(stored, prompt_text or "", _query_mode(last)):
         await ws.send_json(protocol.query_retry_error(prompt_text, "not_found"))
         return False
 
@@ -1534,7 +1578,7 @@ async def _handle_retry_query(
     db.delete_messages_from_sequence(session_id, last.sequence)
     conv_memory.delete_exchange(session_id, last.content or "")
 
-    new_text = edited_text.strip() if edited_text else (sent or last.content or "")
+    new_text = edited_text.strip() if edited_text else (prompt_text or last.content or "")
     await resubmit(new_text)
     return True
 
@@ -2152,15 +2196,33 @@ def _resolve_skills(
     return cleaned, result, promoted_mode
 
 
+def _connector_aliases(rt: SearchRuntime) -> dict[str, dict]:
+    """Connector aliases the logged-in user may route to."""
+    mgr = getattr(rt, "connection_manager", None)
+    if mgr is None:
+        return {}
+    fn = getattr(mgr, "aliases_for_actor", None)
+    return fn() if callable(fn) else {}
+
+
+def _connector_cfg_allowed(cfg: dict | None) -> bool:
+    """False when this connector agent belongs to someone else."""
+    if not cfg or cfg.get("source") != "connector":
+        return bool(cfg)
+    actor = _current_user_id()
+    if not actor:
+        return True
+    return cfg.get("user_id") == actor
+
+
 def _agent_ref_for_connection(conn: dict, rt: SearchRuntime) -> str | None:
     """Agent ref for a connection: its account agent if grouped, else its own."""
     mgr = rt.connection_manager
-    acct = (conn.get("account_identifier") or "").strip()
-    if acct:
-        cfg = mgr._account_agents.get(account_slug(acct))
-        if cfg:
-            return f"custom:{cfg['id']}"
-    cfg = mgr._agents.get(conn["id"])
+    if mgr is None:
+        return None
+    cfg = mgr.account_agent_for(conn) if hasattr(mgr, "account_agent_for") else None
+    if cfg is None:
+        cfg = mgr._agents.get(conn["id"])
     return f"custom:{cfg['id']}" if cfg else None
 
 
@@ -2280,8 +2342,17 @@ def _strip_custom_prefix(query: str, rt: SearchRuntime) -> tuple[str, str | None
             rest = stripped[len(alias) :].lstrip()
             return _resolve_connector_agent(rest, rt)
 
-    # 2. Start-of-query alias detection (@cloud, @debug, etc.)
+    # 2. This user's connector aliases. The shared dict also holds other
+    #    users' connectors (tools stay registered in-process). Skip those.
+    for alias, agent_cfg in _connector_aliases(rt).items():
+        if lower.startswith(alias + " ") or lower == alias:
+            rest = stripped[len(alias) :].lstrip()
+            return rest, f"custom:{agent_cfg['id']}"
+
+    # 3. Start-of-query alias detection (@cloud, @debug, etc.)
     for alias, agent_cfg in rt.custom_agents.items():
+        if agent_cfg.get("source") == "connector":
+            continue
         # Match "alias " (with trailing space) or bare alias at end of string
         if lower.startswith(alias + " ") or lower == alias:
             rest = stripped[len(alias) :].lstrip()
@@ -2736,7 +2807,11 @@ async def _classify_mode(
         try:
             agents_registry = getattr(rt, "custom_agents", {}) or {}
             seen_ids: set[str] = set()
-            for alias, cfg in agents_registry.items():
+            # Drop connector entries from the shared dict. Another user's
+            # alias can sit on the same key. Add back only this user's.
+            visible = {alias: cfg for alias, cfg in agents_registry.items() if cfg.get("source") != "connector"}
+            visible.update(_connector_aliases(rt))
+            for alias, cfg in visible.items():
                 agent_id = (cfg.get("id") or alias).strip()
                 if agent_id in seen_ids:
                     continue  # multiple aliases share one agent — list once
@@ -3348,8 +3423,21 @@ _AGENT_EVENT_BUILDERS: dict[str, Any] = {
     ),
     "thinking": lambda d, e: protocol.agent_thinking(
         d["iteration"],
-        d["status"],
+        d.get("status") or "calling_model",
         e,
+        model=d.get("model") or "",
+        profile=d.get("profile") or "",
+        provider=d.get("provider") or "",
+        messages=d.get("messages"),
+        purpose=d.get("purpose") or "",
+    ),
+    "model_fallback": lambda d, _e: protocol.agent_model_fallback(
+        prev_profile=d.get("prev_profile") or "",
+        prev_model=d.get("prev_model") or "",
+        next_profile=d.get("next_profile") or "",
+        next_model=d.get("next_model") or "",
+        reason=d.get("reason") or "",
+        provider=d.get("provider") or "",
     ),
     "tool_exec": lambda d, e: protocol.agent_tool_exec(
         iteration=d["iteration"],
@@ -3392,7 +3480,7 @@ _AGENT_EVENT_BUILDERS: dict[str, Any] = {
 }
 
 # Exceptional event kinds that should be persisted to DB (survive reconnects)
-_PERSISTENT_EVENT_KINDS = frozenset(("retry", "recovery", "escalation", "warning"))
+_PERSISTENT_EVENT_KINDS = frozenset(("retry", "recovery", "escalation", "warning", "model_fallback"))
 
 
 # ---------------------------------------------------------------------------
@@ -4367,7 +4455,9 @@ async def _enqueue_job(
 
     # Pass all data as task args — the worker does NOT read job_store.db.
     overrides_json = json.dumps(overrides) if overrides else None
-    enqueue_agent_job(job_id, session_id, query, mode, overrides_json)
+    from web.server.identity import current_user_id
+
+    enqueue_agent_job(job_id, session_id, query, mode, overrides_json, user_id=current_user_id())
     logger.info("Enqueued job %s (session=%s, mode=%s)", job_id, session_id, mode)
     return job_id
 
@@ -4446,6 +4536,13 @@ async def websocket_chat(
     if session_id:
         existing_session = db.get_session(session_id)
         if not existing_session:
+            from web.server.identity import current_user_id
+
+            actor = current_user_id()
+            owner = db.get_session_owner(session_id) if actor else None
+            if owner and owner != actor:
+                await ws.close(code=1008)
+                return
             session_id = None
 
     # Thread-safe sender for agent callbacks
@@ -4601,7 +4698,10 @@ async def websocket_chat(
                 session_id,
             )
             active_job_id = active_job.job_id
-            active_task = asyncio.create_task(_wait_job_done(session_id, active_job_id))
+            active_task = asyncio.create_task(
+                _wait_job_done(session_id, active_job_id),
+                name=WAIT_JOB,
+            )
 
     # -- Replay ephemeral UI events from the Redis buffer ---------------------
     # tool.call / tool.calls.flush / research.progress / research.activity are
@@ -4664,6 +4764,102 @@ async def websocket_chat(
         except Exception as exc:
             logger.debug("Event buffer replay failed for %s: %s", session_id, exc)
 
+    def _start_inline(coro, run_cancel: threading.Event | None) -> asyncio.Task:
+        """Run *coro* as the session's inline task.
+
+        ``run.idle`` marks the turn finished for the client's prompt queue.
+        A cancel sets *run_cancel* first; skip idle so that signal stays with
+        the following turn.
+        """
+
+        async def _wrapped():
+            try:
+                await coro
+            finally:
+                if run_cancel is not None and run_cancel.is_set():
+                    return
+                try:
+                    await ws.send_json(protocol.run_idle())
+                except Exception:
+                    logger.debug("run.idle after inline run failed", exc_info=True)
+
+        return asyncio.create_task(_wrapped(), name=INLINE_RUN)
+
+    async def _send_queue_idle(sock: WebSocket) -> None:
+        """Close a ``#remember`` / ``#forget`` turn so the prompt queue can drain.
+
+        Those commands return on this task, so the inline wrapper never sends
+        ``run.idle``. ``instruction.saved`` already closes the turn; idle
+        covers the list-only and empty-forget returns that otherwise leave
+        the queue stuck.
+        """
+        try:
+            await sock.send_json(protocol.run_idle())
+        except Exception:
+            logger.debug("run.idle after remember/forget failed", exc_info=True)
+
+    async def _settle_previous_run() -> None:
+        """Cancel the in-flight turn and wait until its cancelled card is stored."""
+        nonlocal active_task, cancel_event
+        from . import state as _state
+
+        before_seq = 0
+        if session_id:
+            try:
+                row = db.get_session(session_id)
+                before_seq = int(getattr(row, "message_count", 0) or 0)
+            except Exception:
+                before_seq = 0
+        old_event = cancel_event
+        task = active_task
+
+        def _cancel_inline() -> None:
+            if old_event is not None:
+                old_event.set()
+
+        def _cancel_jobs() -> list[str]:
+            if not session_id:
+                return []
+            return job_store.cancel_active_jobs(session_id)
+
+        def _cancelled_after() -> bool:
+            if not session_id:
+                return False
+            try:
+                msgs = db.get_messages_after(session_id, before_seq)
+            except Exception:
+                return False
+            return any(getattr(m, "type", None) == "cancelled" for m in msgs)
+
+        async def _emit() -> None:
+            if not session_id:
+                return
+            cancel_msg = protocol.agent_cancelled(0)
+            try:
+                db.add_message(
+                    session_id=session_id,
+                    role="assistant",
+                    msg_type="cancelled",
+                    content="",
+                    metadata=cancel_msg,
+                )
+            except Exception:
+                logger.debug("synthetic cancel persist failed", exc_info=True)
+            try:
+                await ws.send_json(cancel_msg)
+            except Exception:
+                logger.debug("synthetic cancel send failed", exc_info=True)
+
+        await settle_inflight_run(
+            task,
+            cancel_inline=_cancel_inline,
+            cancel_jobs=_cancel_jobs,
+            cancelled_after=_cancelled_after,
+            emit_cancelled=_emit,
+            suppress_jobs=_state.suppress_cancel_jobs.update,
+        )
+        active_task = None
+
     async def _process_query(text: str, attachments: list, overrides):
         """Run a single query through the full classification + dispatch pipeline.
 
@@ -4672,6 +4868,12 @@ async def websocket_chat(
         ``chat_ws`` via ``nonlocal``.
         """
         nonlocal active_task, cancel_event, last_mode, last_skills, active_job_id
+
+        # A second query interrupts. The next prompt is not classified until
+        # the interrupted turn's cancelled card is stored.
+        await _settle_previous_run()
+        cancel_event = threading.Event()
+        broker.auto_accept = False
 
         # Fresh per-request model chain for the run summary "Models:" line.
         # Must run in this parent context before any to_thread / AIClient work.
@@ -4731,9 +4933,11 @@ async def websocket_chat(
         # very next LLM call.
         if _REMEMBER_RE.match(text):
             await _handle_remember(ws, db, session_id, text)
+            await _send_queue_idle(ws)
             return
         if _FORGET_RE.match(text):
             await _handle_forget(ws, db, session_id, text, broker=broker, secret_broker=secret_broker)
+            await _send_queue_idle(ws)
             return
 
         # Strip mode prefix (@agent/@search/...) if present
@@ -4825,7 +5029,13 @@ async def websocket_chat(
                 "@discover, @sql, @pipeline, @scheduler, @monitor, "
                 "@review, @research, @coding/@code, @plan, @build, @film/@movie"
             )
-            custom_aliases = sorted(("@" + a) for a in (getattr(rt, "custom_agents", {}) or {}).keys())
+            custom_aliases = sorted(
+                "@" + alias
+                for alias, cfg in (getattr(rt, "custom_agents", {}) or {}).items()
+                if cfg.get("source") != "connector"
+            )
+            custom_aliases.extend(sorted(_connector_aliases(rt)))
+            custom_aliases = sorted(set(custom_aliases))
             custom_str = ", ".join(custom_aliases) if custom_aliases else "(none)"
             msg = (
                 f"**No such mode `{bad_prefix}`.** Did you mean one of these?\n\n"
@@ -4909,6 +5119,17 @@ async def websocket_chat(
             and (mode in ("chat", "agent") or mode.startswith("custom:"))
             and _is_initial_prompt(db, session_id)
         ):
+            try:
+                await ws.send_json(
+                    protocol.pipeline_step(
+                        "refining",
+                        "running",
+                        0.0,
+                        detail="Rewriting the opening prompt",
+                    )
+                )
+            except Exception:  # noqa: BLE001 — surfacing is best-effort
+                logger.debug("could not send refining step", exc_info=True)
             _refined = await refine_prompt(exec_text)
             if _refined.changed:
                 exec_text = _refined.refined
@@ -4942,30 +5163,6 @@ async def websocket_chat(
             incognito=(overrides or {}).get("incognito", False),
         )
 
-        # Fresh cancel event for each query
-        cancel_event = threading.Event()
-        # Reset auto-accept — each new user message starts clean
-        broker.auto_accept = False
-
-        # ── Guard: kill any leftover job/task from a previous run ──────
-        # Without this, a stale "running" job (e.g., one whose status-update
-        # HTTP call failed and never reached DONE) continues sending events
-        # alongside the new job, producing duplicate Router + Result blocks
-        # in the same chat.  We mark the stale DB row CANCELLED so the worker
-        # detects it via SaqCancelEvent.is_set() and stops within ~2 s, and we
-        # cancel the _wait_job_done asyncio task so it doesn't linger either.
-        if active_task and not active_task.done():
-            active_task.cancel()
-            active_task = None
-        if session_id:
-            stale = job_store.cancel_active_jobs(session_id)
-            if stale:
-                logger.info(
-                    "Cancelled %d stale job(s) for session %s before new query",
-                    stale,
-                    session_id,
-                )
-
         # ── Dispatch: worker queue or inline ──────────────
         if _is_worker_mode(mode):
             # Validate custom agent exists before enqueuing
@@ -4975,8 +5172,9 @@ async def websocket_chat(
                 agent_cfg = rt.get_custom_agent_by_id(agent_id)
                 if not agent_cfg:
                     logger.warning("Custom agent '%s' not found — falling back to chat", agent_id)
-                    active_task = asyncio.create_task(
-                        _run_chat(ws, exec_text, session_id, rt, db, overrides, cancel_event=cancel_event)
+                    active_task = _start_inline(
+                        _run_chat(ws, exec_text, session_id, rt, db, overrides, cancel_event=cancel_event),
+                        cancel_event,
                     )
                     return
 
@@ -5098,6 +5296,11 @@ async def websocket_chat(
 
             async def _wait_and_store(sid, jid, _db, _ws, _skip_mem=_skip_memory):
                 await _wait_job_done(sid, jid)
+                _done = job_store.get_job(jid)
+                # An interrupt already owns the cancelled card. Idle here would
+                # look like the next turn finished.
+                if _done is not None and _done.status == JobStatus.CANCELLED:
+                    return
                 try:
                     await _ws.send_json(protocol.run_idle())
                 except Exception:
@@ -5146,10 +5349,13 @@ async def websocket_chat(
                 except Exception:
                     pass
 
-            active_task = asyncio.create_task(_wait_and_store(session_id, active_job_id, db, ws))
+            active_task = asyncio.create_task(
+                _wait_and_store(session_id, active_job_id, db, ws),
+                name=WAIT_JOB,
+            )
 
         elif mode == "scheduler":
-            active_task = asyncio.create_task(
+            active_task = _start_inline(
                 _run_scheduler(
                     ws,
                     exec_text,
@@ -5160,10 +5366,11 @@ async def websocket_chat(
                     broker=broker,
                     cancel_event=cancel_event,
                     secret_broker=secret_broker,
-                )
+                ),
+                cancel_event,
             )
         elif mode == "monitor":
-            active_task = asyncio.create_task(
+            active_task = _start_inline(
                 _run_monitor(
                     ws,
                     exec_text,
@@ -5174,22 +5381,31 @@ async def websocket_chat(
                     broker=broker,
                     cancel_event=cancel_event,
                     secret_broker=secret_broker,
-                )
+                ),
+                cancel_event,
             )
         elif mode == "search":
-            active_task = asyncio.create_task(
-                _run_search(ws, exec_text, session_id, rt, db, overrides, cancel_event=cancel_event)
+            active_task = _start_inline(
+                _run_search(ws, exec_text, session_id, rt, db, overrides, cancel_event=cancel_event),
+                cancel_event,
             )
         elif mode.startswith(("custom:connector:", "custom:connector-account:")):
-            # Connector agents run inline (tools are closures bound to ConnectionManager)
+            # Connector agents run inline (tools are closures bound to ConnectionManager).
+            # Look up by id on the manager. The shared alias dict can hold another user's copy.
             agent_id = mode[len("custom:") :]
-            # Look up in both custom_agents and connection_manager._agents
-            agent_cfg = rt.get_custom_agent_by_id(agent_id)
-            if not agent_cfg and hasattr(rt, "connection_manager") and rt.connection_manager:
-                connection_id = agent_id.replace("connector:", "", 1)
-                agent_cfg = rt.connection_manager._agents.get(connection_id)
+            agent_cfg = None
+            mgr = getattr(rt, "connection_manager", None)
+            if mgr is not None:
+                if agent_id.startswith("connector-account:"):
+                    agent_cfg = mgr._account_agents.get(agent_id)
+                elif agent_id.startswith("connector:"):
+                    agent_cfg = mgr._agents.get(agent_id[len("connector:") :])
+            if agent_cfg is None:
+                agent_cfg = rt.get_custom_agent_by_id(agent_id)
+            if not _connector_cfg_allowed(agent_cfg):
+                agent_cfg = None
             if agent_cfg:
-                active_task = asyncio.create_task(
+                active_task = _start_inline(
                     _run_custom_agent(
                         ws,
                         exec_text,
@@ -5202,19 +5418,22 @@ async def websocket_chat(
                         cancel_event,
                         agent_cfg,
                         secret_broker=secret_broker,
-                    )
+                    ),
+                    cancel_event,
                 )
             else:
                 logger.warning("Connector agent '%s' not found — falling back to chat", agent_id)
-                active_task = asyncio.create_task(
-                    _run_chat(ws, exec_text, session_id, rt, db, overrides, cancel_event=cancel_event)
+                active_task = _start_inline(
+                    _run_chat(ws, exec_text, session_id, rt, db, overrides, cancel_event=cancel_event),
+                    cancel_event,
                 )
         else:
             # Default: chat (general LLM knowledge, no Qdrant)
-            active_task = asyncio.create_task(
+            active_task = _start_inline(
                 _run_chat(
                     ws, exec_text, session_id, rt, db, overrides, attachments=attachments, cancel_event=cancel_event
-                )
+                ),
+                cancel_event,
             )
 
     try:
@@ -5268,7 +5487,12 @@ async def websocket_chat(
                             parent_session_id=initial_parent,
                         )
                     except ValueError as exc:
-                        await ws.send_json(protocol.agent_error(str(exc)))
+                        detail = str(exc)
+                        from web.server.identity import current_user_id
+
+                        if current_user_id() and detail == "session already exists":
+                            detail = "session not found"
+                        await ws.send_json(protocol.agent_error(detail))
                         continue
                     session_id = new_id
                     if initial_provider:
@@ -5344,17 +5568,8 @@ async def websocket_chat(
                     logger.warning("query.reroute: no session bound, ignoring")
                     continue
 
-                # Cancel in-flight task / worker job before re-running.
-                if active_task and not active_task.done():
-                    active_task.cancel()
-                    active_task = None
-                cancelled_jobs = job_store.cancel_active_jobs(session_id) or 0
-                if cancelled_jobs:
-                    logger.info(
-                        "query.reroute: cancelled %d in-flight job(s) for session %s",
-                        cancelled_jobs,
-                        session_id,
-                    )
+                # _process_query settles the in-flight run (cancelled card
+                # persisted) before this prompt is classified under the new mode.
 
                 # Telemetry — record the override so the classifier
                 # accuracy analysis later can use it as a label.
@@ -5465,9 +5680,9 @@ async def websocket_chat(
             elif msg_type == "cancel":
                 logger.info("Cancel requested — session %s", session_id)
                 # Cancel worker job if one is active
-                cancelled_jobs = 0
+                cancelled_ids: list[str] = []
                 if session_id:
-                    cancelled_jobs = job_store.cancel_active_jobs(session_id) or 0
+                    cancelled_ids = job_store.cancel_active_jobs(session_id)
                 # Also cancel any inline task
                 if cancel_event is not None:
                     cancel_event.set()
@@ -5476,7 +5691,7 @@ async def websocket_chat(
                 # If we cancelled a worker job but have no local active_task
                 # (e.g., after WS reconnect), still notify the client so the
                 # UI stops showing "running" state.
-                if cancelled_jobs and (active_task is None or active_task.done()):
+                if cancelled_ids and (active_task is None or active_task.done()):
                     try:
                         cancel_msg = protocol.agent_cancelled(elapsed=0)
                         await ws.send_json(cancel_msg)
@@ -5713,7 +5928,10 @@ async def _run_chat(
             {
                 "type": "agent.progress",
                 "phase": "pipeline_running",
-                "detail": {"step": "generating", "text": "Generating response..."},
+                "detail": {
+                    "step": "generating",
+                    "text": f"Generating response ({_chat_ai_client.profile.model})...",
+                },
             },
         )
 
@@ -8532,6 +8750,17 @@ async def _run_agent(
             is_incognito=(overrides or {}).get("incognito", False),
         )
 
+    async def _step_event(step: str, status: str, **kwargs: Any) -> None:
+        """Transient pipeline.step. The next event replaces it, so no done flash."""
+        nonlocal ws_closed
+        if ws_closed:
+            return
+        msg = protocol.pipeline_step(step, status, time.perf_counter() - total_start, **kwargs)
+        try:
+            await ws.send_json(msg)
+        except (WebSocketDisconnect, RuntimeError):
+            ws_closed = True
+
     try:
         # --- Load conversation history BEFORE persisting current query ------
         conversation_history = _build_conversation_history(
@@ -8585,6 +8814,7 @@ async def _run_agent(
 
                 router_client = AIClient(profile=ROUTER_PROFILE, session_overrides=overrides)
                 prof_router = ProfileRouter(router_client, fallback="agent")
+                await _step_event("routing", "running", detail="Selecting a model profile")
                 route_start = time.perf_counter()
                 route = await asyncio.to_thread(prof_router.select, query, capability="agent")
                 route_elapsed = time.perf_counter() - route_start
@@ -8608,12 +8838,10 @@ async def _run_agent(
         # Select tool subset using tool_profile (may differ from llm_profile
         # in @pipeline mode where tool_profile="pipeline", llm_profile="agent").
         tool_subset = _tools_override if _tools_override is not None else rt.agent_profiles.get(tool_profile)
-        if tool_profile in ("fast", "default"):
-            max_iters = 5
-        elif tool_profile == "pipeline":
-            max_iters = 20  # pipeline queries are multi-step; give more headroom
-        else:
-            max_iters = 10
+        # No fixed round cap. A cap of 10 force-finished real multi-step runs
+        # while the model was still calling tools. Stop, duplicate-call abort,
+        # hallucinated-tool abort, and repeated tool errors still end the loop.
+        max_iters = 0
 
         # Build system prompt — append mode-specific suffix if provided
         # (e.g., @pipeline workflow guidance injected by _run_pipeline).
@@ -8732,6 +8960,7 @@ async def _run_agent(
                 cancel_event=cancel_event,
             )
             plan_start = time.perf_counter()
+            await _step_event("planning", "running", detail="Checking for independent tasks")
             parallel_plan = await asyncio.to_thread(
                 parallel_runner.plan,
                 user_content,
@@ -8840,6 +9069,11 @@ async def _run_agent(
                     }
                 )
 
+                await _step_event(
+                    "synthesizing",
+                    "running",
+                    detail=f"Writing the answer ({agent_client.model})",
+                )
                 synth_response = await asyncio.to_thread(
                     agent_client.chat,
                     synth_messages,
@@ -10535,6 +10769,17 @@ async def _run_coding(
             is_incognito=(overrides or {}).get("incognito", False),
         )
 
+    async def _step_event(step: str, status: str, **kwargs: Any) -> None:
+        """Transient pipeline.step. The next event replaces it, so no done flash."""
+        nonlocal ws_closed
+        if ws_closed:
+            return
+        msg = protocol.pipeline_step(step, status, time.perf_counter() - total_start, **kwargs)
+        try:
+            await ws.send_json(msg)
+        except (WebSocketDisconnect, RuntimeError):
+            ws_closed = True
+
     try:
         # Persist user query
         db.add_message(
@@ -10720,6 +10965,11 @@ async def _run_coding(
             # (coding is a worker mode — attachments arrive via overrides). The
             # template/extractor fallback path is left bare on purpose: param
             # extraction expects a concise prompt, not a document dump.
+            await _step_event(
+                "planning",
+                "running",
+                detail=f"Planning the transform ({planner_profile})",
+            )
             planner_result = await asyncio.to_thread(
                 plan_from_prompt,
                 query + _attachment_text_block(overrides),
@@ -10804,6 +11054,11 @@ async def _run_coding(
                 )
 
         if plan is None:
+            await _step_event(
+                "extracting",
+                "running",
+                detail=f"Extracting parameters ({extractor_profile})",
+            )
             params = await asyncio.to_thread(
                 extract_params,
                 query,
@@ -11473,6 +11728,48 @@ async def _run_review(
             system_prompt: str,
             client: AIClient,
         ) -> tuple[str, str, list, dict]:
+            # Specialists share one run. Fold model/tool events into
+            # review.progress so they don't fight over the agent status line,
+            # and so a fallback isn't also delivered as agent.model_fallback.
+            def _on_sub_event(kind: str, data: dict | None) -> None:
+                payload = data or {}
+                if kind == "thinking":
+                    model = payload.get("model") or getattr(client.profile, "model", "") or ""
+                    msg: dict[str, Any] = {
+                        "type": "review.progress",
+                        "phase": "model",
+                        "agent_id": agent_id,
+                        "model": model,
+                        "profile": payload.get("profile") or "",
+                    }
+                    if payload.get("messages") is not None:
+                        msg["messages"] = payload.get("messages")
+                    send_sync(msg)
+                elif kind == "tool_exec" and payload.get("status") == "running":
+                    send_sync(
+                        {
+                            "type": "review.progress",
+                            "phase": "tool",
+                            "agent_id": agent_id,
+                            "tool": payload.get("name") or "",
+                        }
+                    )
+                elif kind == "model_fallback":
+                    send_sync(
+                        {
+                            "type": "review.progress",
+                            "phase": "fallback",
+                            "agent_id": agent_id,
+                            "model": payload.get("next_model") or "",
+                            "prev_model": payload.get("prev_model") or "",
+                            "next_model": payload.get("next_model") or "",
+                            "prev_profile": payload.get("prev_profile") or "",
+                            "next_profile": payload.get("next_profile") or "",
+                            "reason": payload.get("reason") or "",
+                            "provider": payload.get("provider") or "",
+                        }
+                    )
+
             try:
                 sub_agent = AgentLoop(
                     client,
@@ -11483,6 +11780,7 @@ async def _run_review(
                     verbose=False,
                     cancel_event=cancel_event,
                     deep_think=bool(client.profile.thinking_budget),
+                    on_event=_on_sub_event,
                 )
                 ctx = sub_agent.run(clean_query)
                 result_text, tool_calls, sub_tokens = extract_agent_loop_output(ctx)
@@ -11507,7 +11805,15 @@ async def _run_review(
                     "type": "review.progress",
                     "phase": "starting",
                     "style": style,
-                    "sub_agents": [{"id": sa[0], "label": sa[1], "description": sa[3]} for sa in _REVIEW_SUB_AGENTS],
+                    "sub_agents": [
+                        {
+                            "id": sa[0],
+                            "label": sa[1],
+                            "description": sa[3],
+                            "model": client.profile.model,
+                        }
+                        for sa in _REVIEW_SUB_AGENTS
+                    ],
                 }
             )
             timeout = review_cfg.subagent_timeout_seconds
@@ -11517,7 +11823,7 @@ async def _run_review(
                 for sa_id, sa_label, sa_file, sa_desc in _REVIEW_SUB_AGENTS:
                     prompt_text = _load_review_prompt(sa_file)
                     full_prompt = f"{prompt_text}\n{extra_rules}\n\n{context_preamble}"
-                    futures[executor.submit(_run_named_agent, sa_id, full_prompt, client)] = sa_id
+                    futures[submit_with_context(executor, _run_named_agent, sa_id, full_prompt, client)] = sa_id
                 for future in as_completed(futures):
                     agent_id = futures[future]
                     try:
@@ -11537,6 +11843,7 @@ async def _run_review(
                         errors[agent_id] = str(e)
 
         if style == "single":
+            reviewer_client = AIClient(profile=profile_key)
             await _emit_progress(
                 {
                     "type": "review.progress",
@@ -11547,11 +11854,11 @@ async def _run_review(
                             "id": "reviewer",
                             "label": "Review",
                             "description": "Whole-diff review: contract, failures, tests",
+                            "model": reviewer_client.profile.model,
                         }
                     ],
                 }
             )
-            reviewer_client = AIClient(profile=profile_key)
             prompt_text = _load_review_prompt("whole_review.md")
             full_prompt = f"{prompt_text}\n\nCap Worth fixing at {review_cfg.max_findings} items.\n\n{context_preamble}"
             aid, result_text, tool_calls, sub_tokens = await asyncio.to_thread(
@@ -12178,7 +12485,9 @@ async def _run_research(
 
         # Launch all sub-agents in parallel
         with ThreadPoolExecutor(max_workers=research_cfg["max_workers"], thread_name_prefix="research") as executor:
-            thread_futures = {executor.submit(_run_research_sub_agent, spec): spec["id"] for spec in sub_agent_specs}
+            thread_futures = {
+                submit_with_context(executor, _run_research_sub_agent, spec): spec["id"] for spec in sub_agent_specs
+            }
 
             # Wrap thread futures as asyncio futures so we can await them
             # without blocking the event loop (allows activity pump to run).

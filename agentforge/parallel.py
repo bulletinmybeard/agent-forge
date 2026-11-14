@@ -62,6 +62,7 @@ from chalkbox.logging.bridge import get_logger
 from .client import AIClient
 from .context import PipelineContext
 from .tools import ToolRegistry
+from .tools.registry import submit_with_context
 
 logger = get_logger(__name__)
 
@@ -395,7 +396,7 @@ class ParallelAgentRunner:
         )
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=self._max_workers) as pool:
-            futures = {pool.submit(_run_group, i, g): i for i, g in enumerate(groups)}
+            futures = {submit_with_context(pool, _run_group, i, g): i for i, g in enumerate(groups)}
             for future in concurrent.futures.as_completed(futures):
                 idx = futures[future]
                 try:

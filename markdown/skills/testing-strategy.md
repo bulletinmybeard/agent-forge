@@ -68,6 +68,7 @@ def test_extract_amount_500g_returns_amount_value():
 ```python
 import pytest
 
+
 @pytest.fixture
 def db_manager():
     """Fixture providing a test database."""
@@ -75,6 +76,7 @@ def db_manager():
     db.create_tables()
     yield db
     db.close()
+
 
 def test_add_snapshot(db_manager):
     snapshot_id = db_manager.add_snapshot({"price": 5.99})
@@ -84,11 +86,14 @@ def test_add_snapshot(db_manager):
 2. **Parametrize** — Test multiple inputs with one test:
 
 ```python
-@pytest.mark.parametrize("input_val,expected", [
-    ("500 g", (500, "g")),
-    ("1.5 l", (1.5, "l")),
-    ("6 x 330ml", (6, None)),  # Pack quantity
-])
+@pytest.mark.parametrize(
+    "input_val,expected",
+    [
+        ("500 g", (500, "g")),
+        ("1.5 l", (1.5, "l")),
+        ("6 x 330ml", (6, None)),  # Pack quantity
+    ],
+)
 def test_extract_amount_variants(input_val, expected):
     amount, unit = ProductParser().extract_amount_and_unit(input_val)
     assert (amount, unit) == expected
@@ -99,15 +104,17 @@ def test_extract_amount_variants(input_val, expected):
 ```python
 from unittest.mock import Mock, patch, MagicMock
 
+
 def test_fetch_price_calls_api():
     # Mock the HTTP request
-    with patch('requests.get') as mock_get:
+    with patch("requests.get") as mock_get:
         mock_get.return_value.json.return_value = {"price": 9.99}
 
         price = fetch_product_price("http://example.com/product")
 
         assert price == 9.99
         mock_get.assert_called_once()
+
 
 def test_database_error_handling():
     # Create a mock that raises an exception
@@ -213,12 +220,12 @@ def test_parser_handles_empty_inputs(input_val):
 ```python
 def test_database_connection_error_retries():
     """Ensure connection errors trigger retry logic."""
-    with patch('db_manager.get_connection') as mock_conn:
+    with patch("db_manager.get_connection") as mock_conn:
         # First 2 calls fail, 3rd succeeds
         mock_conn.side_effect = [
             Exception("Connection refused"),
             Exception("Connection refused"),
-            MagicMock()  # Success
+            MagicMock(),  # Success
         ]
 
         db = DatabaseManager()
@@ -226,6 +233,7 @@ def test_database_connection_error_retries():
 
         assert result is not None
         assert mock_conn.call_count == 3
+
 
 def test_missing_required_field_raises_error():
     """Schema validation should catch missing fields."""
@@ -238,6 +246,7 @@ def test_missing_required_field_raises_error():
 ```python
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+
 
 def test_concurrent_writes_dont_conflict():
     """Test that concurrent updates don't cause data corruption."""

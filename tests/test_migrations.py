@@ -16,7 +16,7 @@ from web.server.database.migrate import (
 )
 from web.server.database.models import Base
 
-CHAT_HEAD = "005_session_parent"
+CHAT_HEAD = "008_impersonation"
 PROMPT_LAB_HEAD = "001_pl_baseline"
 
 
@@ -127,6 +127,9 @@ def test_history_includes_chat_revisions():
     assert "002_canvas_items" in revs
     assert "003_command_policy" in revs
     assert "004_perm_profiles" in revs
+    assert "006_users" in revs
+    assert "007_user_resources" in revs
+    assert "008_impersonation" in revs
 
 
 def test_upgrade_adds_command_policy_to_pre_003_db(tmp_path: Path):

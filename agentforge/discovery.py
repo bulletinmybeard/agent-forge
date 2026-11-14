@@ -62,6 +62,7 @@ from chalkbox.logging.bridge import get_logger
 from .client import AIClient
 from .context import PipelineContext
 from .tools import ToolRegistry
+from .tools.registry import submit_with_context
 
 logger = get_logger(__name__)
 
@@ -459,7 +460,7 @@ class DiscoveryRunner:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self._max_workers,
         ) as pool:
-            futures = {pool.submit(_investigate_area, i, area): i for i, area in enumerate(areas)}
+            futures = {submit_with_context(pool, _investigate_area, i, area): i for i, area in enumerate(areas)}
             for future in concurrent.futures.as_completed(futures):
                 idx = futures[future]
                 try:

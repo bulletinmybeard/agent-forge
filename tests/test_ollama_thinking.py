@@ -8,7 +8,7 @@ agent loop early). AgentLoop nudges, then promotes thinking as last resort.
 from __future__ import annotations
 
 import types
-from typing import Any
+from typing import Any, cast
 
 from agentforge.agent import (
     AgentIteration,
@@ -19,14 +19,18 @@ from agentforge.agent import (
     _looks_like_plan_fragment,
 )
 from agentforge.backends.ollama import OllamaBackend
+from agentforge.config import AIProfile
 
 
 def _backend(*, parse_thinking: bool = True) -> OllamaBackend:
     """Build a backend without opening a real Ollama client."""
     b = object.__new__(OllamaBackend)
-    b._profile = types.SimpleNamespace(
-        parse_thinking=parse_thinking,
-        model="deepseek-v4-flash:0731-cloud",
+    b._profile = cast(
+        AIProfile,
+        types.SimpleNamespace(
+            parse_thinking=parse_thinking,
+            model="deepseek-v4-flash:0731-cloud",
+        ),
     )
     return b
 
@@ -203,17 +207,20 @@ def test_leaked_reasoning_ignores_structured_edit():
 
 def _params_backend(*, parse_thinking: bool, extra_body: dict | None = None) -> OllamaBackend:
     b = object.__new__(OllamaBackend)
-    b._profile = types.SimpleNamespace(
-        parse_thinking=parse_thinking,
-        model="glm-5.3-flash:cloud",
-        temperature=0.2,
-        max_tokens=16000,
-        top_p=None,
-        top_k=None,
-        repeat_penalty=None,
-        stop=None,
-        keep_alive=None,
-        extra_body=extra_body or {},
+    b._profile = cast(
+        AIProfile,
+        types.SimpleNamespace(
+            parse_thinking=parse_thinking,
+            model="glm-5.3-flash:cloud",
+            temperature=0.2,
+            max_tokens=16000,
+            top_p=None,
+            top_k=None,
+            repeat_penalty=None,
+            stop=None,
+            keep_alive=None,
+            extra_body=extra_body or {},
+        ),
     )
     return b
 
