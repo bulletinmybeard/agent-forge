@@ -34,6 +34,11 @@ logger = get_logger(__name__)
 _SEARCH_URL = "https://api.tavily.com/search"
 _EXTRACT_URL = "https://api.tavily.com/extract"
 _REQUEST_TIMEOUT = 30
+# Basic extract gives up inside Tavily at 10s when this is omitted.
+# The HTTP client waits a few seconds longer so that timeout can return.
+_EXTRACT_TIMEOUT = 30.0
+# API max. Each chunk is about 800 characters. Requires ``query``.
+_CHUNKS_PER_SOURCE = 5
 
 
 def _get_api_key() -> str:
@@ -68,7 +73,7 @@ def _get_tavily_options() -> dict[str, Any]:
         return {}
 
 
-def _post(url: str, body: dict[str, Any], api_key: str) -> dict[str, Any]:
+def _post(url: str, body: dict[str, Any], api_key: str, timeout: float = _REQUEST_TIMEOUT) -> dict[str, Any]:
     try:
         resp = httpx.post(
             url,
@@ -77,7 +82,7 @@ def _post(url: str, body: dict[str, Any], api_key: str) -> dict[str, Any]:
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            timeout=_REQUEST_TIMEOUT,
+            timeout=timeout,
         )
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
         raise ProviderError(f"tavily network error: {exc}") from exc
@@ -163,19 +168,26 @@ class TavilyFetchProvider:
     def is_available(self) -> bool:
         return bool(_get_api_key())
 
-    def fetch(self, url: str) -> FetchResult:
+    def fetch(self, url: str, query: str = "") -> FetchResult:
         api_key = _get_api_key()
         if not api_key:
             raise ProviderNotConfigured(
                 "tavily fetch: no API key (set TAVILY_API_KEY or tools.web_search.tavily.api_key in config.yaml)"
             )
 
-        body = {
+        body: dict[str, Any] = {
             "urls": [url],
             "extract_depth": "basic",
             "format": "markdown",
+            "timeout": _EXTRACT_TIMEOUT,
         }
-        data = _post(_EXTRACT_URL, body, api_key)
+        focus = query.strip()
+        if focus:
+            # Chunks are joined with "[...]". A page with fewer chunks than
+            # the cap comes back whole.
+            body["query"] = focus
+            body["chunks_per_source"] = _CHUNKS_PER_SOURCE
+        data = _post(_EXTRACT_URL, body, api_key, timeout=_EXTRACT_TIMEOUT + 5)
 
         # Tavily's /extract returns ``results: [{url, raw_content, ...}]``.
         # We only requested one URL so take the first hit; if the API

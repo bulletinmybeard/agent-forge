@@ -156,6 +156,20 @@ def tool_call(name: str, args: dict[str, Any], guard: dict[str, Any] | None = No
     return msg
 
 
+def tool_call_revised(name: str, args: dict[str, Any], *, match_command: str) -> dict:
+    """Replace a live tool card's args with the command that actually ran.
+
+    ``match_command`` is the command the model sent. The card was already
+    drawn from that string; the client finds it and swaps in ``args``.
+    """
+    return {
+        "type": "tool.call.revised",
+        "name": name,
+        "args": args,
+        "match_command": match_command,
+    }
+
+
 def tool_calls_flush() -> dict:
     return {"type": "tool.calls.flush"}
 

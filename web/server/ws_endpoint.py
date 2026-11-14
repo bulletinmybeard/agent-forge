@@ -36,6 +36,7 @@ import threading
 import time
 import uuid
 from collections import Counter
+from dataclasses import replace
 from datetime import date as _date
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -43,6 +44,7 @@ from typing import TYPE_CHECKING, Any, Callable
 import yaml
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from agentforge.client import AIClient
 from agentforge.config import (
     get_config,
     set_request_provider_override,
@@ -52,6 +54,7 @@ from agentforge.config import (
 from agentforge.connectors._account import account_slug, label_slug
 from agentforge.tools.registry import submit_with_context
 from agentforge.tools.search_providers import describe_search_route
+from agentforge.tools.system import context_for_shell, publish_host_context
 from app.models.knowledge import KnowledgeSearchRequest
 from app.services.knowledge_registry import (
     collection_for_session_source,
@@ -67,6 +70,10 @@ from .database import ChatDatabase
 from .identity import current_user_id as _current_user_id
 from .mode_routing import CONNECTOR_ALIASES as _CONNECTOR_ALIASES
 from .mode_routing import STICKY_MODES as _STICKY_MODES
+from .mode_routing import instruction_for_routing as _instruction_for_routing
+from .mode_routing import is_supplied_text_transform as _is_supplied_text_transform
+from .mode_routing import markdown_path_links as _markdown_path_links
+from .mode_routing import pinned_client_mode as _pinned_client_mode
 from .mode_routing import strip_mode_prefix as _strip_mode_prefix
 from .queue.models import JobStatus
 from .queue.store import job_store
@@ -645,27 +652,19 @@ class SearchRuntime:
             get_config(_fw_config_path)
 
             from agentforge.tools import ToolRegistry, register_all_tools
-            from agentforge.tools.system import get_system_context
 
             self.registry = ToolRegistry()
             self.tool_count = register_all_tools(self.registry)
 
-            # System prompt with context
-            sys_ctx = get_system_context()
-            tool_hints = self.registry.get_model_hints()
-            template = _load_prompt("agent")
-            self.agent_system_prompt = template.format(
-                sys_ctx_summary=sys_ctx["summary"],
-                tool_hints=tool_hints,
-            )
-
-            # Condensed variant for iteration 2+ (strips BSD warnings,
-            # protected-path rules, per-tool hints, sibling projects).
-            condensed_template = _load_prompt("agent_condensed")
-            self.agent_system_prompt_condensed = condensed_template.format(
-                sys_ctx_summary=sys_ctx["condensed_summary"],
-                tool_hints=self.registry.get_model_hints_condensed(),
-            )
+            # Templates stay raw. shell often runs on another worker than this
+            # process, and that worker may publish its OS after we boot.
+            # render_agent_prompts() fills {sys_ctx_summary} per run.
+            publish_host_context()
+            self._agent_prompt_template = _load_prompt("agent")
+            self._agent_prompt_template_condensed = _load_prompt("agent_condensed")
+            self._agent_tool_hints = self.registry.get_model_hints()
+            self._agent_tool_hints_condensed = self.registry.get_model_hints_condensed()
+            self.render_agent_prompts()
 
             # Tool subsets per profile.
             # Dedicated tools have better hints, structured params, and error
@@ -887,6 +886,35 @@ class SearchRuntime:
                 "Could not initialise agent tools — agent mode disabled",
                 exc_info=True,
             )
+
+    def render_agent_prompts(self) -> tuple[str, str]:
+        """Fill the agent prompts with the OS of the host that runs ``shell``.
+
+        Re-read on each run so a worker that starts after this process is
+        still described. Falls back to the last good render when Redis or the
+        template is unavailable.
+        """
+        template = getattr(self, "_agent_prompt_template", "") or ""
+        condensed_template = getattr(self, "_agent_prompt_template_condensed", "") or ""
+        if not template or not condensed_template:
+            return self.agent_system_prompt, self.agent_system_prompt_condensed
+
+        ctx = context_for_shell()
+        try:
+            full = template.format(
+                sys_ctx_summary=ctx["summary"],
+                tool_hints=getattr(self, "_agent_tool_hints", ""),
+            )
+            condensed = condensed_template.format(
+                sys_ctx_summary=ctx["condensed_summary"],
+                tool_hints=getattr(self, "_agent_tool_hints_condensed", ""),
+            )
+        except Exception:
+            logger.warning("Agent prompt render failed", exc_info=True)
+            return self.agent_system_prompt, self.agent_system_prompt_condensed
+        self.agent_system_prompt = full
+        self.agent_system_prompt_condensed = condensed
+        return full, condensed
 
     def _load_knowledge_cache(self) -> None:
         """Cache known sources and documents for @source parsing and auto-detection."""
@@ -1827,7 +1855,8 @@ _MODE_PATTERNS: dict[str, list[str]] = {
         r"\bschedule\b.*\b(at\s+\d|every|daily|weekly|hourly|nightly|cron)\b",
         r"\b(create|add|set\s+up)\s+(a\s+)?(scheduled\s+(job|task)|cron(\s*job)?)\b",
         r"\b(every|each)\s+\d+\s+(minute|hour|day|week)s?\b",
-        r"\bcron\b.*\b(job|expression|schedule|tab)\b",
+        r"\b(schedule|create|add|enable|disable|remove|delete)\b.{0,60}\bcron\b",
+        r"\bcron\b.{0,40}\b(expression|schedule|tab)\b",
         r"\b(nightly|hourly|daily)\s+(backup|job|task|run|cleanup|sync)\b",
         r"\b(list|show)\b.*\bscheduled\s+(jobs|tasks)\b",
         r"\bcancel\s+(the\s+)?(scheduled\s+)?(job|task)\b",
@@ -2472,20 +2501,26 @@ def _classify_mode_heuristic(
         logger.info("Mode classifier: unknown_prefix (no built-in or custom alias matched)")
         return ("unknown_prefix", "high")
 
-    # Per-mode pattern check — sub-millisecond high-confidence routing for
-    # clear natural-language phrasings ("search the web for X", "what
-    # errors in logs", "schedule a daily backup", etc.). Checked BEFORE
-    # the agent keyword/pattern blocks so phrases like "show me errors
-    # in nginx logs" route to @logs instead of being captured by the
-    # generic agent "show me ... logs" pattern. See `_MODE_PATTERNS`
-    # for the (conservative) rule list.
-    mode_match = _match_mode_patterns(query_lower)
+    # Pasted text to rewrite, including a list of paths. Checked before the
+    # absolute-path pattern, which would otherwise call this an agent task.
+    if _is_supplied_text_transform(query):
+        logger.info("Mode classifier: chat (text already in the message)")
+        return ("chat", "high")
+
+    # Regexes see the instruction only. A blank line starts the pasted
+    # note, list, or log, and words in that paste are not a mode request.
+    instruction_lower = _instruction_for_routing(query).lower()
+
+    # One regex is medium. routing.md tells the LLM to discard a medium
+    # hint freely; a high hint is kept unless it is clearly wrong. A
+    # keyword cluster (≥2) below stays high.
+    mode_match = _match_mode_patterns(instruction_lower)
     if mode_match is not None:
-        logger.info("Mode classifier: %s (per-mode pattern)", mode_match)
-        return (mode_match, "high")
+        logger.info("Mode classifier: %s (per-mode pattern, medium)", mode_match)
+        return (mode_match, "medium")
 
     # Check keyword overlap (strip punctuation so "delete?" matches "delete")
-    words = set(re.sub(r"[^\w\s/~.]", "", query_lower).split())
+    words = set(re.sub(r"[^\w\s/~.]", "", instruction_lower).split())
     hits = words & _AGENT_KEYWORDS
     if len(hits) >= 2:
         logger.info("Mode classifier: agent (keywords: %s)", hits)
@@ -2495,7 +2530,7 @@ def _classify_mode_heuristic(
     # weaker evidence than ≥2 keywords — mark medium so the LLM can take a
     # second look when the escalation threshold is "medium" or lower.
     for pattern in _AGENT_PATTERNS:
-        if re.search(pattern, query_lower):
+        if re.search(pattern, instruction_lower):
             logger.info("Mode classifier: agent (pattern: %s)", pattern)
             return ("agent", "medium")
 
@@ -2511,7 +2546,7 @@ def _classify_mode_heuristic(
             r"|\bwhat\s+if\b|\bwhat\s+else\b|\bhow\s+else\b"
             r"|\band\s+\w+\?$|\bwhich\b|\bwhere\b"
         )
-        has_followup = bool(_FOLLOWUP_PRONOUNS.search(query_lower) or _FOLLOWUP_PHRASES.search(query_lower))
+        has_followup = bool(_FOLLOWUP_PRONOUNS.search(instruction_lower) or _FOLLOWUP_PHRASES.search(instruction_lower))
 
         # Tier 1: short follow-ups (original behaviour)
         if len(words) <= 15 and (has_followup or len(words) <= 10):
@@ -2542,8 +2577,8 @@ def _classify_mode_heuristic(
             r"~/|/[Uu]sers/|/home/|\bdownloads?\b|\bdesktop\b|\bdocuments?\b"
             r"|\.\w{1,5}\b"
         )
-        has_context_ref = bool(has_followup or _CONTEXT_REF.search(query_lower))
-        has_action = bool(_ACTION_VERBS.search(query_lower) or _FILE_PATH.search(query_lower))
+        has_context_ref = bool(has_followup or _CONTEXT_REF.search(instruction_lower))
+        has_action = bool(_ACTION_VERBS.search(instruction_lower) or _FILE_PATH.search(instruction_lower))
         if has_context_ref and has_action:
             logger.info(
                 "Mode classifier: %s (sticky — long follow-up, %d words, context_ref=%s, action=%s)",
@@ -2585,20 +2620,20 @@ def _classify_mode_heuristic(
                 r"\bdelete\b|\bremove\b|\bclean\b|\bback\s?up\b|\barchive\b"
                 r"|\bmove\b|\bcopy\b|\brename\b|\bopen\b|\bshow\b|\bdo\b"
                 r")",
-                query_lower,
+                instruction_lower,
             )
         )
         # Signals that override a search keyword in short follow-ups:
         # 1. Pronouns referencing previous results (they, them, those, ...)
         _FOLLOWUP_PRONOUNS = re.compile(r"\bthem\b|\bthose\b|\bthese\b|\bthey\b|\bits?\b|\bthat\b")
-        has_followup_pronoun = bool(_FOLLOWUP_PRONOUNS.search(query_lower))
+        has_followup_pronoun = bool(_FOLLOWUP_PRONOUNS.search(instruction_lower))
         # 2. Follow-up phrases ("what about X?", "how about X?", "and X?")
         _FOLLOWUP_PHRASES = re.compile(
             r"\bwhat\s+about\b|\bhow\s+about\b|\band\s+what\s+about\b"
             r"|\bwhat\s+if\b|\bwhat\s+else\b|\bhow\s+else\b"
             r"|\band\s+\w+\?$"  # "and port 5173?" — trailing question
         )
-        has_followup_phrase = bool(_FOLLOWUP_PHRASES.search(query_lower))
+        has_followup_phrase = bool(_FOLLOWUP_PHRASES.search(instruction_lower))
         has_followup_signal = has_followup_pronoun or has_followup_phrase
 
         if has_any_agent_hint and not has_search_signal:
@@ -2711,6 +2746,14 @@ async def _classify_mode(
             final_mode = forced_mode
             return forced_mode
 
+        if _is_supplied_text_transform(query):
+            logger.info("Mode classifier: chat (text already in the message)")
+            layer = _ca.LAYER_HEURISTIC_PATTERN
+            heuristic_mode = "chat"
+            heuristic_confidence = "high"
+            final_mode = "chat"
+            return "chat"
+
         # Heuristic classifier — returns (mode, confidence).
         heuristic_mode, heuristic_confidence = _classify_mode_heuristic(
             query,
@@ -2800,8 +2843,15 @@ async def _classify_mode(
         except Exception:
             logger.debug("Failed to build custom_agents list for LLM router", exc_info=True)
 
+        routed_query = _instruction_for_routing(query)
+        if routed_query != query.strip():
+            logger.info(
+                "Mode classifier: routing on instruction only (%d chars held back)",
+                len(query.strip()) - len(routed_query),
+            )
+
         result = await classify_intent(
-            query,
+            routed_query,
             conversation_history=history,
             fallback_fn=_heuristic_fallback,
             heuristic_hint=hint,
@@ -3413,6 +3463,11 @@ _AGENT_EVENT_BUILDERS: dict[str, Any] = {
         next_model=d.get("next_model") or "",
         reason=d.get("reason") or "",
         provider=d.get("provider") or "",
+    ),
+    "tool_call_revised": lambda d, _e: protocol.tool_call_revised(
+        d["name"],
+        d.get("args") or {},
+        match_command=d.get("match_command") or "",
     ),
     "tool_exec": lambda d, e: protocol.agent_tool_exec(
         iteration=d["iteration"],
@@ -4918,9 +4973,22 @@ async def websocket_chat(
         # Strip mode prefix (@agent/@search/...) if present
         clean_text, forced_mode = _strip_mode_prefix(text)
 
+        _pin_source = None
+        if isinstance(overrides, dict):
+            _raw_source = overrides.get("source")
+            if _raw_source is not None and str(_raw_source).strip():
+                _pin_source = str(_raw_source)
+        if not _pin_source and _session_source:
+            _pin_source = str(_session_source)
+        _, _custom_mode = _strip_custom_prefix(text, rt)
+        pinned = _pinned_client_mode(_pin_source, forced_mode, _custom_mode, text)
+
         # Classify: search or agent?
         prev_mode = last_mode
-        mode = await _classify_mode(text, rt, last_mode=last_mode, db=db, session_id=session_id)
+        if pinned:
+            mode = pinned
+        else:
+            mode = await _classify_mode(text, rt, last_mode=last_mode, db=db, session_id=session_id)
 
         # Apply-from-review is @agent work (writes). @coding cannot plan from a
         # review markdown, and sticky @review is read-only.
@@ -4981,6 +5049,10 @@ async def websocket_chat(
                         mode = "build"
             except Exception:
                 logger.exception("plan-approve intercept failed")
+
+        if pinned:
+            review_apply = None
+            mode = pinned
 
         last_mode = mode  # remember for sticky follow-ups
         logger.info("Query mode: %s — %r", mode, text[:80])
@@ -5813,6 +5885,42 @@ async def _run_chat(
         # --- Step 1: Route ------------------------------------------------
         routing_msg = protocol.agent_routing()
         await send_and_persist(routing_msg, msg_type="routing")
+
+        formatted_links = _markdown_path_links(query)
+        if formatted_links:
+            routed_msg = protocol.agent_routed(
+                "chat",
+                "Pasted paths reformatted as Markdown links",
+                0.0,
+            )
+            await send_and_persist(routed_msg, msg_type="routed")
+            config_msg = protocol.agent_config(
+                profile="chat",
+                model="path-links",
+                tools=0,
+                session_id=session_id,
+                provider="",
+                mode="chat",
+            )
+            await send_and_persist(config_msg, msg_type="config")
+            total_elapsed = time.perf_counter() - total_start
+            result_msg = protocol.agent_result(text=formatted_links, elapsed=total_elapsed)
+            await send_and_persist(result_msg, msg_type="result", content=formatted_links)
+            summary_msg = protocol.agent_summary(
+                iterations=1,
+                elapsed=total_elapsed,
+                tool_calls=0,
+                tools={},
+            )
+            await send_and_persist(summary_msg, msg_type="summary")
+            _store_last_exchange_from_db(db, session_id, mode="chat", model="path-links")
+            db.update_session(session_id, profile="chat", model="path-links")
+            session = db.get_session(session_id)
+            if session and session.title == "New chat":
+                title = "Markdown links"
+                db.update_session(session_id, title=title)
+                await _send_live(session_id, ws, protocol.session_title(session_id, title))
+            return
 
         from app.config import settings as af_settings
 
@@ -8821,7 +8929,9 @@ async def _run_agent(
         # Build system prompt — append mode-specific suffix if provided
         # (e.g., @pipeline workflow guidance injected by _run_pipeline).
         # Instructions are the caller's, not the file loaded at startup.
-        system_prompt = _inject_user_context(rt.agent_system_prompt, rt)
+        # Re-render so {sys_ctx_summary} names the shell host, not this process.
+        full_prompt, condensed_base = rt.render_agent_prompts()
+        system_prompt = _inject_user_context(full_prompt, rt)
         if _system_prompt_suffix:
             system_prompt = system_prompt + "\n\n" + _system_prompt_suffix
         _rem_suffix = _reminder_query_suffix(query, tool_subset)
@@ -8834,7 +8944,7 @@ async def _run_agent(
         # Build condensed prompt for iteration 2+ (if enabled)
         _condensed_prompt: str | None = None
         if rt.af_settings.agent.condense_tool_prompt:
-            _condensed_prompt = rt.agent_system_prompt_condensed
+            _condensed_prompt = condensed_base
             if _system_prompt_suffix:
                 _condensed_prompt = _condensed_prompt + "\n\n" + _system_prompt_suffix
             if _rem_suffix:
@@ -8998,6 +9108,27 @@ async def _run_agent(
                             "args": {"command": data.get("command", ""), "cwd": data.get("cwd", "")},
                         }
                     )
+                elif event == "command_revised":
+                    executed = data.get("executed") or ""
+                    original = data.get("command") or ""
+                    if executed and executed != original:
+                        send_sync(
+                            protocol.tool_call_revised(
+                                "shell",
+                                {"command": executed, "cwd": data.get("cwd", "")},
+                                match_command=original,
+                            )
+                        )
+                        for call in _parallel_call_buffer:
+                            call_args = call.get("args") or {}
+                            if (
+                                call.get("name") == "shell"
+                                and call_args.get("command") == original
+                                and not call.get("_revised")
+                            ):
+                                call_args["command"] = executed
+                                call["_revised"] = True
+                                break
 
             # Temporarily mute the registry's built-in tool_call/tools_complete
             # handlers so they don't duplicate the events we send manually
@@ -9064,6 +9195,8 @@ async def _run_agent(
 
             # Persist tool_calls record for sticky-mode detection
             group_count = len(parallel_plan.get("groups", []))
+            for _call in _parallel_call_buffer:
+                _call.pop("_revised", None)
             db.add_message(
                 session_id=session_id,
                 role="assistant",
@@ -12023,20 +12156,22 @@ async def _run_review(
 # Tools available to each research sub-agent
 _RESEARCH_TOOLS = [
     "web_search",
-    "web_fetch",  # fast raw-HTML fetch (static sites, docs)
+    "web_fetch",  # provider extract, returned as article markdown
     "web_fetch_rendered",  # headless Firefox via sidecar — JS-rendered / bot-protected
     "web_screengrab",  # on-demand full-page screenshot
     "write_file",  # save findings to a file if asked
+    "shell",
 ]
 
 
 def _research_settings() -> dict:
-    """framework-config.yaml `research:` block. Defaults match the previous constants."""
+    """framework-config.yaml `research:` block. Missing keys use these defaults."""
     defaults = {
         "max_workers": 12,
         "max_iterations": 6,
         "max_tool_calls": 15,
         "max_tool_output": 5000,
+        "max_tokens": 131072,
         "min_sub_agents": 3,
         "max_sub_agents": 8,
         "planner_profile": "cloud-heavy",
@@ -12083,12 +12218,23 @@ def _research_settings() -> dict:
         "max_iterations": _pos("max_iterations"),
         "max_tool_calls": _pos("max_tool_calls"),
         "max_tool_output": _pos("max_tool_output"),
+        "max_tokens": _pos("max_tokens"),
         "min_sub_agents": min_agents,
         "max_sub_agents": max_agents,
         "planner_profile": _name("planner_profile"),
         "aggregator_profile": _name("aggregator_profile"),
         "profiles": profiles,
     }
+
+
+def _research_client(profile_name: str, max_tokens: int) -> AIClient:
+    """Clone the profile so this output cap does not stick to the shared one.
+
+    ConfigManager caches profiles. Writing ``max_tokens`` on that object caps
+    every other caller of the same name.
+    """
+    shared = get_config().get_profile(profile_name)
+    return AIClient(profile=replace(shared, max_tokens=max_tokens))
 
 
 async def _run_research(
@@ -12201,7 +12347,6 @@ async def _run_research(
         # Phase A — Planning: decompose query into sub-investigations
         # =====================================================================
         from agentforge.agent import AgentLoop
-        from agentforge.client import AIClient
         from agentforge.review.loop import extract_agent_loop_output
 
         planner_prompt = (
@@ -12209,7 +12354,10 @@ async def _run_research(
             .replace("__MIN_SUB_AGENTS__", str(research_cfg["min_sub_agents"]))
             .replace("__MAX_SUB_AGENTS__", str(research_cfg["max_sub_agents"]))
         )
-        planner_client = AIClient(profile=research_cfg["planner_profile"])
+        planner_client = _research_client(
+            research_cfg["planner_profile"],
+            research_cfg["max_tokens"],
+        )
 
         def _call_planner(client: "AIClient", prompt_text: str, user_query: str) -> list[dict]:
             """Call the planner and return parsed sub_agent specs, or [] on failure."""
@@ -12400,7 +12548,7 @@ async def _run_research(
                 else:
                     tools = [t for t in _RESEARCH_TOOLS if t != "web_fetch_rendered"]
 
-                sub_client = AIClient(profile=profile_name)
+                sub_client = _research_client(profile_name, research_cfg["max_tokens"])
                 sub_agent = AgentLoop(
                     sub_client,
                     rt.registry,
@@ -12595,7 +12743,10 @@ async def _run_research(
 
             from agentforge.backends._retry import retry_call
 
-            aggregator_client = AIClient(profile=research_cfg["aggregator_profile"])
+            aggregator_client = _research_client(
+                research_cfg["aggregator_profile"],
+                research_cfg["max_tokens"],
+            )
 
             def _agg_call():
                 return aggregator_client.chat(

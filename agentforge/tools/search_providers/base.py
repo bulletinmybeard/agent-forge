@@ -60,8 +60,24 @@ class FetchResult:
 class ProviderError(RuntimeError):
     """Generic provider failure (4xx other than 429, 5xx, network, parse).
 
-    Caught by the fallback chain — next provider in line takes over.
+    Search walks to the next provider. Fetch does not: one failed attempt
+    for a URL is final (see :class:`FetchFailed`).
     """
+
+
+class FetchFailed(ProviderError):
+    """This URL was fetched once and failed. Do not try another provider.
+
+    Covers target 4xx/5xx and provider errors. A later call for the same
+    URL is served from a short cache so the agent cannot retry it.
+    """
+
+    def __init__(self, url: str, reason: str, *, provider: str | None = None) -> None:
+        self.url = url
+        self.reason = reason
+        self.provider = provider
+        detail = f"{provider}: {reason}" if provider else reason
+        super().__init__(detail)
 
 
 class RateLimitError(ProviderError):
@@ -149,9 +165,12 @@ class FetchProvider(Protocol):
 
     def is_available(self) -> bool: ...
 
-    def fetch(self, url: str) -> FetchResult:
+    def fetch(self, url: str, query: str = "") -> FetchResult:
         """Fetch ``url``. Raise ``RateLimitError`` / ``ProviderError``
         on failure. Returns a normalised :class:`FetchResult`.
+
+        ``query`` is an optional focus. Tavily uses it to return the
+        relevant chunks. Providers without that parameter ignore it.
         """
         ...
 
@@ -162,6 +181,7 @@ __all__ = [
     "SearchProvider",
     "FetchProvider",
     "ProviderError",
+    "FetchFailed",
     "RateLimitError",
     "NoProviderAvailable",
     "ProviderNotConfigured",

@@ -35,6 +35,7 @@ PLUGIN_ENV_VAR = "AGENTFORGE_TOOL_PLUGINS"
 
 def register_core_tools(registry: ToolRegistry) -> int:
     """Register the built-in (generic) toolset. Returns the count registered."""
+    from .action import register_action_tools
     from .archive_tools import register_archive_tools
     from .audio_tools import register_audio_tools
     from .cli_tools import register_cli_tools
@@ -77,6 +78,7 @@ def register_core_tools(registry: ToolRegistry) -> int:
     count += register_network_tools(registry)
     count += register_netdiag_tools(registry)
     count += register_shell_tools(registry)
+    count += register_action_tools(registry)
     count += register_code_edit_tools(registry)
     count += register_decision_tools(registry)
     count += register_web_search_tools(registry)

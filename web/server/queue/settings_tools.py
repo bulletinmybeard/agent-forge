@@ -23,6 +23,7 @@ from agentforge.session_logging import (
     clear_session_binding,
     configure_session_logging,
 )
+from agentforge.tools.system import publish_host_context
 from web.server.queue.jobs_saq import execute_tool_saq, run_agent_job_saq
 from web.server.queue.queues import get_tool_queue_for_role
 
@@ -44,6 +45,10 @@ def _build_settings() -> dict:
 
     async def startup(ctx: dict) -> None:
         logger.info("Tools SAQ worker (role=%s) starting up — pre-loading SearchRuntime", role)
+        try:
+            publish_host_context(role)
+        except Exception as exc:
+            logger.warning("Host context publish failed (role=%s): %s", role, exc)
         try:
             from web.server.audit_log import ensure_audit_log
             from web.server.ws_endpoint import SearchRuntime

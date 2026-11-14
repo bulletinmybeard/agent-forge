@@ -114,7 +114,10 @@ class OllamaFetchProvider:
     def is_available(self) -> bool:
         return bool(_get_api_key())
 
-    def fetch(self, url: str) -> FetchResult:
+    def fetch(self, url: str, query: str = "") -> FetchResult:
+        # The Ollama endpoint takes a URL only, so a research focus is dropped.
+        if query:
+            logger.debug("[ollama fetch] query ignored")
         api_key = _get_api_key()
         if not api_key:
             raise ProviderNotConfigured(

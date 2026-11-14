@@ -256,8 +256,8 @@ async def _saq_tool_apply(
     timeout: float = _SAQ_TOOL_TIMEOUT,
     allowed_tools: list[str] | None = None,
     user_id: str | None = None,
-) -> str:
-    """Enqueue a tool call on the role's tools queue and await its string result."""
+) -> str | dict:
+    """Enqueue a tool call on the role's tools queue and await its result."""
     from saq.job import Job
 
     from web.server.queue.queues import get_tool_queue_for_role
@@ -284,7 +284,7 @@ async def _saq_tool_apply(
     )
     # Queue.apply = enqueue + wait for result. Raises on timeout/abort.
     result = await queue.apply(job, timeout=timeout)
-    return str(result) if result is not None else ""
+    return result if result is not None else ""
 
 
 def saq_dispatch_tool(
@@ -338,4 +338,9 @@ def saq_dispatch_tool(
             exc,
         )
         raise
-    return result or ""
+    from agentforge.tools.shell import publish_executed_shell_command, unpack_tool_result
+
+    output, executed = unpack_tool_result(result)
+    if executed:
+        publish_executed_shell_command(executed)
+    return output

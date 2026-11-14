@@ -39,7 +39,9 @@ from typing import Any
 from chalkbox.logging.bridge import get_logger
 
 from agentforge.tools._file_snapshots import save_snapshot
+from agentforge.tools.page_text import clip_tool_output
 from agentforge.tools.routing import dispatch_mode, my_role
+from agentforge.tools.shell import take_executed_shell_command
 
 from .client import AIClient, ChatResponse, add_model_used
 from .config import get_config
@@ -1517,6 +1519,19 @@ class AgentLoop:
                     except Exception as exc:
                         output = f"Error: {exc}"
                         ctx.add_error(f"Tool '{name}' failed: {exc}")
+                    else:
+                        requested = args.get("command") if isinstance(args, dict) else None
+                        executed = take_executed_shell_command() if name == "shell" else None
+                        if executed and executed != requested and isinstance(args, dict):
+                            args["command"] = executed
+                            self._on_event(
+                                "tool_call_revised",
+                                {
+                                    "name": name,
+                                    "args": dict(args),
+                                    "match_command": requested,
+                                },
+                            )
 
                     if self._is_tool_error(output) and self._max_retries > 0:
                         for attempt in range(1, self._max_retries + 1):
@@ -1607,14 +1622,9 @@ class AgentLoop:
 
             for tr in tool_results:
                 output = tr["result"]
-                # Truncate oversized tool output to prevent model context overload
+                # Page tools cut on a heading. Other tools keep the file-search hint.
                 if len(output) > self._max_tool_output:
-                    kept = self._max_tool_output
-                    trimmed = len(output) - kept
-                    output = (
-                        output[:kept] + f"\n\n[... truncated {trimmed:,} characters — "
-                        f"use grep/tail to narrow your search ...]"
-                    )
+                    output = clip_tool_output(tr["name"], output, self._max_tool_output)
                     logger.debug(
                         "[Agent] Tool '%s' output truncated: %d → %d chars",
                         tr["name"],

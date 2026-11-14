@@ -24,6 +24,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from agentforge.tools.shell import unpack_tool_result
 from web.server.identity import current_user_id
 
 logger = logging.getLogger(__name__)
@@ -249,7 +250,10 @@ async def _await_saq_job(
             status = getattr(job, "status", None)
             if status == Status.COMPLETE:
                 result = getattr(job, "result", None)
-                return str(result) if result is not None else ""
+                # Shell rewrites come back as a dict wrapper so the Tools card
+                # can show the command that ran. This API returns output only.
+                output, _executed = unpack_tool_result(result)
+                return output
             if status == Status.FAILED:
                 err = getattr(job, "error", None) or "tool failed"
                 return f"Error: {err}"

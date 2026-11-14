@@ -18,6 +18,7 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import re
@@ -308,6 +309,82 @@ def _should_auto_sudo(command: str) -> bool:
 
 _IS_MACOS = platform.system() == "Darwin"
 
+_executed_command: ContextVar[str | None] = ContextVar("agentforge_executed_shell_command", default=None)
+_EXECUTED_RESULT_KEY = "__agentforge_executed_command"
+
+
+def take_executed_shell_command() -> str | None:
+    """Return the rewritten command from the last ``shell()`` in this context, if any."""
+    value = _executed_command.get()
+    _executed_command.set(None)
+    return value or None
+
+
+def publish_executed_shell_command(command: str) -> None:
+    """Stash a rewritten command on this thread so the UI can show what ran."""
+    if command:
+        _executed_command.set(command)
+
+
+def pack_tool_result(result: str, executed: str | None) -> str | dict:
+    """Wrap a tool result when the executed shell command differs from the request."""
+    if executed:
+        return {"result": result, _EXECUTED_RESULT_KEY: executed}
+    return result
+
+
+def unpack_tool_result(payload: object) -> tuple[str, str | None]:
+    """Split a cross-role job result into ``(output, executed_command)``.
+
+    A plain string is returned unchanged. Only a wrapper this process packed
+    is unwrapped, so a command that prints JSON is left alone.
+    """
+    data: object = payload
+    if isinstance(payload, str):
+        if _EXECUTED_RESULT_KEY not in payload:
+            return payload, None
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            return payload, None
+    if isinstance(data, dict):
+        executed = data.get(_EXECUTED_RESULT_KEY)
+        if executed and "result" in data:
+            return str(data.get("result") or ""), str(executed)
+    if isinstance(payload, str):
+        return payload, None
+    return (str(payload) if payload is not None else ""), None
+
+
+_GNU_STAT_SIZE_RE = re.compile(
+    r"\bstat"
+    r"(?P<flags>(?:\s+-(?!c\b)[A-Za-z]+)*)"
+    r"\s+"
+    r"(?:"
+    r"-c\s*(?:(?P<q>['\"])%s(?P=q)|%s(?![\w%]))"
+    r"|--format=(?:(?P<q2>['\"])%s(?P=q2)|%s(?![\w%]))"
+    r")"
+)
+
+
+def _rewrite_gnu_stat(command: str) -> tuple[str, str]:
+    """On Darwin, turn GNU ``stat -c %s`` / ``--format=%s`` into ``stat -f '%z'``.
+
+    Runs in the process that executes the command, before the LLM rewrite.
+    Linux is left alone: ``stat -c`` is valid there.
+    """
+    if not _IS_MACOS or not command:
+        return command, ""
+
+    def _repl(match: re.Match[str]) -> str:
+        return f"stat{match.group('flags') or ''} -f '%z'"
+
+    rewritten, count = _GNU_STAT_SIZE_RE.subn(_repl, command)
+    if count == 0 or rewritten == command:
+        return command, ""
+    return rewritten, f"BSD stat: GNU size format → stat -f '%z' ({count})"
+
+
 _PLATFORM_FIX_PROMPT = """\
 You are a shell command translator. The user is on macOS (BSD userland).
 The following command may use GNU/Linux-specific syntax that won't work on macOS.
@@ -342,7 +419,6 @@ def _needs_platform_fix(command: str) -> bool:
         "xargs ",
         "readlink ",
         "date ",
-        "stat ",
         "grep -P",
         "cp --",
         "timeout ",
@@ -648,6 +724,8 @@ def shell(command: str, cwd: str = "", timeout: int = 0) -> str:
     """
     if not command or not command.strip():
         return "Error: No command provided."
+    requested = command
+    _executed_command.set(None)
 
     # Intercept agent tool names misused as CLI commands. Devstral-Small in
     # particular has been observed emitting shell calls like
@@ -737,6 +815,10 @@ def shell(command: str, cwd: str = "", timeout: int = 0) -> str:
         logger.info("[shell] Normalised rm flags for non-interactive use: %s → %s", command, run_command_safe)
         command = run_command_safe
 
+    command, stat_note = _rewrite_gnu_stat(command)
+    if stat_note:
+        logger.info("[shell] %s", stat_note)
+
     # Platform compatibility: LLM-powered GNU → BSD rewriting on macOS
     command, compat_note = _fix_platform_compat(command)
     if compat_note:
@@ -778,6 +860,9 @@ def shell(command: str, cwd: str = "", timeout: int = 0) -> str:
         # -S so sudo reads the password from stdin
         run_command = _SUDO_RE.sub("sudo -S ", command, count=1)
         logger.info("[shell] sudo detected — password obtained via interactive provider")
+
+    if command != requested:
+        _executed_command.set(command)
 
     merged = f"{run_command} 2>&1"
 

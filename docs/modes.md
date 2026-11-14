@@ -1,6 +1,6 @@
 # Modes
 
-Every prompt runs in a mode. You pick one with an `@prefix` at the start of the message (see [api-examples.md](api-examples.md) for how to send it). Without a prefix the message goes to plain chat, or the server classifies it for you. RAG prefixes (`@qdrant` and its aliases `@docs` / `@find`) can appear anywhere in the prompt; the rest must lead.
+Every prompt runs in a mode. You pick one with an `@prefix` at the start of the message (see [api-examples.md](api-examples.md) for how to send it). Without a prefix the server classifies the message. It classifies the instruction, not a note, list, or log pasted under a blank line, so words in that paste do not pick the mode. A request to reformat, rewrite, or translate text already in the message stays in chat. Asking for markdown links from two or more pasted paths is answered in the server (`path-links`) and does not call a model. Mentioning an existing cron job does not select `@scheduler`. RAG prefixes (`@qdrant` and its aliases `@docs` / `@find`) can appear anywhere in the prompt; the rest must lead.
 
 Modes also read the in-prompt `#source` filters and `--flags` documented in [api-examples.md](api-examples.md#specify-the-mode-sources-and-flags-per-prompt).
 
@@ -39,6 +39,7 @@ A few that are worth more than one line:
 - **`@plan`** investigates with read-only tools, then writes a directory under `~/agent-forge/plans/<slug>-<stamp>/`: `plan.md`, one `task-N-brief.md` per task, and a `progress.md` the controller owns. The gate is Approve / Keep drafting (Yes-all does not skip it). `@build` (or Approve) runs the tasks. Each worker writes `task-N-report.md`. Python updates `progress.md`, and a later `@build` skips tasks already marked `complete`. A blocked task stops the build; `@build` again retries it. After a build, **undo the build** restores pre-build files; **apply the changes again** writes the recorded bytes back. The bundle is `apply.json.gz` inside the directory. An older single-file plan (`*.md` with `*.apply.json.gz` beside it) still runs as before.
 - **`@film`** (aliases `@movie`, `@movies`) looks up titles on TMDB, stores them in local SQLite `film_db`, named lists (`film_list_*`), and recommends similar titles. Semantic neighbors reuse Qdrant `media_fingerprints`. Simkl import is AUTH V2: `film_simkl_connect` then `film_simkl_import`.
 - **`@coding`** (alias `@code`) is map-reduce: ripgrep discovery and regex narrowing are deterministic, only the per-file edit runs through an LLM, and those calls fan out in parallel. You get unified-diff preview cards, then a confirm, then verified writes with a snapshot. Undo a whole run with `@coding undo <id>`. A path argument is required. Do not send review.md here; use `@agent`.
+- **`@research`** caps each sub-investigation with `research.max_tool_output` (5000 when the key is absent; the example sets 12000; `0` falls back to 5000) and `research.max_tokens` (131072). The token cap is applied to a copy of the profile. Page fetches clip on a heading. The sub-agent passes `query` on `web_fetch` so the extract returns the relevant sections.
 
 Some modes depend on services that a [light deployment](architecture.md#deployment-presets-light-vs-full) may not run: `@qdrant` / `@docs` needs Qdrant (off when `AGENTFORGE_QDRANT=off`), and `@search` needs a configured web-search provider key. When the backing service is absent the mode is simply unavailable, not broken.
 
@@ -71,6 +72,8 @@ The `@notes` agent targets AgentForge Notes sessions (`source=notes`) and prefer
 **`@trip`** (alias `@tripplanner`) geocodes origin/destination/stops with OpenRouteService, builds a timed itinerary (`driving-car` or `foot-walking`), and publishes an interactive Leaflet map at `/trips/{uuid}`. Needs `ORS_API_KEY` (or `tools.ors.api_key`). The map re-routes on the server when you toggle a stop — the ORS key never reaches the browser. Place photos come from `wiki_place_image` (Wikipedia REST), not invented URLs. Tools: [tools.md — OpenRouteService](tools.md#openrouteservice-trips). HTTP: [api.md — Trips](api.md#trips).
 
 The chat UI lists whatever agents are currently configured (it reads `GET /api/agents`), so your set may differ from the defaults above.
+
+A session created with `source=afemail` runs `@afemail` when the message has no mode prefix. An explicit `@search`, `@agent`, or another custom alias still wins. A leading `@` that matches nothing still returns the unknown-prefix error.
 
 ## Connectors (`@conn`)
 

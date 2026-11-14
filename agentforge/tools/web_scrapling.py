@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from chalkbox.logging.bridge import get_logger
 
+from .page_text import clip_page, truncation_line
 from .registry import tool
 from .web_render import _validate_url
 
@@ -190,7 +191,7 @@ def _format_page(url: str, page: Any, selector: str, max_chars: int) -> str:
     lines.append("")
     lines.append(clipped)
     if truncated:
-        lines.append(f"\n... (truncated at {max_chars:,} chars)")
+        lines.append("\n" + truncation_line(max_chars))
     return "\n".join(lines)
 
 
@@ -294,9 +295,7 @@ def _selector_text(page: Any, selector: str) -> str:
 
 
 def _clip(text: str, max_chars: int) -> tuple[str, bool]:
-    if len(text) <= max_chars:
-        return text, False
-    return text[:max_chars], True
+    return clip_page(text, max_chars)
 
 
 __all__ = [

@@ -44,7 +44,26 @@ The exact set exposed on any one run depends on the mode and the active profile:
 | ------- | --------------------------------------------------------- |
 | `shell` | Run a shell command locally (guarded by a command policy) |
 
-Commands run argv-only (no `shell=True`). **Policy first:** `tools.shell.permissions` (YAML) plus optional runtime overrides (`/api/permissions/*`) gate allowlist / denylist / confirm **before** CommandGuard. Then the destructive-command guard fails **closed** (unknown → treat as destructive and pause for confirmation). Sudo is never read from disk; if a command needs it, you're prompted interactively (WebSocket+API). Auto-elevating root-owned actions is opt-in via `tools.shell.auto_sudo`. See [SECURITY.md](SECURITY.md#command-permissions-shell--ssh).
+`shell` runs a command string (`shell=True`). **Policy first:** `tools.shell.permissions` (YAML) plus optional runtime overrides (`/api/permissions/*`) gate allowlist / denylist / confirm **before** CommandGuard. Then the destructive-command guard fails **closed** (unknown → treat as destructive and pause for confirmation). Sudo is never read from disk; if a command needs it, you're prompted interactively (WebSocket+API). Auto-elevating root-owned actions is opt-in via `tools.shell.auto_sudo`. See [SECURITY.md](SECURITY.md#command-permissions-shell--ssh).
+
+On macOS, `shell` rewrites GNU `stat -c %s` and `--format=%s` to `stat -f '%z'` before the command runs. Other `stat` formats are left alone. When a rewrite changes the command, the server emits `tool.call.revised` and stores the command that ran.
+
+In split mode the agent prompt describes the worker that runs `shell`, not the container that built the prompt. Each worker publishes that description at startup (`agentforge:host-context:{role}`). If that publish is missing, the prompt says the OS is unknown.
+
+## Actions
+
+| Tool     | Description                                      |
+| -------- | ------------------------------------------------ |
+| `action` | Run one named argv template (`shell=False`)      |
+
+`action(name, args, cwd="")`. Slot values go in `args`, for example `{"path": "/etc/hosts"}`. Built-in names:
+
+- `file-size` runs `stat -f %z` on macOS and `stat -c %s` on Linux
+- `file-bytes` runs `wc -c`
+- `git-status` runs `git -C {path} status --short`
+- `git-log` runs `git log -n {n} --oneline`. `n` is 1–50, default 20
+
+`tools.actions.allow` replaces that list. A `darwin` or `linux` argv wins over `argv` on that OS. `tools.actions.timeout` defaults to 30 seconds. The tool is not on the built-in `@agent` list. Add `action` to a custom agent's `tools:` entry. Removing `shell` from that list is a separate choice.
 
 ## Docker
 
@@ -105,9 +124,13 @@ Hosts must be on `tools.ssh.allowed_hosts`. Remote **command strings** use the s
 | `web_screengrab`     | Screenshot a rendered page                       |
 | `web_fetch_scrapling`| GET a page directly and return markdown          |
 
-`web_fetch_scrapling` is the exception: it runs on the worker, GETs the URL itself through Scrapling's `Fetcher` (curl_cffi with Chrome TLS impersonation) and converts the HTML to markdown. It does not execute JavaScript — use `web_fetch_rendered` for SPAs. Takes an optional CSS `selector` and a `max_chars` cap (default 8000, max 64000). Needs the `scrapling[rag]` extra; without it the tool is registered but errors when called.
+`web_fetch(url, query="")`. `query` asks the provider for the sections that match that text. Tavily returns those chunks joined with `[...]`. Omit `query` for the whole page. A failed fetch is not tried on another provider, and the same URL is not fetched again until the failure cache expires. HTML is converted to article markdown (nav, footer, and scripts dropped). A length cap cuts on a heading or a blank line. `tools.web_search.<provider>.fetch_max_chars` is that cap when the provider served the page.
 
-The rest run in the sidecar (locality `remote`). See [Plugins and availability](#plugins-and-availability). The sidecar validates targets (no private/loopback/link-local URLs unless `SIDECAR_ALLOW_PRIVATE_URLS=1`) and requires `X-Sidecar-Token` when `SIDECAR_AUTH_TOKEN` is set. See [SECURITY.md](SECURITY.md) for more.
+`web_fetch_rendered` asks the sidecar for the article or main element (`layout=true`) and uses the same markdown cleanup. Website monitor extracts still hash the collapsed body.
+
+`web_search`, `web_fetch`, `web_fetch_rendered`, and `web_screengrab` run in the sidecar (locality `remote`). See [Plugins and availability](#plugins-and-availability). The sidecar validates targets (no private/loopback/link-local URLs unless `SIDECAR_ALLOW_PRIVATE_URLS=1`) and requires `X-Sidecar-Token` when `SIDECAR_AUTH_TOKEN` is set. See [SECURITY.md](SECURITY.md) for more.
+
+`web_fetch_scrapling` runs on the worker. It GETs the URL through Scrapling's `Fetcher` (curl_cffi with Chrome TLS impersonation) and converts the HTML to markdown. It does not execute JavaScript. Use `web_fetch_rendered` for SPAs. It takes an optional CSS `selector` and a `max_chars` cap (default 8000, max 64000). The cap cuts on a heading or a blank line. Needs the `scrapling[rag]` extra; without it the tool is registered but errors when called.
 
 ## OpenRouteService (trips)
 
