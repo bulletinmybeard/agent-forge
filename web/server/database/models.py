@@ -32,6 +32,22 @@ def _now() -> datetime:
     return datetime.now()
 
 
+def _iso(dt: datetime | str | None) -> str | None:
+    """ISO-8601 with the server's local offset.
+
+    Columns store a naive local time. Canvas stores that same value as text.
+    A browser parses an offset-less string as its own local time, so a UTC
+    container and a CET browser disagree by an hour.
+    """
+    if not dt:
+        return None
+    if isinstance(dt, str):
+        dt = datetime.fromisoformat(dt)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    return dt.isoformat()
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -61,6 +77,9 @@ class User(Base):
     username = Column(String(64), nullable=False, unique=True)
     password_hash = Column(String(256), nullable=False, default="")
     is_admin = Column(Boolean, nullable=False, default=False)
+    # Personal model instructions. The admin row is ignored; that text stays
+    # in the user_context file.
+    instructions = Column(Text, nullable=False, default="")
     created_at = Column(DateTime, default=_now, nullable=False)
 
     def __repr__(self) -> str:
@@ -154,8 +173,8 @@ class ChatSession(Base):
             "prompt_tokens": self.prompt_tokens or 0,
             "completion_tokens": self.completion_tokens or 0,
             "total_tokens": self.total_tokens or 0,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at),
         }
 
 
@@ -191,7 +210,7 @@ class ChatMessage(Base):
             "sequence": self.sequence,
             "is_incognito": self.is_incognito,
             "is_volatile": self.is_volatile,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": _iso(self.created_at),
         }
 
 
@@ -222,8 +241,8 @@ class UserFact(Base):
             "value": self.value,
             "source_session": self.source_session,
             "confidence": self.confidence,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at),
         }
 
 
@@ -257,7 +276,7 @@ class SessionInstruction(Base):
             "session_id": self.session_id,
             "text": self.text,
             "scope": "session" if self.session_id else "global",
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": _iso(self.created_at),
         }
 
 
@@ -283,7 +302,7 @@ class CommandPolicyOverride(Base):
             "allowed_commands": self.allowed_commands or [],
             "allowed_patterns": self.allowed_patterns or [],
             "blocked_patterns": self.blocked_patterns or [],
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "updated_at": _iso(self.updated_at),
         }
 
 
@@ -304,7 +323,7 @@ class CommandPermissionProfileRow(Base):
             "description": self.description or "",
             "shell": self.shell,
             "ssh": self.ssh,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "updated_at": _iso(self.updated_at),
         }
 
 
@@ -345,7 +364,7 @@ class CommandNote(Base):
             "commands": json.loads(self.commands_json) if self.commands_json else [],
             "content": self.content,
             "message_ts": self.message_ts,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": _iso(self.created_at),
         }
 
 
@@ -386,9 +405,9 @@ class ScheduledJob(Base):
             "cron_human": self.cron_human,
             "on_failure": self.on_failure,
             "enabled": self.enabled,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-            "last_run_at": self.last_run_at.isoformat() if self.last_run_at else None,
+            "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at),
+            "last_run_at": _iso(self.last_run_at),
             "last_status": self.last_status,
         }
 
@@ -417,8 +436,8 @@ class ScheduledJobRun(Base):
         return {
             "id": self.id,
             "job_id": self.job_id,
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+            "started_at": _iso(self.started_at),
+            "finished_at": _iso(self.finished_at),
             "status": self.status,
             "exit_code": self.exit_code,
             "output": self.output,
@@ -457,10 +476,10 @@ class Connection(Base):
             "label": self.label,
             "account_identifier": self.account_identifier,
             "status": self.status,
-            "last_used_at": self.last_used_at.isoformat() if self.last_used_at else None,
+            "last_used_at": _iso(self.last_used_at),
             "last_error": self.last_error,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at),
         }
 
 
@@ -519,9 +538,9 @@ class MonitorJob(Base):
             "notification_method": self.notification_method,
             "webhook_url": self.webhook_url,
             "enabled": self.enabled,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-            "last_check_at": self.last_check_at.isoformat() if self.last_check_at else None,
+            "created_at": _iso(self.created_at),
+            "updated_at": _iso(self.updated_at),
+            "last_check_at": _iso(self.last_check_at),
             "last_status": self.last_status,
         }
 
@@ -557,7 +576,7 @@ class MonitorSnapshot(Base):
             "extraction_mode": self.extraction_mode,
             "css_selector_used": self.css_selector_used,
             "word_count": self.word_count,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": _iso(self.created_at),
         }
 
 
@@ -590,8 +609,8 @@ class MonitorCheck(Base):
         return {
             "id": self.id,
             "job_id": self.job_id,
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+            "started_at": _iso(self.started_at),
+            "finished_at": _iso(self.finished_at),
             "status": self.status,
             "prev_hash": self.prev_hash,
             "current_hash": self.current_hash,

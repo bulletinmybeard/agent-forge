@@ -298,7 +298,7 @@ slack:
   default_channel: general
   reply_in_thread: true
 
-# Optional Markdown file injected into every agent's system prompt.
+# Admin user's model instructions. Other users keep theirs on their account.
 user_context: "user_context.md"
 
 # Per-tool timeouts / options. Override without touching source.

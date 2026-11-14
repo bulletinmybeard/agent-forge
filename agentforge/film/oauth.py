@@ -17,6 +17,7 @@ from urllib.request import Request, urlopen
 from agentforge import __version__
 from agentforge.config import get_config
 from agentforge.film.store import db_path
+from web.server.identity import ADMIN_USER_ID, current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,28 @@ def _pending_path() -> Path:
     return db_path().with_name("simkl_oauth_pending.json")
 
 
+def _load_tokens() -> dict[str, dict[str, Any]]:
+    """Per-user Simkl tokens. A file from before accounts belongs to the admin."""
+    path = _token_path()
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return {}
+    if "access_token" in data and "users" not in data:
+        return {ADMIN_USER_ID: data}
+    users = data.get("users")
+    if isinstance(users, dict):
+        return {str(key): value for key, value in users.items() if isinstance(value, dict)}
+    return {}
+
+
+def _save_tokens(user_id: str, payload: dict[str, Any]) -> None:
+    users = _load_tokens()
+    users[user_id] = payload
+    _write_private(_token_path(), {"users": users})
+
+
 def _b64url(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
@@ -89,7 +112,13 @@ def start_login() -> dict[str, str]:
     challenge = _b64url(hashlib.sha256(verifier.encode("ascii")).digest())
     state = _b64url(secrets.token_bytes(16))
     redir = redirect_uri()
-    pending = {"verifier": verifier, "state": state, "redirect_uri": redir, "created": int(time.time())}
+    pending = {
+        "verifier": verifier,
+        "state": state,
+        "redirect_uri": redir,
+        "created": int(time.time()),
+        "user_id": current_user_id() or ADMIN_USER_ID,
+    }
     _write_private(_pending_path(), pending)
     qs = urlencode(
         {
@@ -105,7 +134,7 @@ def start_login() -> dict[str, str]:
     return {"authorize_url": f"{_AUTHORIZE}?{qs}", "redirect_uri": redir}
 
 
-def _post_token(body: dict[str, str]) -> dict[str, Any]:
+def _post_token(body: dict[str, str], *, user_id: str) -> dict[str, Any]:
     data = urlencode(body).encode()
     req = Request(
         _TOKEN,
@@ -118,7 +147,7 @@ def _post_token(body: dict[str, str]) -> dict[str, Any]:
     if not payload.get("access_token"):
         raise RuntimeError(f"Simkl token response missing access_token: {payload}")
     payload["obtained_at"] = int(time.time())
-    _write_private(_token_path(), payload)
+    _save_tokens(user_id, payload)
     pending = _pending_path()
     if pending.is_file():
         pending.unlink()
@@ -145,10 +174,10 @@ def complete_login(*, code: str, state: str, iss: str) -> dict[str, Any]:
         "redirect_uri": pending["redirect_uri"],
         "code_verifier": pending["verifier"],
     }
-    return _post_token(body)
+    return _post_token(body, user_id=str(pending.get("user_id") or ADMIN_USER_ID))
 
 
-def _refresh(tokens: dict[str, Any]) -> dict[str, Any]:
+def _refresh(tokens: dict[str, Any], *, user_id: str) -> dict[str, Any]:
     refresh = tokens.get("refresh_token")
     if not refresh:
         raise RuntimeError("Simkl token expired and no refresh_token is stored. Re-run connect.")
@@ -158,26 +187,34 @@ def _refresh(tokens: dict[str, Any]) -> dict[str, Any]:
             "client_id": client_id(),
             "client_secret": client_secret(),
             "refresh_token": str(refresh),
-        }
+        },
+        user_id=user_id,
     )
 
 
-def get_valid_token() -> str:
+def _deployment_token() -> str:
+    """Process-wide Simkl token. Only the no-login install and the admin use it."""
     env = os.environ.get("SIMKL_ACCESS_TOKEN", "").strip()
     if env:
         return env
-    cfg = str(get_config().get("tools.film.simkl_access_token", "") or "").strip()
-    if cfg:
-        return cfg
-    path = _token_path()
-    if not path.is_file():
+    return str(get_config().get("tools.film.simkl_access_token", "") or "").strip()
+
+
+def get_valid_token() -> str:
+    actor = current_user_id()
+    if actor in (None, ADMIN_USER_ID):
+        shared = _deployment_token()
+        if shared:
+            return shared
+    user_id = actor or ADMIN_USER_ID
+    tokens = _load_tokens().get(user_id)
+    if not isinstance(tokens, dict) or not tokens.get("access_token"):
         raise RuntimeError(
             "Simkl is not connected. Open /api/film/simkl/connect (or @film connect Simkl) "
             "and approve the app, then retry import."
         )
-    tokens = json.loads(path.read_text(encoding="utf-8"))
     obtained = int(tokens.get("obtained_at") or 0)
     expires = int(tokens.get("expires_in") or 604800)
     if obtained and time.time() > obtained + expires - 60:
-        tokens = _refresh(tokens)
+        tokens = _refresh(tokens, user_id=user_id)
     return str(tokens["access_token"])

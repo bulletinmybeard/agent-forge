@@ -43,6 +43,12 @@ def personal_collection_names() -> frozenset[str]:
         settings.knowledge.snippet_collection_name,
         "conversation_memory",
     }
+    try:
+        from agentforge.film.vectors import collection_name
+
+        names.add(collection_name())
+    except Exception:
+        logger.debug("film collection name unavailable", exc_info=True)
     return frozenset(name for name in names if name)
 
 

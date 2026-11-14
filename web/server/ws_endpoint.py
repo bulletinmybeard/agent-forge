@@ -73,6 +73,7 @@ from .queue.store import job_store
 from .run_settle import INLINE_RUN, WAIT_JOB, settle_inflight_run
 from .secret import SecretBroker
 from .summarise import flatten_messages_for_summary
+from .user_context import instructions_for_caller, read_admin_context
 
 if TYPE_CHECKING:
     import ollama
@@ -619,8 +620,7 @@ class SearchRuntime:
         self.skills_max: int = 3  # max skills per query
         self._load_skills()
 
-        # User context: personal workspace info injected into all agent prompts
-        self.user_context: str = ""
+        # Admin file is logged here. Each prompt reads the signed-in caller.
         self._load_user_context()
 
         logger.info(
@@ -1202,41 +1202,16 @@ class SearchRuntime:
         return self.skills_by_id.get(skill_id)
 
     def _load_user_context(self) -> None:
-        """Load the user context Markdown file and append it to agent_system_prompt.
+        """Log the admin context file. Prompts read the caller per request.
 
-        The file path is read from ``config.yaml`` → ``user_context``.
-        Silently skipped when:
-          - the config key is missing or empty
-          - the file does not exist at the resolved path
+        Baking the file into ``agent_system_prompt`` here made every user
+        share the admin text for the life of the process.
         """
-
-        file_setting: str = getattr(self.af_settings, "user_context_file", "")
-        if not file_setting:
+        text = read_admin_context()
+        if not text:
+            logger.debug("admin user context file empty or missing")
             return
-
-        # Resolve relative to agentforge/ (parent of app/)
-        service_root = Path(__file__).resolve().parent.parent.parent
-        ctx_path = Path(file_setting) if Path(file_setting).is_absolute() else service_root / file_setting
-
-        if not ctx_path.exists():
-            logger.debug("user_context file not found at %s — skipping", ctx_path)
-            return
-
-        try:
-            self.user_context = ctx_path.read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            logger.warning("Could not read user_context file %s: %s", ctx_path, exc)
-            return
-
-        if not self.user_context:
-            return
-
-        # Append to the main agent system prompt so _run_agent and
-        # _run_discovery pick it up automatically.
-        if self.agent_system_prompt:
-            self.agent_system_prompt = self.agent_system_prompt + "\n\n---\n\n" + self.user_context
-
-        logger.info("User context loaded from %s (%d chars)", ctx_path, len(self.user_context))
+        logger.info("Admin user context file loaded (%d chars)", len(text))
 
 
 # Per-session sticky filters — persisted across queries in the same WS connection
@@ -2016,15 +1991,15 @@ async def _canvas_scan_query(
 
 
 def _inject_user_context(prompt: str, rt: "SearchRuntime") -> str:
-    """Append the user context block to *prompt* if one is configured.
+    """Append this caller's instructions. The runtime copy is not used.
 
-    Used by runners whose system prompt is built locally (web_search,
-    log_analysis, custom_agent).  _run_agent and _run_discovery get the
-    context via rt.agent_system_prompt, which is already augmented at
-    SearchRuntime init time.
+    Admin and no caller get the file. Another user gets their row, or
+    nothing when that row is empty. ``rt`` stays in the signature so the
+    call sites do not change; the stored copy is not the caller's text.
     """
-    if rt.user_context:
-        return prompt + "\n\n---\n\n" + rt.user_context
+    text = instructions_for_caller()
+    if text:
+        return prompt + "\n\n---\n\n" + text
     return prompt
 
 
@@ -7705,7 +7680,7 @@ async def _run_film(
     cancel_event: threading.Event | None = None,
     secret_broker: "SecretBroker | None" = None,
 ) -> None:
-    suffix = _inject_user_context(_load_prompt("film"), rt)
+    suffix = _load_prompt("film")
     await _run_agent(
         ws,
         query,
@@ -8845,7 +8820,8 @@ async def _run_agent(
 
         # Build system prompt — append mode-specific suffix if provided
         # (e.g., @pipeline workflow guidance injected by _run_pipeline).
-        system_prompt = rt.agent_system_prompt
+        # Instructions are the caller's, not the file loaded at startup.
+        system_prompt = _inject_user_context(rt.agent_system_prompt, rt)
         if _system_prompt_suffix:
             system_prompt = system_prompt + "\n\n" + _system_prompt_suffix
         _rem_suffix = _reminder_query_suffix(query, tool_subset)

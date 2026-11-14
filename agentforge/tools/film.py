@@ -424,7 +424,7 @@ def _media_for_list(tmdb_id: str, title: str) -> dict | str:
 
 @tool
 def film_lists() -> str:
-    """List all custom film lists with item counts.
+    """List this user's film lists with item counts.
 
     When to use: 'what lists do I have', 'show my lists'.
     When NOT to use: Library size (film_stats) or searching titles (film_search).

@@ -18,6 +18,7 @@ except ImportError:
     clear_schema_cache_for_user = None
 from app.security import auth_enabled
 from app.services.qdrant_owner import delete_personal_points
+from web.server.database.models import _iso
 from web.server.identity import (
     ADMIN_USER_ID,
     COOKIE_NAME,
@@ -30,6 +31,7 @@ from web.server.identity import (
 from .api import get_db, get_upload_base
 from .api_user_data import clear_session_attachments
 from .conversation_memory import get_conversation_memory
+from .user_context import read_admin_context
 from .ws_endpoint import get_runtime
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,10 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     username: str | None = None
     password: str | None = None
+
+
+class InstructionsUpdate(BaseModel):
+    text: str = Field(default="", max_length=100_000)
 
 
 class ImpersonateRequest(BaseModel):
@@ -114,7 +120,7 @@ def _public_user(user) -> dict:
         "id": user.id,
         "username": user.username,
         "is_admin": bool(user.is_admin),
-        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "created_at": _iso(user.created_at),
     }
 
 
@@ -124,8 +130,8 @@ def _public_key(row) -> dict:
         "user_id": row.user_id,
         "name": row.name,
         "prefix": row.prefix,
-        "created_at": row.created_at.isoformat() if row.created_at else None,
-        "last_used_at": row.last_used_at.isoformat() if row.last_used_at else None,
+        "created_at": _iso(row.created_at),
+        "last_used_at": _iso(row.last_used_at),
     }
 
 
@@ -168,6 +174,34 @@ def _me_payload(request: Request, user) -> dict:
         if admin is not None:
             payload["impersonator"] = _public_user(admin)
     return payload
+
+
+def _instructions_payload(user) -> dict:
+    if user.is_admin or user.id == ADMIN_USER_ID:
+        return {"text": read_admin_context(), "editable": False}
+    return {"text": user.instructions or "", "editable": True}
+
+
+@router.get("/instructions")
+def get_instructions():
+    """This caller's model instructions.
+
+    The admin payload is the file. ``editable`` is false, and a save is refused.
+    """
+    return _instructions_payload(_require_user())
+
+
+@router.put("/instructions")
+def put_instructions(body: InstructionsUpdate):
+    """Store instructions on the signed-in user. Does not write the admin file."""
+    user = _require_user()
+    if user.is_admin or user.id == ADMIN_USER_ID:
+        raise HTTPException(status_code=403, detail="admin instructions stay in the user context file")
+    try:
+        updated = get_db().set_user_instructions(user.id, body.text.strip())
+    except ValueError as exc:
+        raise _user_error(exc) from exc
+    return _instructions_payload(updated)
 
 
 @router.get("/me")

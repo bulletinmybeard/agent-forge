@@ -6,7 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.18.0] - 2026-11-14
+## [0.19.0] - 2026-11-14
+
+### Fixed
+
+- **Model instructions.** `user_context.md` (`user_context` in `config.yaml`) is the admin user's text. The home greeting and the system prompt read it for the admin and when there is no caller, on each request. A `Name:` line supplies the first name. Another user gets the `instructions` column on their row (`GET`/`PUT /api/auth/instructions`). Empty text sends no personal block and the greeting has no first name. A save does not write the file, and the admin row's column is ignored. While impersonating, the target's text is the one that is used. Migration `009_user_instructions`
+- `GET /api/sessions/{id}` logs `missing` or `denied` when that chat is gone or belongs to someone else. The 404 body stays `Session not found` either way
+- API timestamps from the chat database include the server's local offset. The columns stay naive. Sessions, messages, facts, instructions, notes, scheduled jobs, monitors, connections, users, API keys, prompt-lab runs, Botty session search, and canvas reads all use `_iso`. A browser on CET was reading the UTC container clock as local time, so a finished follow-up looked about an hour old and the chat poller left "Agent is working..." up. OAuth token expiry stays naive, and job-store times were already UTC
+- `@film` library membership, status, ratings, and named lists belong to the signed-in user. `film_lists` and the other `film_list_*` tools, plus library search, stats, and status, only see that user's rows. Existing rows stay with the admin user. With no caller, nothing is filtered. Title metadata (`media`, `episodes`) stays shared. The film Qdrant collection (`tools.film.collection`) stores `user_id`. Existing points stay with the admin user and keep the TMDB id. Search, count, and later upserts only see that user's points. Another user gets a separate point and does not overwrite the admin point. Simkl tokens are per user; a token already on disk stays with the admin, and another user does not inherit `SIMKL_ACCESS_TOKEN`
+
+## [0.18.0] - 2026-11-05
 
 ### Added
 

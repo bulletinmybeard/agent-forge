@@ -19,6 +19,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
 from web.server.database.migrate import upgrade as alembic_upgrade
+from web.server.database.models import _iso
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ class CanvasDatabase:
             "content": row.content,
             "label": row.label,
             "footnote_num": row.footnote_num,
-            "created_at": row.created_at,
+            "created_at": _iso(row.created_at),
         }
 
     def add_item(

@@ -32,6 +32,7 @@ from agentforge.config import get_config as get_fw_config
 from agentforge.router import ProfileRouter, capability_for_mode
 from app.config import settings as af_settings
 from app.security import auth_enabled
+from web.server.database.models import _iso
 from web.server.identity import current_user_id, reset_current_user, set_current_user
 
 from . import state
@@ -40,7 +41,7 @@ from .database import ChatDatabase
 from .debug_sessions import build_debug_bundle
 from .mode_routing import STICKY_MODES, strip_mode_prefix
 from .monitor_service import get_monitor_service
-from .ownership import session_writable
+from .ownership import session_unavailable_reason, session_writable
 from .prompt_refiner import refine_prompt
 from .queue.models import JobStatus
 from .queue.store import job_store
@@ -54,6 +55,7 @@ from .summarise import (
     select_recap_window,
     strip_markdown,
 )
+from .user_context import first_name, instructions_for_caller
 from .ws_endpoint import (
     _AGENT_KEYWORDS,
     _AGENT_PATTERNS,
@@ -205,8 +207,6 @@ def get_upload_base() -> Path | None:
 
 # -- Welcome message -----------------------------------------------------------
 
-_USER_CONTEXT_CACHE: dict[str, str] = {}  # key: "name" → first name
-
 # Upload guards. session_id becomes a directory name, so constrain it (no
 # traversal). Active-content extensions are blocked because uploads are served
 # from the same origin (/uploads/...) and would otherwise enable stored XSS.
@@ -214,32 +214,6 @@ _SAFE_SESSION_RE = _re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _BLOCKED_UPLOAD_EXTS = frozenset(
     {".html", ".htm", ".xhtml", ".xht", ".shtml", ".svg", ".svgz", ".xml", ".js", ".mjs", ".swf", ".vbs"}
 )
-
-
-def _parse_user_name() -> str:
-    """Extract the first name from user_context.md (cached)."""
-    if "name" in _USER_CONTEXT_CACHE:
-        return _USER_CONTEXT_CACHE["name"]
-
-    name = ""
-    try:
-        # Try multiple known locations
-        for candidate in [
-            Path(__file__).resolve().parents[2] / "user_context.md",
-            Path(__file__).resolve().parents[2] / "data" / "user_context.md",
-        ]:
-            if candidate.is_file():
-                text = candidate.read_text(encoding="utf-8")
-                m = _re.search(r"^\s*[-*+]?\s*name\s*:\s*(.+)", text, _re.MULTILINE | _re.IGNORECASE)
-                if m:
-                    full_name = m.group(1).strip()
-                    name = full_name.split()[0] if full_name else ""
-                break
-    except Exception:
-        pass
-
-    _USER_CONTEXT_CACHE["name"] = name
-    return name
 
 
 def _time_greeting(now: _dt | None = None) -> str:
@@ -279,7 +253,7 @@ def _day_flavour(now: _dt | None = None) -> str:
 async def get_welcome():
     """Return a personalized, time-aware welcome message."""
     now = _dt.now()
-    name = _parse_user_name()
+    name = first_name(instructions_for_caller())
     greeting = _time_greeting(now)
     flavour = _day_flavour(now)
 
@@ -382,12 +356,41 @@ async def list_sessions(
     return result
 
 
+def _session_logger() -> logging.Logger:
+    """Logger for a hidden session.
+
+    Alembic's fileConfig runs at startup and disables loggers that already
+    exist, including ``web.server.api``. Re-enable this one on use so the
+    line still reaches the container.
+    """
+    log = logging.getLogger("web.server.sessions")
+    log.disabled = False
+    log.setLevel(logging.INFO)
+    return log
+
+
+def _log_unavailable_session(db: ChatDatabase, session_id: str) -> None:
+    """Log why this session is hidden. The HTTP body stays generic."""
+    actor = current_user_id()
+    owner = db.get_session_owner(session_id)
+    reason = session_unavailable_reason(owner, actor)
+    log = _session_logger()
+    if reason == "denied":
+        log.info("session %s denied for user %s (owner %s)", session_id, actor, owner)
+    elif reason == "missing":
+        log.info("session %s missing", session_id)
+    else:
+        log.info("session %s unavailable", session_id)
+
+
 @router.get("/sessions/{session_id}")
 async def get_session(session_id: str):
     """Get a single session by ID."""
     db = get_db()
     session = db.get_session(session_id)
     if not session:
+        # Same 404 for a missing row and someone else's row. The reason stays in the log.
+        _log_unavailable_session(db, session_id)
         raise HTTPException(status_code=404, detail="Session not found")
     return {**session.to_dict(), "canvas_enabled": is_canvas_enabled()}
 
@@ -1650,7 +1653,7 @@ async def run_prompt_lab(req: PromptLabRequest) -> PromptLabResponse:
                 results=[r.model_dump() for r in results],
             )
             run_id = run.id
-            created_at = run.created_at.isoformat() if run.created_at else None
+            created_at = _iso(run.created_at)
         except Exception as exc:  # noqa: BLE001
             logger.warning("prompt-lab save_run failed: %s", exc)
 

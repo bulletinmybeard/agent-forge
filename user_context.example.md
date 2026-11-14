@@ -1,8 +1,9 @@
 # User Context
 
-This file is injected **verbatim** into every agent's system prompt, so the model always knows who you are,
-where your stuff lives, and how you like to work. Copy it to `user_context.md` (gitignored)
-and replace the placeholders with your own details.
+This file is the admin user's instructions. It is injected **verbatim** into that caller's system prompt,
+so the model knows who they are, where their stuff lives, and how they like to work.
+Copy it to `user_context.md` (gitignored) and replace the placeholders.
+Other users edit their own text in the WebUI under Settings > Account. They do not see this file.
 Keep it concise and factual — everything here is sent on every run!
 
 > The `Name:` line below also powers the welcome greeting ("Good afternoon, <first name>").

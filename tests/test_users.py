@@ -105,7 +105,7 @@ def test_upgrade_from_005_backfills_admin(tmp_path):
         engine.dispose()
 
     upgrade(db_path, database="chat")
-    assert current(db_path, database="chat") == "008_impersonation"
+    assert current(db_path, database="chat") == "009_user_instructions"
 
     engine = create_engine(f"sqlite:///{db_path}", poolclass=NullPool)
     try:
@@ -596,7 +596,7 @@ def test_upgrade_from_007_adds_impersonator_column(tmp_path):
         engine.dispose()
 
     upgrade(db_path, database="chat")
-    assert current(db_path, database="chat") == "008_impersonation"
+    assert current(db_path, database="chat") == "009_user_instructions"
 
     engine = create_engine(f"sqlite:///{db_path}", poolclass=NullPool)
     try:

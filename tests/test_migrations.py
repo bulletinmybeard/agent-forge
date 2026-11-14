@@ -16,7 +16,7 @@ from web.server.database.migrate import (
 )
 from web.server.database.models import Base
 
-CHAT_HEAD = "008_impersonation"
+CHAT_HEAD = "009_user_instructions"
 PROMPT_LAB_HEAD = "001_pl_baseline"
 
 
@@ -130,6 +130,42 @@ def test_history_includes_chat_revisions():
     assert "006_users" in revs
     assert "007_user_resources" in revs
     assert "008_impersonation" in revs
+    assert "009_user_instructions" in revs
+
+
+def test_upgrade_from_008_adds_user_instructions(tmp_path: Path):
+    db = tmp_path / "old.db"
+    engine = create_engine(f"sqlite:///{db}", poolclass=NullPool)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"))
+            conn.execute(text("INSERT INTO alembic_version (version_num) VALUES ('008_impersonation')"))
+            conn.execute(
+                text(
+                    "CREATE TABLE users ("
+                    "id VARCHAR PRIMARY KEY, username VARCHAR NOT NULL, password_hash VARCHAR NOT NULL, "
+                    "is_admin BOOLEAN NOT NULL, created_at DATETIME NOT NULL)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO users (id, username, password_hash, is_admin, created_at) "
+                    "VALUES ('00000000-0000-0000-0000-000000000001', 'admin', '', 1, datetime('now'))"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    upgrade(db, database="chat")
+    assert current(db, database="chat") == CHAT_HEAD
+
+    engine = create_engine(f"sqlite:///{db}", poolclass=NullPool)
+    try:
+        with engine.connect() as conn:
+            stored = conn.execute(text("SELECT instructions FROM users")).scalar()
+            assert stored == ""
+    finally:
+        engine.dispose()
 
 
 def test_upgrade_adds_command_policy_to_pre_003_db(tmp_path: Path):

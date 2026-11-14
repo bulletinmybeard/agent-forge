@@ -14,6 +14,8 @@ from urllib.request import Request, urlopen
 
 from chalkbox.logging.bridge import get_logger
 
+from web.server.database.models import _iso
+
 from . import ConnectorRegistry
 from ._account import (
     account_slug,
@@ -589,10 +591,10 @@ class ConnectionManager:
             "label": row.label,
             "account_identifier": row.account_identifier,
             "status": row.status,
-            "last_used_at": row.last_used_at.isoformat() if row.last_used_at else None,
+            "last_used_at": _iso(row.last_used_at),
             "last_error": row.last_error,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
-            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            "created_at": _iso(row.created_at),
+            "updated_at": _iso(row.updated_at),
         }
         try:
             toks = decrypt_tokens(row.encrypted_tokens) if row.encrypted_tokens else {}

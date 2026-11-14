@@ -2,17 +2,43 @@
 
 Existing points (taste fingerprints) are left alone. New upserts only happen when
 the embed vector size matches the collection; otherwise TMDB recs still work.
+
+Each signed-in user has their own points. The admin and a no-caller install keep
+the historical point id, which is the TMDB id. Another user gets a separate id
+and does not overwrite that point. Points with no ``user_id`` are stamped as
+the admin the first time this process opens the collection.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import threading
+import uuid
 from typing import Any
 
+from qdrant_client.models import Filter, PayloadSchemaType
+
 from agentforge.config import get_config
+from app.services.qdrant_owner import (
+    backfill_missing_owner,
+    owner_condition,
+    owner_for_write,
+    visible_count,
+)
+from web.server.identity import ADMIN_USER_ID, current_user_id
 
 logger = logging.getLogger(__name__)
+
+_backfill_lock = threading.Lock()
+_backfilled: set[str] = set()
+
+
+def _owner_filter() -> Filter | None:
+    cond = owner_condition()
+    if cond is None:
+        return None
+    return Filter(must=[cond])
 
 
 def collection_name() -> str:
@@ -56,12 +82,50 @@ def _collection_size(client, name: str) -> int | None:
         return None
 
 
+def point_id(tmdb_id: int) -> int | str:
+    """Qdrant id for this title and caller.
+
+    Admin and no-caller keep the integer TMDB id already stored. Any other
+    caller gets a UUID so the same title can exist twice.
+    """
+    actor = current_user_id()
+    if not actor or actor == ADMIN_USER_ID:
+        return int(tmdb_id)
+    return str(uuid.uuid5(uuid.NAMESPACE_OID, f"agentforge-film:{actor}:{int(tmdb_id)}"))
+
+
+def _ensure_owners(client, name: str) -> None:
+    """Index ``user_id`` and stamp points that have none. Once per process."""
+    if name in _backfilled:
+        return
+    with _backfill_lock:
+        if name in _backfilled:
+            return
+        try:
+            client.create_payload_index(
+                collection_name=name,
+                field_name="user_id",
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
+        except Exception:
+            logger.debug("film user_id index already exists or failed for %s", name)
+        try:
+            stamped = backfill_missing_owner(client, name)
+        except Exception as exc:
+            logger.warning("film owner backfill skipped for %s: %s", name, exc)
+            return
+        _backfilled.add(name)
+        if stamped:
+            logger.info("film collection %s: stamped user_id on %d points", name, stamped)
+
+
 def point_exists(tmdb_id: int) -> bool | None:
-    """True if the collection has this TMDB id. None if Qdrant is unreachable."""
+    """True if this caller already has this TMDB id. None if Qdrant is unreachable."""
     try:
         client = _client()
         name = collection_name()
-        found = client.retrieve(collection_name=name, ids=[int(tmdb_id)])
+        _ensure_owners(client, name)
+        found = client.retrieve(collection_name=name, ids=[point_id(tmdb_id)])
         return bool(found)
     except Exception as exc:
         logger.debug("film Qdrant retrieve skipped: %s", exc)
@@ -94,6 +158,7 @@ def upsert_media(row: dict[str, Any]) -> bool:
 
         client = _client()
         name = collection_name()
+        _ensure_owners(client, name)
         existing = [c.name for c in client.get_collections().collections]
         if name not in existing:
             logger.debug("film collection %s missing — skip upsert", name)
@@ -102,14 +167,15 @@ def upsert_media(row: dict[str, Any]) -> bool:
         if size is not None and size != len(vec):
             logger.debug("film embed dim %d != collection %d — skip upsert", len(vec), size)
             return False
-        found = client.retrieve(collection_name=name, ids=[tmdb_id])
+        pid = point_id(tmdb_id)
+        found = client.retrieve(collection_name=name, ids=[pid])
         if found:
             return True
         client.upsert(
             collection_name=name,
             points=[
                 PointStruct(
-                    id=tmdb_id,
+                    id=pid,
                     vector=vec,
                     payload={
                         "tmdb_id": tmdb_id,
@@ -118,6 +184,7 @@ def upsert_media(row: dict[str, Any]) -> bool:
                         "year": row.get("year"),
                         "overview": row.get("overview") or "",
                         "genres": row.get("genres") or "",
+                        "user_id": owner_for_write(),
                     },
                 )
             ],
@@ -132,9 +199,11 @@ def collection_point_count() -> tuple[str, int | None]:
     """Return (collection_name, points_count). count is None if Qdrant is down."""
     name = collection_name()
     try:
-        result = _client().count(collection_name=name, exact=True)
-        n = getattr(result, "count", result)
-        return (name, int(n))
+        client = _client()
+        _ensure_owners(client, name)
+        result = client.count(collection_name=name, exact=True)
+        n = int(getattr(result, "count", result))
+        return (name, visible_count(client, name, n))
     except Exception as exc:
         logger.debug("film Qdrant count skipped: %s", exc)
         return (name, None)
@@ -147,11 +216,16 @@ def search_neighbors(query: str, *, limit: int = 10) -> list[dict[str, Any]]:
     try:
         client = _client()
         name = collection_name()
+        _ensure_owners(client, name)
         size = _collection_size(client, name)
         if size is not None and size != len(vec):
             logger.debug("film search skipped: embed dim %d != collection %d", len(vec), size)
             return []
-        hits = client.search(collection_name=name, query_vector=vec, limit=limit)
+        kwargs: dict[str, Any] = {"collection_name": name, "query_vector": vec, "limit": limit}
+        filt = _owner_filter()
+        if filt is not None:
+            kwargs["query_filter"] = filt
+        hits = client.search(**kwargs)
         out: list[dict[str, Any]] = []
         for hit in hits:
             payload = hit.payload or {}
