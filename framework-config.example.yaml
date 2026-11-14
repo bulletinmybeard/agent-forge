@@ -99,6 +99,23 @@ tools:
   default_search_depth: 0
   docker:
     max_tail_lines: 200
+  # Pinned argv actions (tool name: action). Replaces the built-in
+  # file-size / file-bytes / git-status / git-log list when allow is set.
+  # A platform list wins over argv. Slot values are substituted with shell=False.
+  actions:
+    timeout: 30
+    allow:
+      - name: file-size
+        darwin: [stat, -f, "%z", "{path}"]
+        linux: [stat, -c, "%s", "{path}"]
+      - name: file-bytes
+        argv: [wc, -c, "{path}"]
+      - name: git-status
+        argv: [git, -C, "{path}", status, --short]
+      - name: git-log
+        argv: [git, -C, "{path}", log, "-n", "{n}", --oneline]
+        slots:
+          n: {type: int, min: 1, max: 50, default: 20}
   shell:
     timeout: 120
     permissions:
@@ -124,7 +141,7 @@ tools:
       enabled: true
       api_key: ""             # or env OLLAMA_API_KEY
       max_results: 5          # 1..20
-      fetch_max_chars: 8000   # web_fetch truncation when Ollama served the page
+      fetch_max_chars: 1000000   # chars kept when Ollama served the page
     brave:
       enabled: false
       api_key: ""             # or env BRAVE_API_KEY
@@ -136,9 +153,11 @@ tools:
       search_depth: basic     # basic (1 credit) | advanced (2 credits)
       topic: general
       max_results: 5
-      fetch_max_chars: 8000   # extract costs credits too
+      fetch_max_chars: 1000000   # chars kept from an extract
   web_fetch:
     provider: ollama
+    # Not a retry list. A failed fetch is not tried on the next provider.
+    # A later name is used only when an earlier one is skipped.
     provider_fallbacks: []
   code_edit:
     profile: "default"
@@ -194,7 +213,8 @@ research:
   max_workers: 12            # sub-investigations running at once
   max_iterations: 6          # agent-loop passes per sub-investigation
   max_tool_calls: 15         # tool calls per sub-investigation
-  max_tool_output: 5000      # chars of tool output kept per call
+  max_tool_output: 12000     # chars kept per tool result, clipped on a heading. 0 falls back to 5000
+  max_tokens: 131072         # num_predict. Cloud rejects 1000000
   min_sub_agents: 3          # planner must fan out to at least this many
   max_sub_agents: 8          # ...and no more than this many
   planner_profile: cloud-heavy      # splits the question into sub-investigations

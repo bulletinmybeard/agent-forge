@@ -41,6 +41,7 @@ from chalkbox.logging.bridge import get_logger
 
 from agentforge.typing_utils import PlaywrightWaitUntil, as_playwright_wait
 
+from .page_text import clip_page, html_to_markdown, looks_like_html, truncation_line
 from .registry import tool
 
 if TYPE_CHECKING:
@@ -276,13 +277,14 @@ async def _render(url: str, wait_for: PlaywrightWaitUntil, timeout_ms: int) -> d
             title = await page.title()
             html = await page.content()
 
-            # Visible text — strip and compress whitespace
+            # Article markdown. inner_text is the fallback when conversion is empty.
             try:
                 body_text = await page.inner_text("body")
             except Exception:
                 body_text = ""
             body_text = re.sub(r"\n{3,}", "\n\n", body_text.strip())
             body_text = re.sub(r"[ \t]+", " ", body_text)
+            page_text = html_to_markdown(html) or body_text
 
             # Script src attributes (external + inline snippets for fingerprinting)
             script_srcs: list[str] = await page.eval_on_selector_all(
@@ -331,7 +333,7 @@ async def _render(url: str, wait_for: PlaywrightWaitUntil, timeout_ms: int) -> d
 
     return {
         "title": title,
-        "text": body_text,
+        "text": page_text,
         "script_srcs": script_srcs,
         "technologies": technologies,
         "metas": metas,
@@ -400,6 +402,7 @@ def _fetch_rendered_via_sidecar(
         "mode": "rendered",
         "timeout": max(5, int(timeout_s)),
         "screenshot": bool(capture_screenshot),
+        "layout": True,
     }
     data = json.dumps(payload).encode()
     # The sidecar's own navigation can run up to `timeout` seconds; add a bit of
@@ -436,13 +439,24 @@ def _save_sidecar_screenshot(url: str, screenshot_b64: str | None) -> str | None
         return None
 
 
+def _sidecar_body(sidecar: dict) -> str:
+    """Prefer article HTML from a layout extract. Fall back to the text field."""
+    html = sidecar.get("html") or ""
+    if isinstance(html, str) and html.strip():
+        rendered = html_to_markdown(html)
+        if rendered:
+            return rendered
+    body = (sidecar.get("content") or "").strip()
+    if looks_like_html(body):
+        rendered = html_to_markdown(body)
+        if rendered:
+            return rendered
+    return body
+
+
 def _format_sidecar_response(url: str, sidecar: dict, max_chars: int) -> str:
     """Shape the sidecar's /extract response to match the local renderer's output."""
-    body = (sidecar.get("content") or "").strip()
-    truncated = False
-    if len(body) > max_chars:
-        body = body[:max_chars]
-        truncated = True
+    body, truncated = clip_page(_sidecar_body(sidecar), max_chars)
 
     parts: list[str] = [
         f"Source: {url}  (rendered via scraper sidecar — Firefox + stealth)",
@@ -451,7 +465,7 @@ def _format_sidecar_response(url: str, sidecar: dict, max_chars: int) -> str:
         body or "(empty)",
     ]
     if truncated:
-        parts.append(f"\n... (truncated at {max_chars:,} chars — use a larger max_chars if needed)")
+        parts.append("\n" + truncation_line(max_chars))
 
     screenshot_b64 = sidecar.get("screenshot_b64")
     ss_path = _save_sidecar_screenshot(url, screenshot_b64 if isinstance(screenshot_b64, str) else None)
@@ -474,8 +488,8 @@ def _format_sidecar_response(url: str, sidecar: dict, max_chars: int) -> str:
         "tags are injected after page load. "
         "web_fetch only fetches raw HTML and misses anything rendered by JavaScript. "
         "web_fetch_rendered launches a real headless browser, waits for JS to "
-        "execute, and returns the fully rendered text along with detected technologies "
-        "(frameworks, analytics) and links. "
+        "execute, and returns the article as markdown. Nav, footer, and scripts "
+        "are removed. Detected technologies and links are included. "
         "wait_for options: 'load' (DOM ready), 'domcontentloaded' (faster, less JS), "
         "'networkidle' (all async requests settled — most thorough, use for SPAs). "
         "Use 'networkidle' when checking for analytics tags or lazy-loaded content."
@@ -487,7 +501,7 @@ def web_fetch_rendered(
     timeout: int = 30,
     max_chars: int = _DEFAULT_WEB_RENDER_MAX_CHARS,
 ) -> str:
-    """Fetch a URL using a headless Firefox browser and return the fully rendered content.
+    """Fetch a URL using a headless Firefox browser and return the article as markdown.
 
     Executes JavaScript, waits for async rendering to complete, then extracts
     the visible text, detected technologies (frameworks, analytics), meta tags,
@@ -603,16 +617,12 @@ def web_fetch_rendered(
         parts.append("")
 
     # Body text
-    text = result["text"]
-    truncated = False
-    if len(text) > max_chars:
-        text = text[:max_chars]
-        truncated = True
+    text, truncated = clip_page(result["text"], max_chars)
 
     parts.append("## Page content")
     parts.append(text)
     if truncated:
-        parts.append(f"\n... (truncated at {max_chars:,} chars — use a larger max_chars if needed)")
+        parts.append("\n" + truncation_line(max_chars))
 
     # Links
     if result["links"]:

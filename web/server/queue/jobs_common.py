@@ -56,6 +56,12 @@ def _stamp_outbound_user(request: httpx.Request) -> None:
         request.headers["X-AgentForge-User"] = user_id
 
 
+async def _stamp_outbound_user_async(request: httpx.Request) -> None:
+    # AsyncClient awaits request hooks. A sync hook returns None, and every
+    # live tool.call / iteration post dies before it leaves the worker.
+    _stamp_outbound_user(request)
+
+
 # ---------------------------------------------------------------------------
 # Persistent HTTP clients (TCP/TLS reuse across all callbacks).
 # ---------------------------------------------------------------------------
@@ -103,7 +109,7 @@ def _get_async_http() -> httpx.AsyncClient:
             timeout=10.0,
             headers=internal_auth_headers(),
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
-            event_hooks={"request": [_stamp_outbound_user]},
+            event_hooks={"request": [_stamp_outbound_user_async]},
         )
         _async_clients[lid] = client
         return client
@@ -157,6 +163,7 @@ class HttpCallbackSocket:
     _BROADCAST_TYPES = frozenset(
         {
             "tool.call",
+            "tool.call.revised",
             "tool.calls.flush",
             "agent.tool_exec",
             "agent.iteration",
@@ -197,9 +204,16 @@ class HttpCallbackSocket:
         url = f"/internal/sessions/{self._session_id}/broadcast"
         try:
             client = _get_async_http()
-            await client.post(url, json=data)
+            resp = await client.post(url, json=data)
+            if resp.status_code >= 400:
+                logger.warning(
+                    "Broadcast %s for session %s returned HTTP %s",
+                    event_type,
+                    self._session_id,
+                    resp.status_code,
+                )
         except Exception as exc:
-            logger.debug(
+            logger.warning(
                 "Failed to broadcast %s for session %s: %s",
                 event_type,
                 self._session_id,

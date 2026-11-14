@@ -12,9 +12,11 @@ import agentforge.tools.search_providers as sp
 import agentforge.tools.web_search as ws
 from agentforge.tools.search_providers import ollama, settings, tavily
 from agentforge.tools.search_providers.base import (
+    FetchFailed,
     FetchResult,
     NoProviderAvailable,
     ProviderError,
+    ProviderNotConfigured,
     RateLimitError,
     SearchResult,
     parse_retry_after,
@@ -59,11 +61,18 @@ class StubProvider:
             raise self.exc
         return [SearchResult(title=self.name, url=f"https://{self.name}.test", content="")]
 
-    def fetch(self, url: str) -> FetchResult:
+    def fetch(self, url: str, query: str = "") -> FetchResult:
         self.calls.append(0)
         if self.exc is not None:
             raise self.exc
         return FetchResult(title=self.name, url=url, content="x" * 50)
+
+
+@pytest.fixture(autouse=True)
+def _clear_fetch_failures():
+    sp.clear_fetch_failures()
+    yield
+    sp.clear_fetch_failures()
 
 
 @pytest.fixture
@@ -278,6 +287,80 @@ def test_explicit_max_results_wins(fake_redis, ws_cfg, monkeypatch):
     sp.search_with_fallback("q", 7)
 
     assert oll.calls == [7]
+
+
+def test_fetch_5xx_does_not_try_the_next_provider(fake_redis, monkeypatch):
+    tav = StubProvider("tavily", ProviderError("tavily server error (HTTP 503): unavailable"))
+    oll = StubProvider("ollama")
+    monkeypatch.setattr(sp, "_resolve_fetch_chain", lambda: [tav, oll])
+
+    with pytest.raises(FetchFailed) as info:
+        sp.fetch_with_fallback("https://down.test")
+
+    assert info.value.provider == "tavily"
+    assert "503" in info.value.reason
+    assert tav.calls == [0]
+    assert oll.calls == []
+
+
+def test_fetch_404_does_not_try_the_next_provider(fake_redis, monkeypatch):
+    tav = StubProvider("tavily", ProviderError("tavily extract failed: 404 page not found"))
+    oll = StubProvider("ollama")
+    monkeypatch.setattr(sp, "_resolve_fetch_chain", lambda: [tav, oll])
+
+    with pytest.raises(FetchFailed, match="404 page not found"):
+        sp.fetch_with_fallback("https://missing.test")
+
+    assert oll.calls == []
+
+
+def test_fetch_failure_is_not_retried(fake_redis, monkeypatch):
+    tav = StubProvider("tavily", ProviderError("tavily extract failed: 404 page not found"))
+    monkeypatch.setattr(sp, "_resolve_fetch_chain", lambda: [tav, StubProvider("ollama")])
+
+    with pytest.raises(FetchFailed):
+        sp.fetch_with_fallback("https://missing.test")
+    with pytest.raises(FetchFailed):
+        sp.fetch_with_fallback("https://missing.test")
+
+    assert tav.calls == [0]
+
+
+def test_fetch_rate_limit_cools_down_without_a_second_provider(fake_redis, monkeypatch):
+    tav = StubProvider("tavily", RateLimitError("plan", status_code=432))
+    oll = StubProvider("ollama")
+    monkeypatch.setattr(sp, "_resolve_fetch_chain", lambda: [tav, oll])
+
+    with pytest.raises(FetchFailed):
+        sp.fetch_with_fallback("https://limited.test")
+
+    assert oll.calls == []
+    assert fake_redis.store["websearch:cooldown:tavily"][1] > 60
+
+
+def test_fetch_skips_unconfigured_provider_then_tries_the_next(fake_redis, monkeypatch):
+    tav = StubProvider("tavily", ProviderNotConfigured("no key"))
+    oll = StubProvider("ollama")
+    monkeypatch.setattr(sp, "_resolve_fetch_chain", lambda: [tav, oll])
+
+    result = sp.fetch_with_fallback("https://ok.test")
+
+    assert result.provider == "ollama"
+    assert oll.calls == [0]
+
+
+def test_web_fetch_reports_failure_without_retrying(fake_redis, monkeypatch):
+    tav = StubProvider("tavily", ProviderError("tavily server error (HTTP 500): boom"))
+    monkeypatch.setattr(sp, "_resolve_fetch_chain", lambda: [tav])
+
+    first = ws.web_fetch("https://boom.test")
+    second = ws.web_fetch("https://boom.test")
+
+    assert first.startswith("Fetch failed for https://boom.test:")
+    assert "Do not retry this URL." in first
+    assert not first.startswith("Error:")
+    assert second == first
+    assert tav.calls == [0]
 
 
 def test_fetch_stamps_provider_and_truncates_per_provider(fake_redis, ws_cfg, monkeypatch):

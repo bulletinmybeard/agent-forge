@@ -35,8 +35,10 @@ from typing import TYPE_CHECKING
 
 from chalkbox.logging.bridge import get_logger
 
+from .page_text import clip_page, html_to_markdown, looks_like_html, truncation_line
 from .registry import tool
 from .search_providers import (
+    FetchFailed,
     FetchResult,
     NoProviderAvailable,
     ProviderError,
@@ -140,10 +142,9 @@ def _format_fetch_result(url: str, result: FetchResult, max_chars: int) -> str:
     content = result.content or ""
     if not content:
         return f"No content returned for: {url}"
-    truncated = False
-    if len(content) > max_chars:
-        content = content[:max_chars]
-        truncated = True
+    if looks_like_html(content):
+        content = html_to_markdown(content)
+    content, truncated = clip_page(content, max_chars)
 
     parts: list[str] = []
     if result.title:
@@ -155,7 +156,7 @@ def _format_fetch_result(url: str, result: FetchResult, max_chars: int) -> str:
     parts.append(content)
 
     if truncated:
-        parts.append(f"\n... (truncated at {max_chars:,} chars)")
+        parts.append("\n" + truncation_line(max_chars))
 
     if result.links:
         parts.append(f"\nLinks found: {len(result.links)}")
@@ -232,11 +233,15 @@ def web_search(query: str, max_results: int = 0) -> str:
         "where content is rendered by JavaScript, use web_fetch_rendered instead. "
         "If you fetch a page and get back an empty shell or minimal content, "
         "retry with web_fetch_rendered. "
+        "A failed fetch (4xx, 5xx, or a provider error) is final — do not "
+        "call web_fetch again for that URL. "
         "Parameters: url (string) — the full URL to fetch. "
+        "query (string, optional) — return only the sections relevant to this text. "
+        "Omit query for the full page. "
         "Example: web_fetch(url='https://docs.nginx.com/nginx/admin-guide/web-server/reverse-proxy/')"
     ),
 )
-def web_fetch(url: str) -> str:
+def web_fetch(url: str, query: str = "") -> str:
     """Fetch the full content of a web page as clean text.
 
     When to use: After web_search to read a specific result in full, or when
@@ -245,6 +250,7 @@ def web_fetch(url: str) -> str:
         need snippets/summaries (web_search is faster), if no API key is configured.
 
     url: the full URL to fetch (must start with http:// or https://)
+    query: optional focus. When set, return only the sections relevant to this text. Omit it for the full page.
     """
     if not url or not url.strip():
         return "Error: No URL provided."
@@ -253,10 +259,14 @@ def web_fetch(url: str) -> str:
     if not url.startswith(("http://", "https://")):
         url = f"https://{url}"
 
+    focus = query.strip() if isinstance(query, str) else ""
     logger.debug("[web_fetch] Fetching: %s", url[:120])
 
     try:
-        result = fetch_with_fallback(url)
+        result = fetch_with_fallback(url, focus)
+    except FetchFailed as exc:
+        who = f"{exc.provider}: " if exc.provider else ""
+        return f"Fetch failed for {url}: {who}{exc.reason}. Do not retry this URL."
     except ProviderError as exc:
         return _provider_error_message(
             "Fetch error",

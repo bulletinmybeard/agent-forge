@@ -63,6 +63,7 @@ from .client import AIClient
 from .context import PipelineContext
 from .tools import ToolRegistry
 from .tools.registry import submit_with_context
+from .tools.shell import take_executed_shell_command
 
 logger = get_logger(__name__)
 
@@ -348,6 +349,21 @@ class ParallelAgentRunner:
                 except Exception as exc:
                     output = f"Error: {exc}"
                     gr.errors.append(f"{command}: {exc}")
+                else:
+                    executed = take_executed_shell_command()
+                    if executed and executed != command:
+                        if on_group_event:
+                            on_group_event(
+                                idx,
+                                group.label,
+                                "command_revised",
+                                {
+                                    "command": command,
+                                    "executed": executed,
+                                    "cwd": cwd,
+                                },
+                            )
+                        command = executed
 
                 cmd_elapsed = time.perf_counter() - cmd_start
 

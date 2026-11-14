@@ -359,7 +359,7 @@ The full set of message types lives in `web/server/protocol.py`. The main famili
 
 - `session.init` / `session.title`: session lifecycle.
 - `agent.routing` / `agent.routed` / `agent.config`: mode + profile selection.
-- `tool.call` / `tool.calls.flush`: tool execution as it happens.
+- `tool.call` / `tool.call.revised` / `tool.calls.flush`: tool execution as it happens. `tool.call.revised` replaces a `shell` call with the command that ran after a rewrite. Match it on `match_command`.
 - `confirm.request` / `confirm.response`: destructive-action confirmation.
 - `secret.request` / `secret.response`: masked secret prompt (e.g., a sudo password). The value is memory-only, doesn't persist, and is never logged.
 - `search.meta`: RAG metadata (refined query, filters, scores).

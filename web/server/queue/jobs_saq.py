@@ -733,13 +733,14 @@ async def execute_tool_saq(
     knowledge_collection: str | None = None,
     allowed_tools: list[str] | None = None,
     user_id: str | None = None,
-) -> str:
+) -> str | dict:
     """Execute a single cross-dispatched tool call.
 
     Sources the SearchRuntime from ``ctx["runtime"]`` (preloaded in worker
-    startup) and is fully async-callable. Returns the tool's string result;
-    on exception returns an ``Error: …`` string so the calling agent sees a
-    tool error rather than a queue error.
+    startup) and is fully async-callable. Returns the tool's string result,
+    or a dict wrapper when shell rewrote the command. On exception returns
+    an ``Error: …`` string so the calling agent sees a tool error rather
+    than a queue error.
 
     Routing is enforced by queue topology — the job is only dispatched to
     a role's tools queue (e.g., ``agentforge:tools:local`` or ``agentforge:tools:remote``)
@@ -768,11 +769,19 @@ async def execute_tool_saq(
         rt = SearchRuntime()
         ctx["runtime"] = rt
 
-    def _run() -> str:
+    from agentforge.tools.shell import (
+        pack_tool_result,
+        reset_sudo_secret_provider_ctx,
+        set_sudo_secret_provider_ctx,
+        take_executed_shell_command,
+    )
+
+    def _run() -> str | dict:
         # Confirmation already happened on the agent side before dispatch (see
         # docstring); workers have no confirm handler, so skip the gate
         # explicitly — the registry now fails closed when a handler is absent.
-        return str(rt.registry.execute(tool_name, args, skip_confirm=True, allowed_tools=allowed_tools))
+        result = str(rt.registry.execute(tool_name, args, skip_confirm=True, allowed_tools=allowed_tools))
+        return pack_tool_result(result, take_executed_shell_command())
 
     # A sudo password — unlike a y/n confirm — can only be obtained at execution
     # time (the agent doesn't know shell needs sudo until it runs). Wire a
@@ -781,7 +790,6 @@ async def execute_tool_saq(
     # copies the context into the tool thread, so concurrent tool jobs (the
     # tools queue runs at concurrency > 1, even across sessions) each get their
     # own provider and can't clobber one another's.
-    from agentforge.tools.shell import reset_sudo_secret_provider_ctx, set_sudo_secret_provider_ctx
 
     provider_token = None
     # to_thread copies the current context, so the tool sees this user.
@@ -795,7 +803,8 @@ async def execute_tool_saq(
         # The tool functions in the registry are sync; run them in a worker
         # thread so the event loop stays free for other jobs.
         result = await asyncio.to_thread(_run)
-        logger.info("[execute_tool_saq] '%s' returned %d chars", tool_name, len(result))
+        logged = result.get("result") if isinstance(result, dict) else result
+        logger.info("[execute_tool_saq] '%s' returned %d chars", tool_name, len(str(logged)))
         return result
     except Exception as exc:
         logger.exception("[execute_tool_saq] '%s' failed", tool_name)

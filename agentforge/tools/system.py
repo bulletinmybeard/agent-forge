@@ -14,14 +14,18 @@ Usage::
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import shlex
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+import redis
 from chalkbox.logging.bridge import get_logger
+
+from agentforge.tools.routing import dispatch_mode, get_role_for_tool, my_role
 
 from .registry import tool
 
@@ -144,9 +148,11 @@ def get_system_context() -> dict[str, str | list[str]]:
             f"When the user mentions a project name, check siblings first."
         )
 
-    # Condensed variant: bare essentials for tool-call iterations (no BSD
-    # warnings, no sibling discovery, no protected-path rules).
+    # Condensed variant for tool-call iterations. Keep a one-line BSD reminder
+    # so a retry still sees `stat -f` after the long warning is dropped.
     condensed_summary = f"OS={os_label}, home={home}, cwd={cwd}, shell={shell}"
+    if os_name == "Darwin":
+        condensed_summary += ". BSD userland: stat -f '%z' (not stat -c '%s'), sed -i '' (not sed -i)"
 
     return {
         "os": os_name,
@@ -164,6 +170,181 @@ def get_system_context() -> dict[str, str | list[str]]:
         "summary": summary,
         "condensed_summary": condensed_summary,
     }
+
+
+# Facts the agent loop needs from the host that actually runs shell/file tools.
+# os_version is omitted — platform.version() is a long kernel string, not a prompt fact.
+_PUBLISHED_KEYS = (
+    "os",
+    "os_label",
+    "os_release",
+    "arch",
+    "hostname",
+    "home",
+    "cwd",
+    "shell",
+    "user",
+    "python",
+    "summary",
+    "condensed_summary",
+    "sibling_projects",
+)
+
+_redis_client_cached: redis.Redis | None = None
+
+
+def host_context_key(role: str) -> str:
+    """Redis key for one worker role's published OS facts."""
+    return f"agentforge:host-context:{role}"
+
+
+def _redis_client() -> redis.Redis | None:
+    """Short-timeout Redis client. None when Redis is down — callers must not guess the OS."""
+    global _redis_client_cached
+    if _redis_client_cached is not None:
+        return _redis_client_cached
+    url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+    try:
+        client = redis.from_url(
+            url,
+            decode_responses=True,
+            socket_connect_timeout=1.0,
+            socket_timeout=1.0,
+        )
+        client.ping()
+    except Exception as exc:
+        logger.warning("Host context Redis unavailable: %s", exc)
+        return None
+    _redis_client_cached = client
+    return client
+
+
+def _drop_redis_client() -> None:
+    """Forget a client that just failed so the next call reconnects."""
+    global _redis_client_cached
+    _redis_client_cached = None
+
+
+def publish_host_context(role: str | None = None) -> bool:
+    """Store this process's OS facts under its worker role.
+
+    The agent loop often runs on a different host than ``shell``. Each worker
+    publishes at startup so the prompt can describe the host that runs the command.
+    """
+    role = (role or my_role() or "").strip()
+    if not role:
+        return False
+    client = _redis_client()
+    if client is None:
+        return False
+    ctx = get_system_context()
+    payload = {key: ctx.get(key, [] if key == "sibling_projects" else "") for key in _PUBLISHED_KEYS}
+    try:
+        client.set(host_context_key(role), json.dumps(payload))
+    except Exception as exc:
+        _drop_redis_client()
+        logger.warning("Failed to publish host context role=%s: %s", role, exc)
+        return False
+    logger.info("Published host context role=%s os=%s", role, payload.get("os"))
+    return True
+
+
+def load_host_context(role: str) -> dict[str, Any] | None:
+    """Return the OS facts published by *role*, or None when missing or unreadable."""
+    client = _redis_client()
+    if client is None:
+        return None
+    try:
+        raw = client.get(host_context_key(role))
+    except Exception as exc:
+        _drop_redis_client()
+        logger.warning("Failed to read host context role=%s: %s", role, exc)
+        return None
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Host context for role=%s is not valid JSON", role)
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("summary"), str) or not data["summary"]:
+        return None
+    if not isinstance(data.get("condensed_summary"), str) or not data["condensed_summary"]:
+        data["condensed_summary"] = data["summary"]
+    data.setdefault("os_label", data.get("os") or "unknown")
+    data.setdefault("sibling_projects", [])
+    return data
+
+
+def _unpublished_shell_context(role: str) -> dict[str, str | list[str]]:
+    """Shell host is a different worker and has not published yet.
+
+    Do not describe this process's OS — that is how a Linux agent told the
+    model to emit GNU ``stat -c`` for a Mac worker.
+    """
+    summary = (
+        f"Shell and file tools run on the '{role}' worker, not in this process. "
+        "That worker has not published its OS yet. "
+        "Do not assume GNU or BSD userland. "
+        "For a file's byte size use `wc -c <path>`. "
+        "Do not use `stat -c` or `stat -f` until the host OS is known."
+    )
+    condensed = (
+        f"Shell/file tools run on the '{role}' worker (OS not published). "
+        "Portable commands only. Byte size: `wc -c`. Not `stat -c` or `stat -f`."
+    )
+    return {
+        "os": "",
+        "os_label": "unpublished",
+        "os_release": "",
+        "os_version": "",
+        "arch": "",
+        "hostname": "",
+        "home": "",
+        "cwd": "",
+        "shell": "",
+        "user": "",
+        "python": "",
+        "sibling_projects": [],
+        "summary": summary,
+        "condensed_summary": condensed,
+    }
+
+
+def _with_shell_host_note(ctx: dict[str, Any], role: str) -> dict[str, Any]:
+    """Prepend which worker runs shell, then that worker's own OS facts."""
+    label = str(ctx.get("os_label") or ctx.get("os") or "unknown OS")
+    note = f"Shell and file tools run on the '{role}' worker ({label}), not in this process. "
+    short = f"Shell/file tools: '{role}' worker ({label}). "
+    out = dict(ctx)
+    out["summary"] = note + str(ctx.get("summary") or "")
+    out["condensed_summary"] = short + str(ctx.get("condensed_summary") or "")
+    out.setdefault("sibling_projects", [])
+    return out
+
+
+def context_for_shell() -> dict[str, Any]:
+    """OS facts for the host that executes ``shell`` and the other file tools.
+
+    ``in_process``, or this process is already that role: describe ourselves.
+    Split dispatch onto another role: use the context that role published.
+    Missing publish: say the OS is unknown. Never substitute this process's OS.
+    """
+    local = get_system_context()
+    if dispatch_mode() != "split":
+        return local
+    shell_role = get_role_for_tool("shell")
+    if shell_role == my_role():
+        return local
+    published = load_host_context(shell_role)
+    if not published:
+        logger.info(
+            "No host context for shell role %s — not using this process OS (%s)",
+            shell_role,
+            local.get("os"),
+        )
+        return _unpublished_shell_context(shell_role)
+    return _with_shell_host_note(published, shell_role)
 
 
 # ---------------------------------------------------------------------------

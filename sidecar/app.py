@@ -55,6 +55,13 @@ class ExtractRequest(BaseModel):
     css_selector: str | None = Field(default=None, description="Optional CSS or XPath selector to target a subtree")
     timeout: int = Field(default=30, description="Navigation timeout in seconds")
     screenshot: bool = Field(default=False, description="Also capture a PNG screenshot")
+    layout: bool = Field(
+        default=False,
+        description=(
+            "Return article/main HTML and newline-preserving text. "
+            "Leave off for monitor diffs, which hash the collapsed body."
+        ),
+    )
 
 
 class ExtractResponse(BaseModel):
@@ -68,6 +75,7 @@ class ExtractResponse(BaseModel):
     screenshot_b64: str | None = Field(default=None, description="Base64-encoded PNG screenshot (if requested)")
     error: str | None = None
     duration_s: float = 0.0
+    html: str | None = Field(default=None, description="Article or main innerHTML when layout=true")
 
 
 class StructuredExtractRequest(BaseModel):
@@ -387,12 +395,32 @@ async def _dismiss_cookies(page) -> None:
 # ---------------------------------------------------------------------------
 
 
+_LAYOUT_JS = """() => {
+  const textLen = (el) => ((el && el.innerText) || "").trim().length;
+  const nodes = [
+    ...document.querySelectorAll("article"),
+    ...document.querySelectorAll("main"),
+    ...document.querySelectorAll("[role='main']"),
+  ];
+  let best = null;
+  let bestLen = 0;
+  for (const el of nodes) {
+    const n = textLen(el);
+    if (n > bestLen) { best = el; bestLen = n; }
+  }
+  const el = bestLen >= 200 ? best : document.body;
+  if (!el) return {html: "", text: ""};
+  return {html: el.innerHTML || "", text: el.innerText || ""};
+}"""
+
+
 async def _extract_with_browser(
     url: str,
     css_selector: str | None = None,
     timeout_s: int = 30,
     capture_screenshot: bool = False,
     structured_selectors: dict[str, str | list[str]] | None = None,
+    layout: bool = False,
 ) -> dict[str, Any]:
     """Core extraction using hardened Playwright with anti-bot evasion.
 
@@ -558,32 +586,49 @@ async def _extract_with_browser(
                 result["fields"] = fields
 
             # ── Content extraction (full page or CSS/XPath subtree) ──
-            if css_selector:
-                content_parts = []
-                # XPath: use as single expression; CSS: split on comma for fallbacks
-                sel_list = (
-                    [css_selector]
-                    if _is_xpath(css_selector)
-                    else [s.strip() for s in css_selector.split(",") if s.strip()]
-                )
-                for sel in sel_list:
-                    pw_sel = _pw_selector(sel)
-                    elements = await page.query_selector_all(pw_sel)
-                    for el in elements:
-                        txt = (await el.inner_text()).strip()
-                        if txt:
-                            content_parts.append(txt)
-                    if content_parts:
-                        break
-                content = "\n\n".join(content_parts) if content_parts else ""
-            else:
-                content = (await page.inner_text("body")).strip()
+            # layout keeps newlines and returns article HTML. The monitor path
+            # stays on collapsed text so its content hash does not move.
+            laid_out = False
+            if layout and not css_selector:
+                try:
+                    picked = await page.evaluate(_LAYOUT_JS)
+                except Exception as exc:
+                    logger.debug("layout extract failed for %s: %s", url, exc)
+                    picked = None
+                if isinstance(picked, dict) and (picked.get("html") or picked.get("text")):
+                    text = _normalize_layout_text(str(picked.get("text") or ""))
+                    result["html"] = str(picked.get("html") or "")
+                    result["content"] = text
+                    result["content_hash"] = hashlib.sha256(text.encode()).hexdigest()
+                    result["word_count"] = len(text.split())
+                    laid_out = True
 
-            content = _normalize_content(content)
+            if not laid_out:
+                if css_selector:
+                    content_parts = []
+                    # XPath: use as single expression; CSS: split on comma for fallbacks
+                    sel_list = (
+                        [css_selector]
+                        if _is_xpath(css_selector)
+                        else [s.strip() for s in css_selector.split(",") if s.strip()]
+                    )
+                    for sel in sel_list:
+                        pw_sel = _pw_selector(sel)
+                        elements = await page.query_selector_all(pw_sel)
+                        for el in elements:
+                            txt = (await el.inner_text()).strip()
+                            if txt:
+                                content_parts.append(txt)
+                        if content_parts:
+                            break
+                    content = "\n\n".join(content_parts) if content_parts else ""
+                else:
+                    content = (await page.inner_text("body")).strip()
 
-            result["content"] = content
-            result["content_hash"] = hashlib.sha256(content.encode()).hexdigest()
-            result["word_count"] = len(content.split())
+                content = _normalize_content(content)
+                result["content"] = content
+                result["content_hash"] = hashlib.sha256(content.encode()).hexdigest()
+                result["word_count"] = len(content.split())
 
             await browser.close()
 
@@ -606,12 +651,25 @@ _DYNAMIC_PATTERNS = [
 ]
 
 
-def _normalize_content(text: str) -> str:
-    """Strip dynamic tokens to avoid false-positive diffs."""
+def _strip_dynamic_tokens(text: str) -> str:
     for pat in _DYNAMIC_PATTERNS:
         text = pat.sub("", text)
+    return text
+
+
+def _normalize_content(text: str) -> str:
+    """Strip dynamic tokens and collapse whitespace. Used by monitor diffs."""
+    text = _strip_dynamic_tokens(text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+def _normalize_layout_text(text: str) -> str:
+    """Same token strip, but keep newlines so headings survive."""
+    text = _strip_dynamic_tokens(text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -651,6 +709,7 @@ async def extract(req: ExtractRequest) -> ExtractResponse:
         css_selector=req.css_selector,
         timeout_s=req.timeout,
         capture_screenshot=req.screenshot,
+        layout=req.layout,
     )
 
     duration = time.monotonic() - start
@@ -664,6 +723,7 @@ async def extract(req: ExtractRequest) -> ExtractResponse:
         screenshot_b64=raw.get("screenshot_b64"),
         error=raw.get("error"),
         duration_s=round(duration, 2),
+        html=raw.get("html"),
     )
 
 

@@ -22,7 +22,7 @@ Config keys (``config.yaml``)::
         ollama: {...}
       web_fetch:
         provider: ollama                       # one of ollama|tavily (brave has no fetch)
-        provider_fallbacks: []
+        provider_fallbacks: []                 # not a retry list; see module docstring
 
 Per-provider settings are read via ``settings.py``.
 
@@ -34,9 +34,13 @@ caught loudly.
 
 from __future__ import annotations
 
+import threading
+import time
+
 from chalkbox.logging.bridge import get_logger
 
 from .base import (
+    FetchFailed,
     FetchProvider,
     FetchResult,
     NoProviderAvailable,
@@ -53,6 +57,36 @@ from .settings import is_enabled, max_results_for
 from .tavily import TavilyFetchProvider, TavilySearchProvider
 
 logger = get_logger(__name__)
+
+# One research job is capped at 900s. Hold a failed URL for that long so
+# a sub-agent (or the same one) cannot fetch it again during the run.
+_FETCH_FAILURE_TTL_S = 900
+_fetch_failures: dict[str, tuple[float, FetchFailed]] = {}
+_fetch_failure_lock = threading.Lock()
+
+
+def clear_fetch_failures() -> None:
+    """Drop the failed-URL cache. Tests use this."""
+    with _fetch_failure_lock:
+        _fetch_failures.clear()
+
+
+def _lookup_fetch_failure(url: str) -> FetchFailed | None:
+    now = time.monotonic()
+    with _fetch_failure_lock:
+        hit = _fetch_failures.get(url)
+        if hit is None:
+            return None
+        expires, exc = hit
+        if expires <= now:
+            _fetch_failures.pop(url, None)
+            return None
+        return exc
+
+
+def _store_fetch_failure(exc: FetchFailed) -> None:
+    with _fetch_failure_lock:
+        _fetch_failures[exc.url] = (time.monotonic() + _FETCH_FAILURE_TTL_S, exc)
 
 
 # Provider instances are cheap (just a name + a few config lookups) —
@@ -223,15 +257,20 @@ def _walk(
     chain: list,
     op_name: str,
     op_callable,
+    *,
+    stop_on_error: bool = False,
 ):
     """Generic fallback walk. ``op_callable`` is a closure that takes a
     provider and returns the result; advances on ``ProviderError`` /
     ``RateLimitError`` / ``ProviderNotConfigured``; other exceptions
     bubble up unchanged.
 
-    Providers in cooldown are skipped without a request. A rate limit
-    starts a cooldown (see ``cooldown.py``). When nothing is left, raises
-    ``NoProviderAvailable`` with a reason per provider.
+    ``stop_on_error`` (fetch) re-raises the first ``ProviderError`` or
+    ``RateLimitError`` instead of calling the next provider.
+    ``ProviderNotConfigured`` still advances: that provider never tried
+    the URL. Providers in cooldown are skipped without a request. A rate
+    limit starts a cooldown (see ``cooldown.py``). When nothing is left,
+    raises ``NoProviderAvailable`` with a reason per provider.
     """
     cooldown = get_provider_cooldown()
     reasons: dict[str, str] = {}
@@ -261,22 +300,28 @@ def _walk(
             )
             reasons[provider.name] = "no API key"
         except RateLimitError as exc:
-            logger.warning(
-                "[%s] provider %r rate limited: %s — falling back",
-                op_name,
-                provider.name,
-                exc,
-            )
             ttl = cooldown_ttl(exc)
             cooldown.mark(provider.name, ttl, f"HTTP {exc.status_code or '?'}")
             reasons[provider.name] = f"rate limited until {cooldown_until(ttl)}"
-        except ProviderError as exc:
             logger.warning(
-                "[%s] provider %r failed: %s — falling back",
+                "[%s] provider %r rate limited: %s%s",
                 op_name,
                 provider.name,
                 exc,
+                "" if stop_on_error else " — falling back",
             )
+            if stop_on_error:
+                raise
+        except ProviderError as exc:
+            logger.warning(
+                "[%s] provider %r failed: %s%s",
+                op_name,
+                provider.name,
+                exc,
+                "" if stop_on_error else " — falling back",
+            )
+            if stop_on_error:
+                raise
             reasons[provider.name] = str(exc)[:200]
     raise NoProviderAvailable(op_name, reasons)
 
@@ -291,19 +336,46 @@ def search_with_fallback(query: str, max_results: int = 0) -> list[SearchResult]
     )
 
 
-def fetch_with_fallback(url: str) -> FetchResult:
-    """The result's ``provider`` is set to whoever served it."""
+def fetch_with_fallback(url: str, query: str = "") -> FetchResult:
+    """Fetch ``url`` once. The result's ``provider`` is who served it.
+
+    ``query`` is forwarded to the provider. Tavily uses it to return the
+    relevant chunks; an empty query fetches the whole page.
+
+    The first ``ProviderError`` or ``RateLimitError`` stops the chain.
+    The same URL raises :class:`FetchFailed` from cache until the TTL
+    passes, with no further HTTP call.
+    """
+    cached = _lookup_fetch_failure(url)
+    if cached is not None:
+        logger.info("[fetch] %s already failed — not retrying", url[:120])
+        raise cached
 
     def _fetch(provider) -> FetchResult:
-        result = provider.fetch(url)
+        try:
+            result = provider.fetch(url, query=query)
+        except RateLimitError:
+            raise
+        except ProviderNotConfigured:
+            raise
+        except ProviderError as exc:
+            raise FetchFailed(url, str(exc), provider=provider.name) from exc
         result.provider = provider.name
         return result
 
-    chain = _resolve_fetch_chain()
-    return _walk(chain, "fetch", _fetch)
+    try:
+        return _walk(_resolve_fetch_chain(), "fetch", _fetch, stop_on_error=True)
+    except FetchFailed as exc:
+        _store_fetch_failure(exc)
+        raise
+    except RateLimitError as exc:
+        failed = FetchFailed(url, str(exc))
+        _store_fetch_failure(failed)
+        raise failed from exc
 
 
 __all__ = [
+    "FetchFailed",
     "FetchResult",
     "NoProviderAvailable",
     "ProviderError",

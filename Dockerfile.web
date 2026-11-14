@@ -21,9 +21,12 @@ COPY pyproject.toml README.md ./
 COPY agentforge/ agentforge/
 RUN pip install --no-cache-dir .
 
-# Headless Firefox for web_fetch_rendered (Firefox = better TLS fingerprint)
+# Headless Firefox for web_fetch_rendered (Firefox = better TLS fingerprint).
+# The driver node links libatomic. install-deps would install it, but the
+# driver has to start before install-deps can run.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN playwright install-deps firefox \
+RUN apt-get update && apt-get install -y --no-install-recommends libatomic1 \
+    && playwright install-deps firefox \
     && playwright install firefox \
     && rm -rf /var/lib/apt/lists/*
 
