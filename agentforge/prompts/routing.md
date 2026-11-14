@@ -15,7 +15,10 @@ Examples:
   - "Explain the difference between PUT and PATCH"
   - "How does OAuth work?"
   - "Write me a Python function to sort a list"
+  - "Reformat the paths below as Markdown links" followed by a pasted list of absolute paths
+  - "Translate the paragraph below"
 Never use when: User explicitly uses @qdrant (use search), asks to execute commands (use agent), or asks about external current events (use web_search)
+A path inside text the user wants rewritten is still chat. Rewriting, reformatting, or translating text already in the message does not need the filesystem.
 
 ### search
 Purpose: Answer questions using indexed knowledge (OpenAPI specs, SQL schemas, documentation, source code) in the Qdrant vector database
@@ -45,7 +48,7 @@ Examples:
   - "Create a backup of the database"
   - "What port is nginx listening on?"
   - "List running Docker containers"
-Never use when: User is asking a pure knowledge question answerable from docs
+Never use when: User is asking a pure knowledge question answerable from docs, or pasted text (including a list of absolute paths) and asked to reformat, rewrite, or translate that text. A path in the message is not a request to touch the filesystem unless they ask to read, list, run, or change something.
 
 ### logs
 Purpose: Analyze log files and log output
@@ -171,6 +174,8 @@ Never use a custom agent when:
   - The user clearly wants a different mode (respect explicit intent).
 
 ## Context Rules
+
+The message you classify is the instruction. A note, list, or log the user pasted under a blank line is not included. Do not choose a mode because that kind of paste would usually contain paths, cron lines, or commands.
 
 When prior conversation turns are provided:
 - Use them to understand follow-up queries

@@ -113,7 +113,7 @@ Command policy runs **first** in the tool registry (`agentforge/tools/registry.p
 ## Other Stuff
 
 - **SQL** (`@sql`): `readonly` connections are enforced at the transaction level (Postgres `SET TRANSACTION READ ONLY`; MySQL session hook + a never-commit backstop), not just by convention.
-- **Shell / command tools**: run argv-only (`shell=False`) with proper escaping; the destructive-command guard fails **closed** (treats unknown as destructive) and refuses to run without a confirmation handler.
+- **`shell`**: a command string (`shell=True`). The destructive-command guard fails **closed** (treats unknown as destructive) and refuses to run without a confirmation handler. `action` is a separate argv tool (`shell=False`) and is not covered by this policy.
 - **Network / web tools**: `curl_fetch`, `download_file`, `web_fetch_rendered`, and `web_screengrab` validate URLs against SSRF patterns (block link-local, loopback, reserved ranges).
 - **Archives**: `archive_extract` validates each member before writing (zip-slip / tar-slip blocked).
 - **`notify`**: the `-execute` action is gated behind `tools.notify.allow_execute` (default off).

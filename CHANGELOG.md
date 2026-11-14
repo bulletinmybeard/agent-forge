@@ -6,7 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.19.0] - 2026-11-14
+## [0.20.0] - 2026-11-14
+
+### Added
+
+- **`action`**: one named argv template, run with `shell=False`. The model passes `name` and slot values in `args`. Built-ins are `file-size` (`stat -f %z` on macOS, `stat -c %s` on Linux), `file-bytes`, `git-status`, and `git-log` (`n` from 1 to 50, default 20). `tools.actions.allow` replaces that list. A `darwin` or `linux` argv wins over `argv` on that OS. `tools.actions.timeout` defaults to 30 seconds. A custom agent only sees it when `tools:` names `action`. The built-in `@agent` list does not include it. See [docs/tools.md](docs/tools.md#actions)
+- **Shell host in the prompt.** Each worker publishes `get_system_context()` to Redis `agentforge:host-context:{role}` at startup. In split mode the agent prompt is rendered per run from the worker that runs `shell`, so a Linux web container does not describe itself as that machine. A missing publish says the OS is unknown and points at `wc -c`. Darwin's short summary keeps `stat -f '%z'` and `sed -i ''`
+- **`tool.call.revised`.** When `shell` changes the command before it runs (GNU `stat -c %s`, `rm` flags, the platform rewrite, an iCloud path, auto-sudo), the event carries the command that ran and the stored tool call is updated. Parallel plans do the same. `POST /api/tools/run` still returns the output text only
+
+### Changed
+
+- **Routing.** The classifier sees the instruction. A paste under a blank line is not included, so "cron job" or "run" inside that paste does not pick `@scheduler` or `@agent`. One mode regex is medium confidence, and the routing model may disagree. Reformatting, rewriting, or translating text already in the message stays in chat. A request for markdown links from two or more pasted paths is answered in the server (`path-links`, no model, no tools)
+- A session with `source=afemail` stays on `@afemail` when the message has no mode prefix. An explicit `@search`, `@agent`, or another custom alias still wins. A leading `@` that matches nothing still returns the unknown-prefix error
+- **`web_fetch(url, query="")`.** `query` asks for the sections that match. Tavily returns those chunks joined with `[...]`. Omit it for the whole page. A failed fetch is not tried on the next provider, and that URL is served from a short failure cache. HTML becomes article markdown (nav, footer, and scripts dropped). A cap cuts on a heading or a blank line. `web_fetch_rendered` asks the sidecar for article HTML (`layout=true`) and uses the same cleanup. Monitor diffs still hash the collapsed body. The example `fetch_max_chars` is 1000000
+- **`@research`.** `research.max_tokens` caps `num_predict` for that run (code default 131072) on a copy of the profile, so other callers of the same profile are unchanged. `research.max_tool_output` still defaults to 5000 when the key is absent. `0` or a negative value falls back to 5000. The example sets 12000. Page-tool output clips on a heading. Other tools keep the old truncation note. The sub-agent prompt tells the model to pass `query` on `web_fetch` and not to ask for a larger fetch
+- The web image installs `libatomic1` before Playwright's Firefox driver. The driver has to start before `playwright install-deps` can pull that library
+
+### Fixed
+
+- On Darwin, `shell` rewrites GNU `stat -c %s` and `--format=%s` to `stat -f '%z'` before the command runs. Other `stat` formats are left alone. `stat` no longer goes through the platform-rewrite model
+- Worker live events (`tool.call` and the rest of the broadcast set) use an async httpx request hook. `AsyncClient` drops a sync hook, so those posts never left the worker. A non-2xx broadcast is logged with the status code
+
+## [0.19.0] - 2026-11-06
 
 ### Fixed
 
