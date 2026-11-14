@@ -28,6 +28,13 @@ import os
 from collections import Counter
 from typing import TYPE_CHECKING
 
+from app.services.qdrant_owner import (
+    filter_owned_ids,
+    restrict_filter,
+    scope_scroll_filter,
+    visible_count,
+)
+
 from .registry import tool
 
 if TYPE_CHECKING:
@@ -88,7 +95,7 @@ def _action_collections() -> str:
     for coll in sorted(collections, key=lambda c: c.name):
         try:
             info = client.get_collection(coll.name)
-            pts = info.points_count or 0
+            pts = visible_count(client, coll.name, info.points_count or 0)
             vec_cfg = info.config.params.vectors
             # vec_cfg can be a dict (named vectors) or a VectorParams object
             if hasattr(vec_cfg, "size"):
@@ -124,7 +131,7 @@ def _action_info(collection: str) -> str:
     client = _get_client()
     info = client.get_collection(collection)
 
-    pts = info.points_count or 0
+    pts = visible_count(client, collection, info.points_count or 0)
     indexed = info.indexed_vectors_count or 0
     segments = info.segments_count or 0
     status = info.status.name if info.status else "unknown"
@@ -169,10 +176,11 @@ def _action_sample(collection: str, limit: int) -> str:
     limit = max(1, min(limit, 20))
 
     info = client.get_collection(collection)
-    total = info.points_count or 0
+    total = visible_count(client, collection, info.points_count or 0)
 
     records, _offset = client.scroll(
         collection_name=collection,
+        scroll_filter=scope_scroll_filter(collection),
         limit=limit,
         with_vectors=False,
         with_payload=True,
@@ -244,6 +252,7 @@ def _action_count(collection: str, filter_json: str) -> str:
         except Exception as exc:
             return f"Error: invalid Qdrant filter - {exc}"
 
+    count_filter = restrict_filter(collection, count_filter)
     result = client.count(collection_name=collection, count_filter=count_filter, exact=True)
 
     lines = [
@@ -259,7 +268,7 @@ def _action_sources(collection: str) -> str:
     client = _get_client()
 
     info = client.get_collection(collection)
-    total = info.points_count or 0
+    total = visible_count(client, collection, info.points_count or 0)
 
     if total == 0:
         return f"Collection '{collection}' is empty (0 points)."
@@ -286,6 +295,7 @@ def _action_sources(collection: str) -> str:
 
         records, offset = client.scroll(
             collection_name=collection,
+            scroll_filter=scope_scroll_filter(collection),
             limit=fetch,
             offset=offset,
             with_vectors=False,
@@ -347,6 +357,8 @@ def _action_search(collection: str, query: str, filter_json: str, limit: int) ->
             search_filter = QFilter(**raw)
         except (json.JSONDecodeError, Exception) as exc:
             return f"Error: invalid filter JSON - {exc}"
+
+    search_filter = restrict_filter(collection, search_filter)
 
     # Embed the query
     try:
@@ -427,7 +439,7 @@ def _action_delete(collection: str, filter_json: str, point_ids: str) -> str:
     # Count before deletion for reporting
     try:
         info_before = client.get_collection(collection)
-        count_before = info_before.points_count or 0
+        count_before = visible_count(client, collection, info_before.points_count or 0)
     except Exception:
         count_before = -1
 
@@ -439,6 +451,8 @@ def _action_delete(collection: str, filter_json: str, point_ids: str) -> str:
             qfilter = QFilter(**raw)
         except (json.JSONDecodeError, Exception) as exc:
             return f"Error: invalid filter JSON - {exc}"
+
+        qfilter = restrict_filter(collection, qfilter)
 
         # Count matching points first
         try:
@@ -455,7 +469,7 @@ def _action_delete(collection: str, filter_json: str, point_ids: str) -> str:
         # Count after
         try:
             info_after = client.get_collection(collection)
-            count_after = info_after.points_count or 0
+            count_after = visible_count(client, collection, info_after.points_count or 0)
         except Exception:
             count_after = -1
 
@@ -470,6 +484,7 @@ def _action_delete(collection: str, filter_json: str, point_ids: str) -> str:
     else:
         # Delete by explicit point IDs
         ids = [pid.strip() for pid in point_ids.split(",") if pid.strip()]
+        ids = filter_owned_ids(client, collection, ids)
         if not ids:
             return "Error: no valid point IDs provided."
 
@@ -482,7 +497,7 @@ def _action_delete(collection: str, filter_json: str, point_ids: str) -> str:
 
         try:
             info_after = client.get_collection(collection)
-            count_after = info_after.points_count or 0
+            count_after = visible_count(client, collection, info_after.points_count or 0)
         except Exception:
             count_after = -1
 

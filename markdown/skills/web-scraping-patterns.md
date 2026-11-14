@@ -49,7 +49,7 @@ You have been given this skill because the user's query involves web scraping, d
 1. **Wait strategies** — Critical for dynamic content:
    ```python
    # Good: wait for actual content
-   await page.wait_for_selector('div[data-product-price]', timeout=10000)
+   await page.wait_for_selector("div[data-product-price]", timeout=10000)
    await page.locator('text="In Stock"').wait_for()
 
    # Avoid: arbitrary sleep
@@ -57,7 +57,7 @@ You have been given this skill because the user's query involves web scraping, d
    ```
 2. **Network interception** — Reduce noise, optimize performance:
    ```python
-   await page.route('**/*.{png,jpg,gif,svg}', lambda r: r.abort())  # Block images
+   await page.route("**/*.{png,jpg,gif,svg}", lambda r: r.abort())  # Block images
    ```
 3. **Headed vs headless**:
    - Headed mode (display shown): Required for Akamai-protected sites
@@ -65,8 +65,8 @@ You have been given this skill because the user's query involves web scraping, d
    - Always use Xvfb virtual display in Docker when running headed
 4. **Page interactions** — Click, scroll, submit forms with Playwright:
    ```python
-   await page.click('button[data-add-to-cart]')
-   await page.fill('input[name="email"]', 'user@example.com')
+   await page.click("button[data-add-to-cart]")
+   await page.fill('input[name="email"]', "user@example.com")
    ```
 
 ## Data Extraction Patterns
@@ -77,7 +77,7 @@ You have been given this skill because the user's query involves web scraping, d
    price = await page.inner_text('span.product-price[data-currency="USD"]')
 
    # Avoid: generic, brittle
-   price = await page.inner_text('span')  # May get wrong element
+   price = await page.inner_text("span")  # May get wrong element
    ```
 2. **XPath** — More powerful but harder to read:
    ```python
@@ -86,19 +86,19 @@ You have been given this skill because the user's query involves web scraping, d
    ```
 3. **BeautifulSoup patterns** — For HTML parsing (use after fetching HTML):
    ```python
-   soup = BeautifulSoup(html, 'lxml')
-   products = soup.select('div.product[data-id]')
+   soup = BeautifulSoup(html, "lxml")
+   products = soup.select("div.product[data-id]")
    for p in products:
-       name = p.select_one('h2.name').text
-       price = p.select_one('.price').text
+       name = p.select_one("h2.name").text
+       price = p.select_one(".price").text
    ```
 4. **Attribute extraction** — Always extract data attributes preferentially:
    ```python
    # Good: structured data
-   product_id = element.get('data-product-id')
+   product_id = element.get("data-product-id")
 
    # Avoid: extracting from text
-   product_id = re.search(r'ID:\s*(\d+)', element.text)
+   product_id = re.search(r"ID:\s*(\d+)", element.text)
    ```
 
 ## Error Handling & Resilience
@@ -106,6 +106,7 @@ You have been given this skill because the user's query involves web scraping, d
 1. **Retry with backoff** — Transient failures common in web scraping:
    ```python
    from tenacity import retry, stop_after_attempt, wait_exponential
+
 
    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2))
    async def fetch_page(url):
@@ -115,20 +116,15 @@ You have been given this skill because the user's query involves web scraping, d
 2. **Partial extraction** — Don't fail entire job for one missing field:
    ```python
    product = {
-       'name': extract_name(html),
-       'price': extract_price(html),  # May be None
-       'description': extract_description(html),
+       "name": extract_name(html),
+       "price": extract_price(html),  # May be None
+       "description": extract_description(html),
    }
    # Validate price is present before using, but don't abandon product
    ```
 3. **Fallback chains** — Try multiple extraction methods:
    ```python
-   price = (
-       extract_from_json_ld(html) or
-       extract_from_schema_markup(html) or
-       extract_from_dom(html) or
-       None
-   )
+   price = extract_from_json_ld(html) or extract_from_schema_markup(html) or extract_from_dom(html) or None
    if price is None:
        logger.warning("Could not extract price from %s", url)
    ```
@@ -161,28 +157,29 @@ You have been given this skill because the user's query involves web scraping, d
    ```python
    from pydantic import BaseModel, field_validator
 
+
    class Product(BaseModel):
        name: str
        price: float
        availability: bool
 
-       @field_validator('price')
+       @field_validator("price")
        def price_positive(cls, v):
            if v <= 0:
-               raise ValueError('Price must be positive')
+               raise ValueError("Price must be positive")
            return v
    ```
 2. **Type coercion** — Convert extracted strings to proper types:
    ```python
    price_str = "€19.99"
-   price_float = float(price_str.replace('€', '').replace(',', '.'))
+   price_float = float(price_str.replace("€", "").replace(",", "."))
    ```
 3. **Missing field handling** — Document expectations and defaults:
    ```python
    product = {
-       'name': extract_name() or 'Unknown',  # Default to 'Unknown'
-       'price': extract_price() or 0.0,      # Default to 0.0
-       'in_stock': extract_availability() or False,  # Assume unavailable
+       "name": extract_name() or "Unknown",  # Default to 'Unknown'
+       "price": extract_price() or 0.0,  # Default to 0.0
+       "in_stock": extract_availability() or False,  # Assume unavailable
    }
    ```
 

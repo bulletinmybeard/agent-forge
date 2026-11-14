@@ -27,6 +27,7 @@ import httpx
 
 from app.models.knowledge import CreateEntryRequest
 from app.services.knowledge_service import knowledge_service
+from web.server.identity import reset_current_user, set_current_user
 from web.server.queue.jobs_common import _post_status, internal_auth_headers
 
 logger = logging.getLogger(__name__)
@@ -333,14 +334,41 @@ async def run_agent_job_saq(
     query: str,
     mode: str,
     overrides_json: str | None = None,
+    user_id: str | None = None,
 ) -> None:
     """Execute a chat agent job via SAQ.
 
-    SearchRuntime is sourced from ``ctx["runtime"]`` (loaded once in worker
-    startup), cancellation flows through ``SaqCancelEvent`` (SAQ native abort
-    + HTTP fallback). Concurrency is capped at ``_AGENT_INFLIGHT_LIMIT`` per
-    worker via an in-process semaphore.
+    ``user_id`` is the person who enqueued the job. The worker stamps it on
+    outbound ``/internal`` calls and on memory writes. A bare session id is
+    not a capability.
     """
+    from web.server.identity import reset_current_user, set_current_user
+
+    token = set_current_user(user_id) if user_id else None
+    try:
+        await _run_agent_job_saq(
+            ctx,
+            job_id=job_id,
+            session_id=session_id,
+            query=query,
+            mode=mode,
+            overrides_json=overrides_json,
+        )
+    finally:
+        if token is not None:
+            reset_current_user(token)
+
+
+async def _run_agent_job_saq(
+    ctx: dict,
+    *,
+    job_id: str,
+    session_id: str,
+    query: str,
+    mode: str,
+    overrides_json: str | None = None,
+) -> None:
+    """Run the agent job. The caller sets the user context."""
     from web.server.queue.jobs_common import _post_status
 
     logger.info("SAQ worker queued agent job %s (session=%s, mode=%s)", job_id, session_id, mode)
@@ -505,6 +533,7 @@ async def _execute_agent_job(
             session_id,
             conversation_history=conversation_history,
             incognito_history=incognito_history,
+            job_id=job_id,
         )
 
         if mode == "pipeline":
@@ -703,6 +732,7 @@ async def execute_tool_saq(
     session_id: str | None = None,
     knowledge_collection: str | None = None,
     allowed_tools: list[str] | None = None,
+    user_id: str | None = None,
 ) -> str:
     """Execute a single cross-dispatched tool call.
 
@@ -754,6 +784,8 @@ async def execute_tool_saq(
     from agentforge.tools.shell import reset_sudo_secret_provider_ctx, set_sudo_secret_provider_ctx
 
     provider_token = None
+    # to_thread copies the current context, so the tool sees this user.
+    user_token = set_current_user(user_id) if user_id else None
     if session_id:
         from web.server.queue.jobs_common import WorkerSecretProvider
 
@@ -771,6 +803,8 @@ async def execute_tool_saq(
     finally:
         if provider_token is not None:
             reset_sudo_secret_provider_ctx(provider_token)
+        if user_token is not None:
+            reset_current_user(user_token)
 
 
 # ---------------------------------------------------------------------------

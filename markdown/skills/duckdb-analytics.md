@@ -157,12 +157,13 @@ You have been given this skill because the user's query involves DuckDB database
    ```python
    # Python: set memory limit to 8GB
    import duckdb
-   conn = duckdb.connect(':memory:')
+
+   conn = duckdb.connect(":memory:")
    conn.execute("SET memory_limit='8GB'")
    ```
 2. **Parallel execution** — Configure thread count:
    ```python
-   conn = duckdb.connect(':memory:')
+   conn = duckdb.connect(":memory:")
    conn.execute("SET threads=8")  # Use 8 CPU cores
    ```
 3. **External sorting** — Handle datasets larger than RAM:
@@ -183,10 +184,10 @@ You have been given this skill because the user's query involves DuckDB database
 2. **Read-only replicas pattern** — Master-replica architecture:
    ```python
    # Master (write-only)
-   master_db = duckdb.connect('data/main.duckdb')
+   master_db = duckdb.connect("data/main.duckdb")
 
    # Replicas (read-only, synced from master)
-   replica_db = duckdb.connect('data/main.duckdb', read_only=True)
+   replica_db = duckdb.connect("data/main.duckdb", read_only=True)
 
    # Write on master, read from replicas
    master_db.execute("INSERT INTO table VALUES (...)")
@@ -197,7 +198,7 @@ You have been given this skill because the user's query involves DuckDB database
    ```python
    import duckdb
 
-   with duckdb.connect('db.duckdb') as db:
+   with duckdb.connect("db.duckdb") as db:
        result = db.execute("SELECT COUNT(*) FROM table").fetch_all()
    # Connection automatically closed
    ```
@@ -236,19 +237,19 @@ You have been given this skill because the user's query involves DuckDB database
    import pandas as pd
    import duckdb
 
-   df = pd.DataFrame({'price': [10.5, 20.3], 'quantity': [5, 3]})
-   result = duckdb.query('SELECT AVG(price) FROM df').to_df()
+   df = pd.DataFrame({"price": [10.5, 20.3], "quantity": [5, 3]})
+   result = duckdb.query("SELECT AVG(price) FROM df").to_df()
    ```
 2. **Pandas from DuckDB** — Efficient batch export:
    ```python
-   conn = duckdb.connect('db.duckdb')
+   conn = duckdb.connect("db.duckdb")
    df = conn.execute("SELECT * FROM table WHERE date > ?", [cutoff_date]).df()
    ```
 3. **SQLAlchemy integration** — ORM support:
    ```python
    from sqlalchemy import create_engine
 
-   engine = create_engine('duckdb:///db.duckdb')
+   engine = create_engine("duckdb:///db.duckdb")
    df = pd.read_sql("SELECT * FROM table", engine)
    ```
 

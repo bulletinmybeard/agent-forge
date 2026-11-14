@@ -16,13 +16,49 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from contextvars import ContextVar
 from typing import Any
 
 from agentforge.tools.shell import set_sudo_secret_provider
 
 from . import protocol
-from .confirm import ConfirmationBroker, make_sync_confirm_handler
+from .confirm import ConfirmationBroker, ConfirmDecision, make_sync_confirm_handler
 from .secret import BrokerSecretProvider, SecretBroker
+
+# One SearchRuntime registry is shared by every run in the process. The
+# handlers installed on it used to close over whichever bridge called
+# setup_registry last, so a second session's live tool.call / confirm
+# landed on the first session's socket. The registry still has one
+# handler; it reads the bridge for the task (or pool thread) that is
+# executing the tool.
+_current_bridge: ContextVar[AgentBridge | None] = ContextVar("agentforge_current_bridge", default=None)
+
+
+def _dispatch_tool_call(*args: Any, **kwargs: Any) -> None:
+    bridge = _current_bridge.get()
+    if bridge is not None:
+        bridge._on_tool_call(*args, **kwargs)
+
+
+def _dispatch_tools_complete() -> None:
+    bridge = _current_bridge.get()
+    if bridge is not None:
+        bridge._on_tools_complete()
+
+
+def _dispatch_confirm(prompt: str) -> ConfirmDecision:
+    bridge = _current_bridge.get()
+    handler = bridge._confirm_handler if bridge is not None else None
+    if handler is None:
+        # No run is bound in this thread. Do not ask the other session.
+        return ConfirmDecision(confirmed=False)
+    return handler(prompt)
+
+
+def _dispatch_file_diff(payload: dict[str, Any]) -> None:
+    bridge = _current_bridge.get()
+    if bridge is not None:
+        bridge._on_file_diff(payload)
 
 
 class AgentBridge:
@@ -44,6 +80,7 @@ class AgentBridge:
         self._secret_broker = secret_broker
         self._loop = loop
         self._secret_provider: BrokerSecretProvider | None = None
+        self._confirm_handler: Callable[[str], ConfirmDecision] | None = None
         # For persisting file.diff cards (diff-preview confirm). The client
         # renders file.diff from persisted message rows, not raw broadcasts, so
         # the preview card must be written to the DB to show up + survive reload.
@@ -52,17 +89,20 @@ class AgentBridge:
         self._incognito = incognito
 
     def setup_registry(self, registry: Any) -> None:
-        """Wire registry callbacks to send WebSocket events.
+        """Wire registry callbacks to this run's socket.
 
-        Uses indirect lambdas so that callers can replace
-        ``self._on_tool_call`` / ``self._on_tools_complete`` after
-        ``setup_registry`` and the registry will still call the
-        replacement (e.g., persisting wrappers).
+        The registry is process-wide, so the handlers dispatch through
+        the contextvar set here. A later run does not steal this run's
+        live ``tool.call``. Replacing ``self._on_tool_call`` or
+        ``self._on_tools_complete`` afterwards still takes effect: the
+        dispatcher looks the method up on the current bridge.
         """
-        registry.set_tool_call_handler(lambda *a, **kw: self._on_tool_call(*a, **kw))
-        registry.set_tools_complete_handler(lambda *a, **kw: self._on_tools_complete(*a, **kw))
-        registry.set_confirm_handler(make_sync_confirm_handler(self._broker, self._loop))
-        registry.set_file_diff_handler(self._on_file_diff)
+        _current_bridge.set(self)
+        self._confirm_handler = make_sync_confirm_handler(self._broker, self._loop)
+        registry.set_tool_call_handler(_dispatch_tool_call)
+        registry.set_tools_complete_handler(_dispatch_tools_complete)
+        registry.set_confirm_handler(_dispatch_confirm)
+        registry.set_file_diff_handler(_dispatch_file_diff)
 
         # Secret provider — mirrors the confirm broker wiring. The broker itself is
         # created + sender-wired in ws_endpoint (so the WS receive loop can resolve

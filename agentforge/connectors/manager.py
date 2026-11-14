@@ -20,7 +20,6 @@ from ._account import (
     build_account_aliases,
     build_account_prompt,
     build_account_tools,
-    group_by_account,
     label_slug,
 )
 from .encryption import decrypt_tokens, encrypt_tokens
@@ -52,6 +51,20 @@ class ConnectionManager:
         self._agents: dict[str, dict] = {}
         self._account_agents: dict[str, dict] = {}
 
+    def _actor(self) -> str | None:
+        from web.server.identity import current_user_id
+
+        return current_user_id()
+
+    def _owner_for_new(self, user_id: str | None) -> str:
+        from web.server.identity import ADMIN_USER_ID
+
+        return user_id or self._actor() or ADMIN_USER_ID
+
+    def _row_visible(self, row: Any) -> bool:
+        actor = self._actor()
+        return row is not None and (not actor or row.user_id == actor)
+
     def load_connections(self, custom_agents: dict) -> None:
         """Load all active connections from DB and register dynamic agents."""
         from web.server.database.models import Connection
@@ -81,8 +94,19 @@ class ConnectionManager:
 
         self._rebuild_account_agents(custom_agents)
 
-    def create_connection(self, connector_type: str, label: str, tokens: dict, custom_agents: dict) -> dict:
-        """Create a new connection, store encrypted tokens, register agent."""
+    def create_connection(
+        self,
+        connector_type: str,
+        label: str,
+        tokens: dict,
+        custom_agents: dict,
+        user_id: str | None = None,
+    ) -> dict:
+        """Create a new connection, store encrypted tokens, register agent.
+
+        ``user_id`` wins when the caller already knows the owner (the OAuth
+        callback is exempt from auth, so the id is carried in the state).
+        """
         from web.server.database.models import Connection
 
         plugin = self._registry.get(connector_type)
@@ -95,8 +119,9 @@ class ConnectionManager:
         except Exception as exc:
             logger.debug("Could not derive account identifier: %s", exc)
 
-        # Enforce unique labels (used for #hashtag routing)
-        existing = self.list_connections()
+        owner = self._owner_for_new(user_id)
+        # Labels are unique per user. Auth off still sees every row.
+        existing = self.list_connections(user_id=owner, respect_actor=False)
         existing_slugs = {re.sub(r"[^a-z0-9]+", "-", c["label"].lower()).strip("-") for c in existing}
 
         if not label:
@@ -113,6 +138,7 @@ class ConnectionManager:
         try:
             row = Connection(
                 id=connection_id,
+                user_id=owner,
                 connector_type=connector_type,
                 label=label,
                 account_identifier=account_id,
@@ -141,23 +167,38 @@ class ConnectionManager:
                 return cand
         return account_id or fallback
 
-    def delete_connection(self, connection_id: str, custom_agents: dict) -> bool:
-        """Delete a connection and unregister its agent."""
-        from web.server.database.models import Connection
+    def delete_connection(self, connection_id: str, custom_agents: dict, *, force: bool = False) -> bool:
+        """Delete a connection and unregister its agent.
 
-        self._unregister_agent(connection_id, custom_agents)
+        ``force`` skips the owner check. A request from someone else gets
+        False and leaves the row registered.
+        """
+        from web.server.database.models import Connection
 
         session = self._db_session_factory()
         try:
             row = session.query(Connection).filter(Connection.id == connection_id).first()
-            if not row:
+            if not row or (not force and not self._row_visible(row)):
                 return False
+            self._unregister_agent(connection_id, custom_agents)
             session.delete(row)
             session.commit()
             self._rebuild_account_agents(custom_agents)
             return True
         finally:
             session.close()
+
+    def drop_user(self, user_id: str, custom_agents: dict) -> None:
+        """Unregister in-memory agents for ``user_id``.
+
+        The rows are removed separately. This only drops tools that were
+        registered at startup, so a deleted user's tokens stop being callable
+        before the next process start.
+        """
+        for connection_id, cfg in list(self._agents.items()):
+            if cfg.get("user_id") == user_id:
+                self._unregister_agent(connection_id, custom_agents)
+        self._rebuild_account_agents(custom_agents)
 
     def update_label(self, connection_id: str, label: str, custom_agents: dict) -> dict | None:
         """Update a connection's label and re-register aliases."""
@@ -166,7 +207,7 @@ class ConnectionManager:
         session = self._db_session_factory()
         try:
             row = session.query(Connection).filter(Connection.id == connection_id).first()
-            if not row:
+            if not row or not self._row_visible(row):
                 return None
             row.label = label
             session.commit()
@@ -186,7 +227,7 @@ class ConnectionManager:
         session = self._db_session_factory()
         try:
             row = session.query(Connection).filter(Connection.id == connection_id).first()
-            if not row:
+            if not row or not self._row_visible(row):
                 return None
             tokens = decrypt_tokens(row.encrypted_tokens) if row.encrypted_tokens else {}
             tokens["read_write"] = bool(read_write)
@@ -207,16 +248,28 @@ class ConnectionManager:
         session = self._db_session_factory()
         try:
             row = session.query(Connection).filter(Connection.id == connection_id).first()
-            return self._to_dict(row) if row else None
+            if not row or not self._row_visible(row):
+                return None
+            return self._to_dict(row)
         finally:
             session.close()
 
-    def list_connections(self) -> list[dict]:
+    def list_connections(self, *, user_id: str | None = None, respect_actor: bool = True) -> list[dict]:
+        """List connections.
+
+        The logged-in user sees their own rows. No actor (auth off) sees
+        every row. ``respect_actor=False`` is for startup and alias rebuilds,
+        which must keep every user's agents registered.
+        """
         from web.server.database.models import Connection
 
+        owner = (self._actor() if respect_actor else None) or user_id
         session = self._db_session_factory()
         try:
-            rows = session.query(Connection).order_by(Connection.created_at).all()
+            query = session.query(Connection).order_by(Connection.created_at)
+            if owner:
+                query = query.filter(Connection.user_id == owner)
+            rows = query.all()
             conns = [self._to_dict(row) for row in rows]
         finally:
             session.close()
@@ -241,7 +294,7 @@ class ConnectionManager:
         session = self._db_session_factory()
         try:
             row = session.query(Connection).filter(Connection.id == connection_id).first()
-            if not row:
+            if not row or not self._row_visible(row):
                 raise ValueError(f"Connection {connection_id} not found")
 
             tokens = decrypt_tokens(row.encrypted_tokens)
@@ -397,6 +450,7 @@ class ConnectionManager:
             "prompt_text": self._build_prompt(plugin, conn, account_email),
             "no_history": True,
             "source": "connector",
+            "user_id": conn.get("user_id"),
         }
         if hasattr(plugin, "product_display_names"):
             agent_cfg["product_names"] = plugin.product_display_names(stored_tokens)
@@ -408,13 +462,24 @@ class ConnectionManager:
             custom_agents[alias.lower()] = agent_cfg
 
     def _rebuild_account_agents(self, custom_agents: dict) -> None:
-        """(Re)build one aggregated agent per Google account."""
+        """(Re)build one aggregated agent per user and Google account."""
         for cfg in self._account_agents.values():
             for alias in cfg.get("aliases", []):
-                custom_agents.pop(alias.lower(), None)
+                current = custom_agents.get(alias.lower())
+                if current is cfg or (current or {}).get("id") == cfg.get("id"):
+                    custom_agents.pop(alias.lower(), None)
         self._account_agents.clear()
 
-        for account_identifier, group in group_by_account(self.list_connections()).items():
+        # Every user, not the request actor. Creating one connection must not
+        # drop the other user's account agent.
+        grouped: dict[tuple[str, str], list[dict]] = {}
+        for conn in self.list_connections(respect_actor=False):
+            account_identifier = (conn.get("account_identifier") or "").strip()
+            if not account_identifier:
+                continue
+            grouped.setdefault((conn.get("user_id") or "", account_identifier), []).append(conn)
+
+        for (owner, account_identifier), group in grouped.items():
             members = [c for c in group if c["status"] == "active" and c["id"] in self._agents]
             if len(members) < 2:
                 continue
@@ -424,8 +489,9 @@ class ConnectionManager:
                     if name not in product_names:
                         product_names.append(name)
             slug = account_slug(account_identifier)
+            agent_id = f"connector-account:{owner}:{slug}"
             cfg = {
-                "id": f"connector-account:{slug}",
+                "id": agent_id,
                 "description": f"Connected account -- {account_identifier} ({', '.join(product_names)})",
                 "profile": "cloud-heavy",
                 "tools": build_account_tools(members, self._tool_names, _CONNECTOR_EXTRA_TOOLS),
@@ -434,10 +500,29 @@ class ConnectionManager:
                 "prompt_text": build_account_prompt(account_identifier, product_names),
                 "no_history": True,
                 "source": "connector",
+                "user_id": owner,
             }
-            self._account_agents[slug] = cfg
+            self._account_agents[agent_id] = cfg
             for alias in cfg["aliases"]:
                 custom_agents[alias.lower()] = cfg
+
+    def account_agent_for(self, conn: dict) -> dict | None:
+        account_identifier = (conn.get("account_identifier") or "").strip()
+        if not account_identifier:
+            return None
+        agent_id = f"connector-account:{conn.get('user_id') or ''}:{account_slug(account_identifier)}"
+        return self._account_agents.get(agent_id)
+
+    def aliases_for_actor(self) -> dict[str, dict]:
+        """Alias to agent config for the logged-in user. Every user when auth is off."""
+        actor = self._actor()
+        out: dict[str, dict] = {}
+        for cfg in list(self._agents.values()) + list(self._account_agents.values()):
+            if actor and cfg.get("user_id") != actor:
+                continue
+            for alias in cfg.get("aliases") or []:
+                out[alias.lower()] = cfg
+        return out
 
     def _build_prompt(self, plugin: Any, conn: dict, account_email: str) -> str:
         """Build the system prompt, passing extra args for token-based connectors."""
@@ -476,12 +561,9 @@ class ConnectionManager:
             return []
 
         aliases = []
+        owned = self.list_connections(user_id=conn.get("user_id"), respect_actor=False)
 
-        same_type = [
-            c
-            for c in self.list_connections()
-            if c["connector_type"] == conn["connector_type"] and c["status"] == "active"
-        ]
+        same_type = [c for c in owned if c["connector_type"] == conn["connector_type"] and c["status"] == "active"]
         if len(same_type) <= 1:
             aliases.extend(plugin.default_aliases)
 
@@ -489,9 +571,7 @@ class ConnectionManager:
         account_members = 0
         if acct:
             account_members = sum(
-                1
-                for c in self.list_connections()
-                if c["status"] == "active" and (c.get("account_identifier") or "").strip() == acct
+                1 for c in owned if c["status"] == "active" and (c.get("account_identifier") or "").strip() == acct
             )
         if account_members < 2:
             label_alias = f"@{label_slug(conn['label'])}"
@@ -504,6 +584,7 @@ class ConnectionManager:
     def _to_dict(row: Any) -> dict:
         d = {
             "id": row.id,
+            "user_id": row.user_id,
             "connector_type": row.connector_type,
             "label": row.label,
             "account_identifier": row.account_identifier,

@@ -18,6 +18,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from web.server.identity import ADMIN_USER_ID, current_user_id
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/connectors", tags=["connectors"])
@@ -239,6 +241,7 @@ async def start_oauth(body: OAuthStartRequest, request: Request):
         "label": body.label,
         "redirect_uri": redirect_uri,
         "products": body.products,
+        "user_id": current_user_id() or ADMIN_USER_ID,
     }
 
     if _redis_client:
@@ -355,6 +358,7 @@ async def oauth_callback(
             label=label,
             tokens=tokens,
             custom_agents=_custom_agents,
+            user_id=state_data.get("user_id"),
         )
         logger.info(
             "Created connector: %s (%s) — %s",

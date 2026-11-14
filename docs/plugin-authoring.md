@@ -9,6 +9,7 @@ Tools are plain functions decorated with `@tool` (`agentforge/tools/registry.py`
 ```python
 from agentforge.tools.registry import tool
 
+
 @tool(locality="local", hint="Always pass --tail 200 for log reads")
 def read_service_log(service: str, tail: int = 200) -> str:
     """Read the last N lines of a service log.
@@ -54,6 +55,7 @@ Each spec points at a register function:
 # plugins/cloud_tools.py
 from agentforge.tools.registry import tool
 
+
 @tool(locality="remote")
 def putio_list(folder_id: int = 0) -> str:
     """List items in a Put.io folder.
@@ -61,6 +63,7 @@ def putio_list(folder_id: int = 0) -> str:
     folder_id: parent folder id (0 = root)
     """
     ...
+
 
 def register_cloud_tools(registry) -> int:
     """Register this module's tools. Returns how many were added."""

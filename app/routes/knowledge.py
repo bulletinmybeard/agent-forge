@@ -93,7 +93,8 @@ def delete_entry(
     entry_id: str,
     knowledge_service: KnowledgeService = Depends(knowledge_service_dependency),
 ) -> Response:
-    knowledge_service.delete_entry(entry_id)
+    if knowledge_service.delete_entry(entry_id) is False:
+        raise HTTPException(status_code=404, detail="Entry not found")
     return Response(status_code=204)
 
 

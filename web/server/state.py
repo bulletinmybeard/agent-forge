@@ -37,3 +37,8 @@ session_auto_accept: set[str] = set()
 # WorkerSecretProvider can fetch a password for a sudo command running there.
 # Memory-only + popped on first read; never logged or persisted.
 secret_responses: dict[str, dict] = {}
+
+# Job ids whose worker ``agent.cancelled`` card must be dropped. Set when the
+# web process already wrote a synthetic card because the worker had not
+# persisted one before the next prompt started.
+suppress_cancel_jobs: set[str] = set()

@@ -21,6 +21,9 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+from web.server.identity import current_user_id
 
 from .api import get_db
 from .conversation_memory import get_conversation_memory
@@ -135,10 +138,15 @@ def list_exchanges(
 
     try:
         client = mem._get_client()  # intentional internal access — no public accessor yet
+        actor = current_user_id()
+        scroll_filter = None
+        if actor:
+            scroll_filter = Filter(must=[FieldCondition(key="user_id", match=MatchValue(value=actor))])
         points, next_page = client.scroll(
             collection_name=mem._collection,
             limit=limit,
             offset=offset,
+            scroll_filter=scroll_filter,
             with_payload=True,
             with_vectors=False,
         )
@@ -173,6 +181,8 @@ def delete_exchange(point_id: str) -> dict[str, Any]:
     mem = get_conversation_memory()
     if mem is None:
         raise HTTPException(status_code=503, detail="Conversation memory not available")
+    if not mem.point_owned(point_id):
+        raise HTTPException(status_code=404, detail="not found")
     try:
         client = mem._get_client()
         client.delete(
@@ -191,7 +201,8 @@ def clear_exchanges() -> dict[str, Any]:
     mem = get_conversation_memory()
     if mem is None:
         raise HTTPException(status_code=503, detail="Conversation memory not available")
-    ok = mem.delete_all()
+    actor = current_user_id()
+    ok = mem.delete_for_user(actor) if actor else mem.delete_all()
     return {"deleted": bool(ok)}
 
 
@@ -226,7 +237,9 @@ def list_schemas() -> dict[str, Any]:
           "total_columns": int,
           "view_count": int,
         }
-    Plus top-level ``cache_disabled`` so the UI can render the global toggle.
+    Plus top-level ``cache_disabled`` for this user's "always fetch fresh" toggle.
+    Cached counts belong to the logged-in user. The database names come from
+    the server config and are listed for everyone who can run SQL.
 
     Never 503s the Memory modal when the optional SQL schema plugin is
     missing — return configured DBs with empty cache metadata instead.

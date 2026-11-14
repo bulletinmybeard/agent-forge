@@ -25,6 +25,7 @@ import threading
 from typing import Any
 
 from agentforge.tools.routing import agent_dispatch_timeout, tool_dispatch_timeout
+from web.server.identity import current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +210,7 @@ def enqueue_agent_job(
     query: str,
     mode: str,
     overrides_json: str | None,
+    user_id: str | None = None,
 ) -> str | None:
     """Enqueue a chat agent job. Returns the SAQ job key for later abort/lookup."""
     queue_name = _mode_queue_name(mode)
@@ -234,6 +236,7 @@ def enqueue_agent_job(
             query=query,
             mode=mode,
             overrides_json=overrides_json,
+            user_id=user_id,
         )
     )
 
@@ -252,6 +255,7 @@ async def _saq_tool_apply(
     knowledge_collection: str | None = None,
     timeout: float = _SAQ_TOOL_TIMEOUT,
     allowed_tools: list[str] | None = None,
+    user_id: str | None = None,
 ) -> str:
     """Enqueue a tool call on the role's tools queue and await its string result."""
     from saq.job import Job
@@ -270,6 +274,8 @@ async def _saq_tool_apply(
         kwargs["knowledge_collection"] = knowledge_collection
     if allowed_tools is not None:
         kwargs["allowed_tools"] = allowed_tools
+    if user_id:
+        kwargs["user_id"] = user_id
     job = Job(
         function="execute_tool_saq",
         kwargs=kwargs,
@@ -297,6 +303,7 @@ def saq_dispatch_tool(
     from agentforge.config import get_request_session_id
 
     session_id = get_request_session_id()
+    user_id = current_user_id()
     knowledge_collection = None
     try:
         from app.services.knowledge_registry import get_request_knowledge_collection
@@ -320,6 +327,7 @@ def saq_dispatch_tool(
                 knowledge_collection=knowledge_collection,
                 timeout=timeout,
                 allowed_tools=allowed_tools,
+                user_id=user_id,
             )
         )
     except Exception as exc:

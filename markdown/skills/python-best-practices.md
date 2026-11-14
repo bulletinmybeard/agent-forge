@@ -11,14 +11,18 @@ You have been given this skill because the user's query involves Python code des
    def fetch(url: str) -> dict[str, Any] | None:
        pass
 
+
    # Avoid
    from typing import Optional, Dict, Any
+
+
    def fetch(url: str) -> Optional[Dict[str, Any]]:
        pass
    ```
 2. **TypeAlias** — For complex types, define aliases at module level:
    ```python
    from typing import TypeAlias
+
    JSONValue: TypeAlias = dict[str, Any] | list[Any] | str | int | float | bool | None
    ```
 3. **Generic collections** — Use `list[T]`, `dict[K, V]`, `tuple[T, ...]`, not capitalized
@@ -26,6 +30,8 @@ You have been given this skill because the user's query involves Python code des
 4. **Callable types** — Prefer `collections.abc.Callable` over `typing.Callable`:
    ```python
    from collections.abc import Callable
+
+
    def register_hook(cb: Callable[[str], None]) -> None:
        pass
    ```
@@ -61,10 +67,13 @@ You have been given this skill because the user's query involves Python code des
    ```python
    class ConfigurationError(ValueError):
        """Raised when configuration is invalid."""
+
        pass
+
 
    class RetryableError(Exception):
        """Raised for transient errors that should trigger retry."""
+
        pass
    ```
 2. **Exception chaining** — Use `raise NewException(...) from e` to preserve context:
@@ -105,6 +114,7 @@ You have been given this skill because the user's query involves Python code des
    - Use type hints in `TYPE_CHECKING` block:
      ```python
      from typing import TYPE_CHECKING
+
      if TYPE_CHECKING:
          from module import ClassName
      ```
@@ -165,6 +175,7 @@ You have been given this skill because the user's query involves Python code des
            for line in f:
                yield line.strip()
 
+
    # Avoid: loads entire file into memory
    with open(path) as f:
        lines = [line.strip() for line in f]
@@ -172,7 +183,8 @@ You have been given this skill because the user's query involves Python code des
 2. **__slots__** — For classes with many instances, reduce memory:
    ```python
    class Point:
-       __slots__ = ['x', 'y']
+       __slots__ = ["x", "y"]
+
        def __init__(self, x, y):
            self.x = x
            self.y = y
@@ -180,6 +192,8 @@ You have been given this skill because the user's query involves Python code des
 3. **functools.lru_cache** — Memoize expensive pure functions:
    ```python
    from functools import lru_cache
+
+
    @lru_cache(maxsize=128)
    def expensive_computation(n: int) -> int:
        return sum(i for i in range(n))
@@ -197,15 +211,19 @@ You have been given this skill because the user's query involves Python code des
    def mock_db():
        return MockDatabase()
 
+
    def test_user_creation(mock_db):
        assert mock_db.get_user(1) is None
    ```
 2. **Parametrize** — Test multiple inputs without duplication:
    ```python
-   @pytest.mark.parametrize("input,expected", [
-       ("valid", True),
-       ("invalid", False),
-   ])
+   @pytest.mark.parametrize(
+       "input,expected",
+       [
+           ("valid", True),
+           ("invalid", False),
+       ],
+   )
    def test_validator(input, expected):
        assert validate(input) == expected
    ```
@@ -217,6 +235,7 @@ You have been given this skill because the user's query involves Python code des
 1. **Structlog or logging module** — Use per-module loggers:
    ```python
    import logging
+
    logger = logging.getLogger(__name__)
    ```
 2. **Avoid f-strings in log calls** — Use lazy formatting:

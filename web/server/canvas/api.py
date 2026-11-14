@@ -10,6 +10,8 @@ import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from web.server.ownership import session_owned
+
 from .database import CanvasDatabase
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,8 @@ async def get_canvas(session_id: str):
     """Return all canvas items for a session, ordered by footnote_num."""
     if _db is None:
         raise HTTPException(status_code=503, detail="Canvas database not initialised")
+    if not session_owned(session_id):
+        raise HTTPException(status_code=404, detail="not found")
     items = _db.get_items(session_id)
     return {"items": items}
 
@@ -57,6 +61,8 @@ async def add_canvas_item(session_id: str, body: AddItemRequest):
     """Add an item to the session canvas. Idempotent — returns existing on duplicate."""
     if _db is None:
         raise HTTPException(status_code=503, detail="Canvas database not initialised")
+    if not session_owned(session_id):
+        raise HTTPException(status_code=404, detail="not found")
     return _db.add_item(session_id, body.type, body.content, body.label)
 
 
@@ -65,6 +71,8 @@ async def delete_canvas_item(session_id: str, item_id: int):
     """Delete a canvas item by ID."""
     if _db is None:
         raise HTTPException(status_code=503, detail="Canvas database not initialised")
+    if not session_owned(session_id):
+        raise HTTPException(status_code=404, detail="not found")
     deleted = _db.delete_item(session_id, item_id)
     return {"deleted": deleted}
 
@@ -74,6 +82,8 @@ async def update_canvas_item(session_id: str, item_id: int, body: UpdateItemRequ
     """Update content and label for a canvas item (note items)."""
     if _db is None:
         raise HTTPException(status_code=503, detail="Canvas database not initialised")
+    if not session_owned(session_id):
+        raise HTTPException(status_code=404, detail="not found")
     item = _db.update_item(session_id, item_id, body.content, body.label)
     if item is None:
         raise HTTPException(status_code=404, detail=f"Canvas item {item_id} not found")

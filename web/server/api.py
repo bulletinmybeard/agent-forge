@@ -23,7 +23,7 @@ from typing import List
 
 import ollama
 import yaml
-from fastapi import APIRouter, Body, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
@@ -31,6 +31,8 @@ from agentforge.client import AIClient
 from agentforge.config import get_config as get_fw_config
 from agentforge.router import ProfileRouter, capability_for_mode
 from app.config import settings as af_settings
+from app.security import auth_enabled
+from web.server.identity import current_user_id, reset_current_user, set_current_user
 
 from . import state
 from .audit_log import get_audit_log
@@ -38,6 +40,7 @@ from .database import ChatDatabase
 from .debug_sessions import build_debug_bundle
 from .mode_routing import STICKY_MODES, strip_mode_prefix
 from .monitor_service import get_monitor_service
+from .ownership import session_writable
 from .prompt_refiner import refine_prompt
 from .queue.models import JobStatus
 from .queue.store import job_store
@@ -196,6 +199,10 @@ def get_db() -> ChatDatabase:
     return _db
 
 
+def get_upload_base() -> Path | None:
+    return _upload_base
+
+
 # -- Welcome message -----------------------------------------------------------
 
 _USER_CONTEXT_CACHE: dict[str, str] = {}  # key: "name" → first name
@@ -327,6 +334,11 @@ async def create_session(body: SessionCreate):
 
     session_id = (body.id or "").strip() or uuid.uuid4().hex
     db = get_db()
+    actor = current_user_id()
+    if actor:
+        owner = db.get_session_owner(session_id)
+        if owner is not None and owner != actor:
+            raise HTTPException(status_code=404, detail="Session not found")
     try:
         chat = db.create_session(
             session_id,
@@ -658,6 +670,31 @@ async def get_active_job(session_id: str):
 internal = APIRouter(prefix="/internal")
 
 
+async def bind_internal_session(session_id: str, request: Request):
+    """When the wall is on, the worker's user id has to own the session.
+
+    The internal token alone is not a user. A missing header, an unknown user,
+    or a session owned by someone else is a 404. Auth off keeps the old path.
+    """
+    if not auth_enabled():
+        yield None
+        return
+    user_id = (request.headers.get("x-agentforge-user") or "").strip()
+    if not user_id or not get_db().user_exists(user_id):
+        raise HTTPException(status_code=404, detail="not found")
+    owner = get_db().get_session_owner(session_id)
+    if owner is not None and owner != user_id:
+        raise HTTPException(status_code=404, detail="not found")
+    token = set_current_user(user_id)
+    try:
+        yield user_id
+    finally:
+        reset_current_user(token)
+
+
+_INTERNAL_SESSION = [Depends(bind_internal_session)]
+
+
 class _EventBody(BaseModel):
     msg: dict
     role: str = "assistant"
@@ -665,6 +702,7 @@ class _EventBody(BaseModel):
     content: str | None = None
     tool_calls: list[dict] | None = None
     is_incognito: bool = False
+    job_id: str | None = None
 
 
 class _StatusBody(BaseModel):
@@ -672,7 +710,7 @@ class _StatusBody(BaseModel):
     error: str | None = None
 
 
-@internal.get("/sessions/{session_id}/history", status_code=200)
+@internal.get("/sessions/{session_id}/history", status_code=200, dependencies=_INTERNAL_SESSION)
 async def get_session_history(session_id: str):
     """Return raw conversation messages for the worker to build multi-turn context.
 
@@ -703,7 +741,7 @@ async def get_session_history(session_id: str):
         return {"history": [], "error": str(exc)}
 
 
-@internal.post("/sessions/{session_id}/update", status_code=200)
+@internal.post("/sessions/{session_id}/update", status_code=200, dependencies=_INTERNAL_SESSION)
 async def update_session_from_worker(session_id: str, body: dict = Body(...)):
     """Update session metadata (title, profile, model) from the worker.
 
@@ -716,7 +754,7 @@ async def update_session_from_worker(session_id: str, body: dict = Body(...)):
     return {"ok": True}
 
 
-@internal.post("/sessions/{session_id}/token-usage", status_code=200)
+@internal.post("/sessions/{session_id}/token-usage", status_code=200, dependencies=_INTERNAL_SESSION)
 async def add_token_usage_from_worker(session_id: str, body: dict = Body(...)):
     """Increment cumulative token counters for a session from the worker.
 
@@ -752,7 +790,7 @@ _BROADCAST_NO_REPLAY_TYPES = frozenset(
 )
 
 
-@internal.post("/sessions/{session_id}/broadcast", status_code=200)
+@internal.post("/sessions/{session_id}/broadcast", status_code=200, dependencies=_INTERNAL_SESSION)
 async def broadcast_worker_event(session_id: str, body: dict = Body(...)):
     """Broadcast an ephemeral protocol event to any live browser WS — no DB persist.
 
@@ -794,13 +832,18 @@ async def broadcast_worker_event(session_id: str, body: dict = Body(...)):
     return {"ok": True}
 
 
-@internal.post("/sessions/{session_id}/event", status_code=200)
+@internal.post("/sessions/{session_id}/event", status_code=200, dependencies=_INTERNAL_SESSION)
 async def push_worker_event(session_id: str, body: _EventBody):
     """Persist a protocol event from the worker and broadcast to any live WS.
 
     Called by HttpCallbackSocket in jobs_common.py for every send_and_persist call.
     """
     db = get_db()
+
+    msg_type = body.msg_type or (body.msg or {}).get("type")
+    if body.job_id and msg_type in ("cancelled", "agent.cancelled") and body.job_id in state.suppress_cancel_jobs:
+        state.suppress_cancel_jobs.discard(body.job_id)
+        return {"ok": True, "suppressed": True}
 
     # Ensure the session row exists. Stamp source and parent from the active
     # job's overrides when present so external clients are not mis-tagged.
@@ -841,7 +884,7 @@ async def push_worker_event(session_id: str, body: _EventBody):
     return {"ok": True}
 
 
-@internal.get("/sessions/{session_id}/confirm/{request_id}", status_code=200)
+@internal.get("/sessions/{session_id}/confirm/{request_id}", status_code=200, dependencies=_INTERNAL_SESSION)
 async def poll_confirm_response(session_id: str, request_id: str):
     """Poll for a confirmation response from the browser.
 
@@ -859,13 +902,13 @@ async def poll_confirm_response(session_id: str, request_id: str):
     return {"ready": True, "confirmed": response["confirmed"], "auto_accept": response.get("auto_accept", False)}
 
 
-@internal.get("/sessions/{session_id}/auto-accept", status_code=200)
+@internal.get("/sessions/{session_id}/auto-accept", status_code=200, dependencies=_INTERNAL_SESSION)
 async def get_session_auto_accept(session_id: str):
     """Whether the user picked 'This session' for confirms in this chat."""
     return {"auto_accept": session_id in state.session_auto_accept}
 
 
-@internal.post("/sessions/{session_id}/auto-accept", status_code=200)
+@internal.post("/sessions/{session_id}/auto-accept", status_code=200, dependencies=_INTERNAL_SESSION)
 async def set_session_auto_accept(session_id: str, body: dict = Body(...)):
     if body.get("auto_accept"):
         state.session_auto_accept.add(session_id)
@@ -874,7 +917,7 @@ async def set_session_auto_accept(session_id: str, body: dict = Body(...)):
     return {"ok": True, "auto_accept": session_id in state.session_auto_accept}
 
 
-@internal.get("/sessions/{session_id}/secret/{request_id}", status_code=200)
+@internal.get("/sessions/{session_id}/secret/{request_id}", status_code=200, dependencies=_INTERNAL_SESSION)
 async def poll_secret_response(session_id: str, request_id: str):
     """Poll for a masked sudo-password response from the browser.
 
@@ -895,7 +938,7 @@ async def poll_secret_response(session_id: str, request_id: str):
     return {"ready": True, "value": response.get("value")}
 
 
-@internal.post("/sessions/{session_id}/messages/{msg_type}/metadata", status_code=200)
+@internal.post("/sessions/{session_id}/messages/{msg_type}/metadata", status_code=200, dependencies=_INTERNAL_SESSION)
 async def update_message_metadata(session_id: str, msg_type: str, body: dict = Body(...)):
     """Update metadata on a persisted message.
 
@@ -1313,19 +1356,24 @@ async def list_agents():
     custom: list[dict] = []
     try:
         rt = get_runtime()
+        actor = current_user_id()
         for agent in rt.list_custom_agents():
-            custom.append(
-                {
-                    "id": agent["id"],
-                    "type": "custom",
-                    "aliases": agent.get("aliases", []),
-                    "description": agent.get("description", agent["id"]),
-                    "profile": agent.get("profile", "cloud-heavy"),
-                    "tools": agent.get("tools", []),
-                    "max_iterations": agent.get("max_iterations", 10),
-                    "source": agent.get("source"),
-                }
-            )
+            if agent.get("source") == "connector" and actor and agent.get("user_id") != actor:
+                continue
+            row = {
+                "id": agent["id"],
+                "type": "custom",
+                "aliases": agent.get("aliases", []),
+                "description": agent.get("description", agent["id"]),
+                "profile": agent.get("profile", "cloud-heavy"),
+                "tools": agent.get("tools", []),
+                "max_iterations": agent.get("max_iterations", 10),
+                "source": agent.get("source"),
+            }
+            group = agent.get("group")
+            if isinstance(group, str) and group.strip():
+                row["group"] = group.strip()
+            custom.append(row)
     except RuntimeError:
         # Runtime not yet initialised (server still starting up)
         pass
@@ -1752,6 +1800,9 @@ async def upload_files(
     if not _SAFE_SESSION_RE.match(session_id):
         raise HTTPException(status_code=400, detail="Invalid session_id")
 
+    if not session_writable(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+
     if len(files) > _max_files:
         raise HTTPException(
             status_code=400,
@@ -1937,15 +1988,12 @@ async def clear_session_results(session_id: str):
     return {"session_id": session_id, "deleted": count}
 
 
-# -- Schema cache endpoints (global / cross-session) --------------------------
+# -- Schema cache endpoints (per logged-in user) ------------------------------
 
 
 @router.get("/schemas")
 async def list_cached_schemas():
-    """List all database schemas currently cached in Redis.
-
-    These are global (not session-scoped) — any chat session can use them.
-    """
+    """List database schemas cached for the current user."""
     from agentforge.tools.sql_schema_tool import get_all_cached_schemas
 
     schemas = get_all_cached_schemas()
@@ -1983,14 +2031,13 @@ async def get_cached_schema(database: str, format: str = "json"):
 
 @router.delete("/schemas/{database}")
 async def invalidate_cached_schema(database: str):
-    """Invalidate (delete) the cached schema for a database."""
-    from agentforge.tools.sql_schema_tool import _cache_key, _get_redis
+    """Invalidate (delete) the current user's cached schema for a database."""
+    from agentforge.tools.sql_schema_tool import _get_redis, clear_cached_schema
 
-    r = _get_redis()
-    if not r:
+    if not _get_redis():
         raise HTTPException(status_code=503, detail="Redis not available")
-    deleted = r.delete(_cache_key(database))
-    return {"database": database, "deleted": bool(deleted)}
+    cleared = clear_cached_schema(database)
+    return {"database": database, "deleted": bool(cleared)}
 
 
 # -- Location endpoint ---------------------------------------------------------
