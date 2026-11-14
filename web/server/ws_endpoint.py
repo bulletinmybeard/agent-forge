@@ -2546,9 +2546,7 @@ def _classify_mode_heuristic(
             r"|\bwhat\s+if\b|\bwhat\s+else\b|\bhow\s+else\b"
             r"|\band\s+\w+\?$|\bwhich\b|\bwhere\b"
         )
-        has_followup = bool(
-            _FOLLOWUP_PRONOUNS.search(instruction_lower) or _FOLLOWUP_PHRASES.search(instruction_lower)
-        )
+        has_followup = bool(_FOLLOWUP_PRONOUNS.search(instruction_lower) or _FOLLOWUP_PHRASES.search(instruction_lower))
 
         # Tier 1: short follow-ups (original behaviour)
         if len(words) <= 15 and (has_followup or len(words) <= 10):

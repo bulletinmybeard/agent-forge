@@ -6,8 +6,11 @@ can be corrected to the command that actually ran.
 
 import io
 import json
+from typing import cast
 
+from agentforge.client import AIClient
 from agentforge.parallel import ParallelAgentRunner
+from agentforge.tools import ToolRegistry
 from agentforge.tools import shell as sh
 from agentforge.tools.shell import (
     _EXECUTED_RESULT_KEY,
@@ -103,7 +106,11 @@ def test_parallel_reports_the_command_that_ran():
             return f"$ {command}\n\nhi"
 
     events = []
-    runner = ParallelAgentRunner(client=None, registry=_Registry(), max_workers=1)
+    runner = ParallelAgentRunner(
+        client=cast(AIClient, None),
+        registry=cast(ToolRegistry, _Registry()),
+        max_workers=1,
+    )
     ctx = runner.execute(
         {
             "groups": [

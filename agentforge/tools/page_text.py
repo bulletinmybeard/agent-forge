@@ -113,7 +113,7 @@ def clip_tool_output(tool_name: str, output: str, limit: int) -> str:
 
 def _main_node(soup: BeautifulSoup) -> Tag | None:
     nodes = list(soup.find_all(["article", "main"]))
-    nodes.extend(soup.find_all(attrs={"role": "main"}))
+    nodes.extend(soup.find_all(None, {"role": "main"}))
     best = None
     best_len = 0
     for node in nodes:

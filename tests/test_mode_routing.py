@@ -1,10 +1,12 @@
+from typing import cast
+
 from web.server.mode_routing import (
     instruction_for_routing,
     is_supplied_text_transform,
     markdown_path_links,
     strip_mode_prefix,
 )
-from web.server.ws_endpoint import _classify_mode_heuristic, _match_mode_patterns
+from web.server.ws_endpoint import SearchRuntime, _classify_mode_heuristic, _match_mode_patterns
 
 
 def test_strip_start_of_query_aliases():
@@ -86,13 +88,16 @@ def test_routing_uses_the_instruction_above_the_blank_line():
         "Please schedule a daily backup at 2am and set up a cron job for nightly cleanup.\n"
     )
     assert instruction_for_routing(query) == "Summarize the ticket below."
-    mode, confidence = _classify_mode_heuristic(query, _Runtime())
+    mode, confidence = _classify_mode_heuristic(query, cast(SearchRuntime, _Runtime()))
     assert mode == "chat"
     assert confidence == "low"
 
 
 def test_a_single_mode_pattern_is_a_medium_hint():
-    mode, confidence = _classify_mode_heuristic("set up a cron job for nightly cleanup", _Runtime())
+    mode, confidence = _classify_mode_heuristic(
+        "set up a cron job for nightly cleanup",
+        cast(SearchRuntime, _Runtime()),
+    )
     assert mode == "scheduler"
     assert confidence == "medium"
 

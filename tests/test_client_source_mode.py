@@ -14,10 +14,7 @@ def test_afemail_source_is_case_insensitive():
 
 
 def test_afemail_alias_still_pins():
-    assert (
-        pinned_client_mode("afemail", None, "custom:afemail", f"@afemail {_QUESTION}")
-        == "custom:afemail"
-    )
+    assert pinned_client_mode("afemail", None, "custom:afemail", f"@afemail {_QUESTION}") == "custom:afemail"
 
 
 def test_explicit_builtin_prefix_wins():
@@ -25,10 +22,7 @@ def test_explicit_builtin_prefix_wins():
 
 
 def test_other_custom_alias_wins():
-    assert (
-        pinned_client_mode("afemail", None, "custom:haushaltsbuch", "@haushaltsbuch balance")
-        is None
-    )
+    assert pinned_client_mode("afemail", None, "custom:haushaltsbuch", "@haushaltsbuch balance") is None
 
 
 def test_unknown_at_prefix_is_not_pinned():

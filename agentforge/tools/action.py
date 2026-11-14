@@ -15,7 +15,7 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from chalkbox.logging.bridge import get_logger
 
@@ -33,7 +33,20 @@ _NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 _DEFAULT_TIMEOUT = 30
 _MAX_OUTPUT = 100_000
 
-_DEFAULT_ALLOW: list[dict[str, Any]] = []
+_DEFAULT_ALLOW: list[dict[str, Any]] = [
+    {
+        "name": "file-size",
+        "darwin": ["stat", "-f", "%z", "{path}"],
+        "linux": ["stat", "-c", "%s", "{path}"],
+    },
+    {"name": "file-bytes", "argv": ["wc", "-c", "{path}"]},
+    {"name": "git-status", "argv": ["git", "-C", "{path}", "status", "--short"]},
+    {
+        "name": "git-log",
+        "argv": ["git", "-C", "{path}", "log", "-n", "{n}", "--oneline"],
+        "slots": {"n": {"type": "int", "min": 1, "max": 50, "default": 20}},
+    },
+]
 
 _ACTION_KEYS = frozenset({"name", "argv", "darwin", "linux", "slots"})
 _SLOT_KEYS = frozenset({"type", "min", "max", "default"})
@@ -74,31 +87,46 @@ def _as_argv(value: object, label: str) -> tuple[str, ...]:
     return tuple(argv)
 
 
+def _slot_int(value: object, message: str) -> int | None:
+    # bool is an int; true/false is not a slot bound.
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(message)
+    return value
+
+
 def _parse_slot(action_name: str, slot_name: str, raw: object) -> SlotSpec:
     if not isinstance(raw, dict):
         raise ValueError(f"{action_name}.{slot_name} must be a mapping")
     unknown = set(raw) - _SLOT_KEYS
     if unknown:
-        raise ValueError(f"{action_name}.{slot_name} has unknown keys: {', '.join(sorted(unknown))}")
+        names = ", ".join(sorted(str(key) for key in unknown))
+        raise ValueError(f"{action_name}.{slot_name} has unknown keys: {names}")
     slot_type = str(raw.get("type") or "str")
     if slot_type not in ("str", "int"):
         raise ValueError(f"{action_name}.{slot_name} type must be str or int")
     default = raw.get("default")
     minimum = raw.get("min")
     maximum = raw.get("max")
+    default_value: str | int | None
+    minimum_value: int | None
+    maximum_value: int | None
     if slot_type == "int":
-        for label, number in (("default", default), ("min", minimum), ("max", maximum)):
-            if number is None:
-                continue
-            if isinstance(number, bool) or not isinstance(number, int):
-                raise ValueError(f"{action_name}.{slot_name} {label} must be an int")
-    elif default is not None and not isinstance(default, str):
-        raise ValueError(f"{action_name}.{slot_name} default must be a string")
-    if minimum is not None and slot_type != "int":
-        raise ValueError(f"{action_name}.{slot_name} min applies to int slots")
-    if maximum is not None and slot_type != "int":
-        raise ValueError(f"{action_name}.{slot_name} max applies to int slots")
-    return SlotSpec(type=slot_type, default=default, min=minimum, max=maximum)
+        default_value = _slot_int(default, f"{action_name}.{slot_name} default must be an int")
+        minimum_value = _slot_int(minimum, f"{action_name}.{slot_name} min must be an int")
+        maximum_value = _slot_int(maximum, f"{action_name}.{slot_name} max must be an int")
+    else:
+        if default is not None and not isinstance(default, str):
+            raise ValueError(f"{action_name}.{slot_name} default must be a string")
+        if minimum is not None:
+            raise ValueError(f"{action_name}.{slot_name} min applies to int slots")
+        if maximum is not None:
+            raise ValueError(f"{action_name}.{slot_name} max applies to int slots")
+        default_value = default if isinstance(default, str) else None
+        minimum_value = None
+        maximum_value = None
+    return SlotSpec(type=slot_type, default=default_value, min=minimum_value, max=maximum_value)
 
 
 def _placeholders(templates: list[tuple[str, ...]]) -> set[str]:
@@ -121,21 +149,23 @@ def parse_allow(allow: object) -> dict[str, ActionSpec]:
     for entry in allow:
         if not isinstance(entry, dict):
             raise ValueError("each action must be a mapping")
-        unknown = set(entry) - _ACTION_KEYS
+        raw = cast(dict[str, Any], entry)
+        unknown = set(raw) - _ACTION_KEYS
         if unknown:
-            raise ValueError(f"action has unknown keys: {', '.join(sorted(unknown))}")
-        name = entry.get("name")
+            names = ", ".join(sorted(str(key) for key in unknown))
+            raise ValueError(f"action has unknown keys: {names}")
+        name = raw.get("name")
         if not isinstance(name, str) or not _NAME_RE.match(name):
             raise ValueError(f"invalid action name: {name!r}")
         if name in catalog:
             raise ValueError(f"duplicate action name: {name}")
-        argv = _as_argv(entry["argv"], f"{name}.argv") if "argv" in entry else ()
-        darwin = _as_argv(entry["darwin"], f"{name}.darwin") if "darwin" in entry else ()
-        linux = _as_argv(entry["linux"], f"{name}.linux") if "linux" in entry else ()
+        argv = _as_argv(raw["argv"], f"{name}.argv") if "argv" in raw else ()
+        darwin = _as_argv(raw["darwin"], f"{name}.darwin") if "darwin" in raw else ()
+        linux = _as_argv(raw["linux"], f"{name}.linux") if "linux" in raw else ()
         if not argv and not darwin and not linux:
             raise ValueError(f"{name} needs argv, darwin, or linux")
         declared: dict[str, SlotSpec] = {}
-        raw_slots = entry.get("slots") or {}
+        raw_slots = raw.get("slots") or {}
         if not isinstance(raw_slots, dict):
             raise ValueError(f"{name}.slots must be a mapping")
         for slot_name, raw_slot in raw_slots.items():
@@ -258,7 +288,7 @@ def _parse_args(args: object) -> tuple[dict[str, Any] | None, str | None]:
             return None, "Error: args must be a JSON object"
     if not isinstance(args, dict):
         return None, "Error: args must be an object"
-    return args, None
+    return cast(dict[str, Any], args), None
 
 
 def _catalog_doc(catalog: dict[str, ActionSpec]) -> str:
