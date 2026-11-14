@@ -5,6 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from qdrant_client.models import FieldCondition, Filter, MatchValue
+
 from agentforge.film import vectors
 from app.services.qdrant_owner import personal_collection_names, restrict_filter
 from web.server.identity import ADMIN_USER_ID, reset_current_user, set_current_user
@@ -102,5 +104,10 @@ def test_film_collection_is_personal(monkeypatch):
         filt = restrict_filter("film_db", None)
     finally:
         reset_current_user(token)
-    assert filt is not None
-    assert filt.must[0].match.value == _OTHER
+    assert isinstance(filt, Filter)
+    must = filt.must
+    assert isinstance(must, list)
+    cond = must[0]
+    assert isinstance(cond, FieldCondition)
+    assert isinstance(cond.match, MatchValue)
+    assert cond.match.value == _OTHER

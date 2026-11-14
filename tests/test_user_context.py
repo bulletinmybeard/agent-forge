@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any, cast
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -28,6 +29,22 @@ _FILE = "- Name: Ada Lovelace\nlikes files\n"
 _OTHER = "- Name: Nia Example\nkeeps lists\n"
 
 
+def _uid(user: User) -> str:
+    return cast(str, user.id)
+
+
+def _restore_db(previous: ChatDatabase | None) -> None:
+    if previous is None:
+        api_module._db = None
+        return
+    api_module.set_database(previous)
+
+
+def _context(prompt: str) -> str:
+    # `rt` is unused. Production always passes a runtime; this test does not.
+    return _inject_user_context(prompt, cast(Any, None))
+
+
 def _file(tmp_path, monkeypatch):
     path = tmp_path / "user_context.md"
     path.write_text(_FILE, encoding="utf-8")
@@ -42,7 +59,8 @@ def _db(tmp_path) -> tuple[ChatDatabase, User]:
     other = db.create_user("personal", hash_password("personal-pass-1"))
     with db.SessionLocal() as session:
         row = session.get(User, ADMIN_USER_ID)
-        row.instructions = "- Name: Notfile\nstolen"
+        assert row is not None
+        cast(Any, row).instructions = "- Name: Notfile\nstolen"
         session.commit()
     return db, other
 
@@ -57,7 +75,7 @@ def test_instructions_follow_the_caller(tmp_path, monkeypatch):
         try:
             assert instructions_for_caller() == _FILE.strip()
             assert first_name(instructions_for_caller()) == "Ada"
-            assert "likes files" in _inject_user_context("base", None)
+            assert "likes files" in _context("base")
             welcome = asyncio.run(get_welcome())
         finally:
             reset_current_user(token)
@@ -71,18 +89,18 @@ def test_instructions_follow_the_caller(tmp_path, monkeypatch):
         finally:
             reset_current_user(token)
 
-        token = set_current_user(other.id)
+        token = set_current_user(_uid(other))
         try:
             assert instructions_for_caller() == ""
-            assert _inject_user_context("base", None) == "base"
+            assert _context("base") == "base"
             welcome = asyncio.run(get_welcome())
             assert welcome["name"] == ""
             assert "Ada" not in welcome["headline"]
 
-            db.set_user_instructions(other.id, _OTHER)
+            db.set_user_instructions(_uid(other), _OTHER)
             assert instructions_for_caller() == _OTHER.strip()
             assert first_name(instructions_for_caller()) == "Nia"
-            prompt = _inject_user_context("base", None)
+            prompt = _context("base")
             welcome = asyncio.run(get_welcome())
         finally:
             reset_current_user(token)
@@ -93,7 +111,7 @@ def test_instructions_follow_the_caller(tmp_path, monkeypatch):
         assert "Ada" not in welcome["headline"]
         assert path.read_text(encoding="utf-8") == _FILE
     finally:
-        api_module.set_database(previous)
+        _restore_db(previous)
 
 
 def test_instruction_save_does_not_touch_the_admin_file(tmp_path, monkeypatch):
@@ -139,4 +157,4 @@ def test_instruction_save_does_not_touch_the_admin_file(tmp_path, monkeypatch):
         assert "overwrite" not in path.read_text(encoding="utf-8")
     finally:
         set_auth_database(None)
-        api_module.set_database(previous)
+        _restore_db(previous)

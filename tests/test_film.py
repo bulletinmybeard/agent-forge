@@ -536,13 +536,17 @@ def test_film_scope_is_per_user(tmp_path: Path, monkeypatch):
         listed = film_lists()
         assert "Mine" in listed
         assert "Ingrids Filme" not in listed
-        assert store.get_by_tmdb_id(329865)["status"] == "completed"
+        arrived = store.get_by_tmdb_id(329865)
+        assert arrived is not None
+        assert arrived["status"] == "completed"
         assert store.library_tmdb_ids() == {329865}
-        assert arrival["id"] == store.get_by_tmdb_id(329865)["id"]
+        assert arrival["id"] == arrived["id"]
 
     with _signed_in(ADMIN_USER_ID):
         assert [row["name"] for row in store.list_lists()] == ["Ingrids Filme"]
-        assert store.get_by_tmdb_id(348)["status"] == "plantowatch"
+        alien_row = store.get_by_tmdb_id(348)
+        assert alien_row is not None
+        assert alien_row["status"] == "plantowatch"
         assert store.get_by_tmdb_id(329865) is None
         assert store.library_tmdb_ids() == {348}
         listed = film_lists()

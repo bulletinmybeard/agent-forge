@@ -22,8 +22,12 @@ def _wall(value: str) -> None:
 
 
 def test_iso_keeps_the_wall_time_and_adds_the_local_offset():
-    _wall(_iso(NAIVE))
-    _wall(_iso("2026-11-05T21:55:14"))
+    naive = _iso(NAIVE)
+    text = _iso("2026-11-05T21:55:14")
+    assert naive is not None
+    assert text is not None
+    _wall(naive)
+    _wall(text)
     assert _iso(None) is None
     assert _iso("") is None
 

@@ -231,9 +231,7 @@ class FilmStore:
         if tmdb_id is not None:
             existing = self._conn.execute("SELECT id FROM media WHERE tmdb_id = ?", (tmdb_id,)).fetchone()
         if existing is None and simkl_id is not None:
-            existing = self._conn.execute(
-                "SELECT id FROM media WHERE simkl_id = ?", (simkl_id,)
-            ).fetchone()
+            existing = self._conn.execute("SELECT id FROM media WHERE simkl_id = ?", (simkl_id,)).fetchone()
         fields = (
             row.get("type") or "movie",
             row.get("title") or "",

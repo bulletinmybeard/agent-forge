@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import cast
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -17,6 +18,17 @@ from web.server.auth_api import users_router
 from web.server.database import ChatDatabase
 from web.server.identity import ADMIN_USER_ID, hash_password, reset_current_user, set_current_user
 from web.server.ownership import session_unavailable_reason
+
+
+def _uid(user) -> str:
+    return cast(str, user.id)
+
+
+def _restore_db(previous: ChatDatabase | None) -> None:
+    if previous is None:
+        api_module._db = None
+        return
+    api_module.set_database(previous)
 
 
 def test_reason_splits_missing_and_denied():
@@ -46,7 +58,7 @@ def test_hidden_session_is_one_404(tmp_path, monkeypatch):
     db.set_user_password(ADMIN_USER_ID, hash_password("admin-pass-1"))
     personal = db.create_user("personal", hash_password("personal-pass-1"))
     db.create_session("admin-chat", title="Admin")
-    token = set_current_user(personal.id)
+    token = set_current_user(_uid(personal))
     try:
         db.create_session("personal-chat", title="Personal")
     finally:
@@ -76,7 +88,7 @@ def test_hidden_session_is_one_404(tmp_path, monkeypatch):
     finally:
         log.removeHandler(grab)
         set_auth_database(None)
-        api_module.set_database(previous)
+        _restore_db(previous)
 
     assert missing.status_code == 404
     assert denied.status_code == 404
