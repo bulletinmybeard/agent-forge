@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from typing import cast
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -27,6 +28,23 @@ from web.server.identity import (
 )
 
 _MIGRATION = importlib.import_module("web.server.database.migrations.versions.006_users")
+
+
+def _uid(user) -> str:
+    return cast(str, user.id)
+
+
+def _username(db: ChatDatabase, user_id: str) -> str:
+    user = db.get_user(user_id)
+    assert user is not None
+    return cast(str, user.username)
+
+
+def _restore_db(previous: ChatDatabase | None) -> None:
+    if previous is None:
+        api_module._db = None
+        return
+    api_module.set_database(previous)
 
 
 def test_admin_id_matches_the_migration():
@@ -92,7 +110,9 @@ def test_upgrade_from_005_backfills_admin(tmp_path):
     engine = create_engine(f"sqlite:///{db_path}", poolclass=NullPool)
     try:
         with engine.connect() as conn:
-            admin = conn.execute(text("SELECT username, is_admin FROM users WHERE id = :id"), {"id": ADMIN_USER_ID}).one()
+            admin = conn.execute(
+                text("SELECT username, is_admin FROM users WHERE id = :id"), {"id": ADMIN_USER_ID}
+            ).one()
             assert admin[0] == "admin"
             assert admin[1] in (1, True)
             owner = conn.execute(text("SELECT user_id FROM chat_sessions WHERE id = 's1'")).scalar()
@@ -108,13 +128,13 @@ def test_upgrade_from_005_backfills_admin(tmp_path):
     # Same key, two users. The old global unique would reject the second row.
     db = ChatDatabase(db_path)
     personal = db.create_user("personal", hash_password("personal-pass-1"))
-    token = set_current_user(personal.id)
+    token = set_current_user(_uid(personal))
     try:
         db.upsert_fact("preference", "editor", "vim")
     finally:
         reset_current_user(token)
     db.upsert_fact("preference", "editor", "emacs")
-    token = set_current_user(personal.id)
+    token = set_current_user(_uid(personal))
     try:
         facts = db.get_all_facts()
     finally:
@@ -127,7 +147,7 @@ def test_sessions_do_not_cross_users(tmp_path):
     db.create_tables()
     db.create_session("admin-chat", title="Admin")
     personal = db.create_user("personal", hash_password("personal-pass-1"))
-    token = set_current_user(personal.id)
+    token = set_current_user(_uid(personal))
     try:
         db.create_session("personal-chat", title="Personal")
         assert db.get_session("admin-chat") is None
@@ -165,7 +185,7 @@ def test_login_cookie_and_keys_stay_on_that_user(tmp_path, monkeypatch):
     db.set_user_password(ADMIN_USER_ID, hash_password("admin-pass-1"))
     personal = db.create_user("personal", hash_password("personal-pass-1"))
     db.create_session("admin-chat", title="Admin")
-    token = set_current_user(personal.id)
+    token = set_current_user(_uid(personal))
     try:
         db.create_session("personal-chat", title="Personal")
     finally:
@@ -213,7 +233,9 @@ def test_login_cookie_and_keys_stay_on_that_user(tmp_path, monkeypatch):
             headers={"X-API-Key": secret},
         )
         assert denied.status_code == 403
-        stolen = client.post("/api/auth/keys", json={"name": "nope", "user_id": ADMIN_USER_ID}, headers={"X-API-Key": secret})
+        stolen = client.post(
+            "/api/auth/keys", json={"name": "nope", "user_id": ADMIN_USER_ID}, headers={"X-API-Key": secret}
+        )
         assert stolen.status_code == 403
 
         work = client.post(
@@ -235,7 +257,7 @@ def test_login_cookie_and_keys_stay_on_that_user(tmp_path, monkeypatch):
         assert client.get("/api/sessions", headers={"X-API-Key": issued.json()["secret"]}).json() == []
     finally:
         set_auth_database(None)
-        api_module.set_database(previous_db)
+        _restore_db(previous_db)
 
 
 def test_internal_token_cannot_pick_a_session(tmp_path, monkeypatch):
@@ -269,7 +291,7 @@ def test_internal_token_cannot_pick_a_session(tmp_path, monkeypatch):
         assert db.get_messages("admin-chat")[0].content == "hi"
     finally:
         set_auth_database(None)
-        api_module.set_database(previous_db)
+        _restore_db(previous_db)
 
 
 def test_auth_off_skips_the_wall(tmp_path, monkeypatch):
@@ -280,7 +302,7 @@ def test_auth_off_skips_the_wall(tmp_path, monkeypatch):
     db.create_tables()
     personal = db.create_user("personal", hash_password("personal-pass-1"))
     db.create_session("admin-chat")
-    token = set_current_user(personal.id)
+    token = set_current_user(_uid(personal))
     try:
         db.create_session("personal-chat")
     finally:
@@ -302,7 +324,7 @@ def test_auth_off_skips_the_wall(tmp_path, monkeypatch):
         assert event.status_code == 200
     finally:
         set_auth_database(None)
-        api_module.set_database(previous_db)
+        _restore_db(previous_db)
 
 
 def test_admin_username_env_is_the_login_name(tmp_path, monkeypatch):
@@ -312,7 +334,7 @@ def test_admin_username_env_is_the_login_name(tmp_path, monkeypatch):
     db.create_tables()
     apply_admin_username(db)
     db.set_user_password(ADMIN_USER_ID, hash_password("admin-pass-1"))
-    assert db.get_user(ADMIN_USER_ID).username == "ops-user"
+    assert _username(db, ADMIN_USER_ID) == "ops-user"
 
     previous_db = api_module._db
     app = _app(db)
@@ -325,13 +347,13 @@ def test_admin_username_env_is_the_login_name(tmp_path, monkeypatch):
         assert logged_in.json()["username"] == "ops-user"
     finally:
         set_auth_database(None)
-        api_module.set_database(previous_db)
+        _restore_db(previous_db)
 
 
 def test_admin_username_env_renames_and_rejects_a_bad_or_taken_name(tmp_path, monkeypatch):
     db = ChatDatabase(tmp_path / "chat.db")
     db.create_tables()
-    assert db.get_user(ADMIN_USER_ID).username == "admin"
+    assert _username(db, ADMIN_USER_ID) == "admin"
     db.create_user("taken-name", hash_password("taken-pass-1"))
 
     monkeypatch.setenv("AGENTFORGE_ADMIN_USERNAME", "taken-name")
@@ -341,7 +363,7 @@ def test_admin_username_env_renames_and_rejects_a_bad_or_taken_name(tmp_path, mo
         assert "username" in str(exc)
     else:
         raise AssertionError("admin rename collided with an existing user")
-    assert db.get_user(ADMIN_USER_ID).username == "admin"
+    assert _username(db, ADMIN_USER_ID) == "admin"
 
     monkeypatch.setenv("AGENTFORGE_ADMIN_USERNAME", "not an email")
     try:
@@ -350,11 +372,11 @@ def test_admin_username_env_renames_and_rejects_a_bad_or_taken_name(tmp_path, mo
         assert "AGENTFORGE_ADMIN_USERNAME" in str(exc)
     else:
         raise AssertionError("invalid admin username was accepted")
-    assert db.get_user(ADMIN_USER_ID).username == "admin"
+    assert _username(db, ADMIN_USER_ID) == "admin"
 
     monkeypatch.setenv("AGENTFORGE_ADMIN_USERNAME", "ops-user")
     apply_admin_username(db)
-    assert db.get_user(ADMIN_USER_ID).username == "ops-user"
+    assert _username(db, ADMIN_USER_ID) == "ops-user"
 
 
 def test_yaml_script_key_and_admin_password_are_separate(tmp_path, monkeypatch):
@@ -383,7 +405,7 @@ def test_yaml_script_key_and_admin_password_are_separate(tmp_path, monkeypatch):
         assert [row["id"] for row in as_script.json()] == ["admin-chat"]
     finally:
         set_auth_database(None)
-        api_module.set_database(previous_db)
+        _restore_db(previous_db)
 
 
 def test_admin_edits_and_deletes_other_users(tmp_path, monkeypatch):
@@ -394,7 +416,7 @@ def test_admin_edits_and_deletes_other_users(tmp_path, monkeypatch):
     db.create_session("admin-chat")
     personal = db.create_user("personal", hash_password("personal-pass-1"))
     other = db.create_user("other", hash_password("other-pass-1"))
-    token = set_current_user(personal.id)
+    token = set_current_user(_uid(personal))
     try:
         db.create_session("personal-chat")
         db.upsert_fact("preference", "editor", "vim")
@@ -436,15 +458,15 @@ def test_admin_edits_and_deletes_other_users(tmp_path, monkeypatch):
         client.cookies.clear()
         removed = client.delete(f"/api/users/{personal.id}", headers=headers)
         assert removed.status_code == 200
-        assert db.get_user(personal.id) is None
+        assert db.get_user(_uid(personal)) is None
         assert db.get_session("personal-chat") is None
         assert db.get_all_facts() == []
         assert db.get_session("admin-chat") is not None
-        assert db.get_user(other.id) is not None
+        assert db.get_user(_uid(other)) is not None
         assert db.get_user(ADMIN_USER_ID) is not None
     finally:
         set_auth_database(None)
-        api_module.set_database(previous_db)
+        _restore_db(previous_db)
 
 
 def test_admin_impersonates_a_user_and_can_return(tmp_path, monkeypatch):
@@ -455,7 +477,7 @@ def test_admin_impersonates_a_user_and_can_return(tmp_path, monkeypatch):
     personal = db.create_user("personal", hash_password("personal-pass-1"))
     other = db.create_user("other", hash_password("other-pass-1"))
     db.create_session("admin-chat", title="Admin")
-    token = set_current_user(personal.id)
+    token = set_current_user(_uid(personal))
     try:
         db.create_session("personal-chat", title="Personal")
     finally:
@@ -515,7 +537,7 @@ def test_admin_impersonates_a_user_and_can_return(tmp_path, monkeypatch):
         assert [row["id"] for row in client.get("/api/sessions").json()] == ["admin-chat"]
     finally:
         set_auth_database(None)
-        api_module.set_database(previous_db)
+        _restore_db(previous_db)
 
 
 def test_a_normal_user_cannot_impersonate(tmp_path, monkeypatch):
@@ -539,7 +561,7 @@ def test_a_normal_user_cannot_impersonate(tmp_path, monkeypatch):
         assert client.get("/api/auth/me").json()["id"] == personal.id
     finally:
         set_auth_database(None)
-        api_module.set_database(previous_db)
+        _restore_db(previous_db)
 
 
 def test_upgrade_from_007_adds_impersonator_column(tmp_path):

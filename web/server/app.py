@@ -174,7 +174,7 @@ async def lifespan(app: FastAPI):
         # else is data/uploads/<session_id>/ and follows the session owner.
         owner_key = filepath.split("/", 1)[0]
         if owner_key not in {"monitor", "screenshots"} and not session_owned(owner_key):
-                raise HTTPException(status_code=404, detail="not found")
+            raise HTTPException(status_code=404, detail="not found")
         return FileResponse(candidate, headers={"X-Content-Type-Options": "nosniff"})
 
     # Make database available to WebSocket handler

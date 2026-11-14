@@ -48,6 +48,7 @@ def submit_with_context(executor: concurrent.futures.Executor, fn: Callable, /, 
     ctx = contextvars.copy_context()
     return executor.submit(ctx.run, fn, *args)
 
+
 _saq_dispatch_tool: Callable[..., str] | None = None
 try:
     from web.server.queue.dispatch_compat import saq_dispatch_tool as _saq_dispatch_impl

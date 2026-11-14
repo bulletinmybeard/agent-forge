@@ -96,7 +96,8 @@ def _check_question(name: str, spec: Any) -> dict[str, Any]:
         raise SystemOneError(f"question {name!r} must be an object")
     extra = set(spec) - _QUESTION_KEYS
     if extra:
-        raise SystemOneError(f"question {name!r} has unknown keys: {sorted(extra)}")
+        names = ", ".join(sorted(str(key) for key in extra))
+        raise SystemOneError(f"question {name!r} has unknown keys: {names}")
     qtype = spec.get("type")
     if qtype not in _QUESTION_TYPES:
         raise SystemOneError(f"question {name!r} type must be choice, noul, or score")

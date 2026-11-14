@@ -2809,9 +2809,7 @@ async def _classify_mode(
             seen_ids: set[str] = set()
             # Drop connector entries from the shared dict. Another user's
             # alias can sit on the same key. Add back only this user's.
-            visible = {
-                alias: cfg for alias, cfg in agents_registry.items() if cfg.get("source") != "connector"
-            }
+            visible = {alias: cfg for alias, cfg in agents_registry.items() if cfg.get("source") != "connector"}
             visible.update(_connector_aliases(rt))
             for alias, cfg in visible.items():
                 agent_id = (cfg.get("id") or alias).strip()
@@ -11825,9 +11823,7 @@ async def _run_review(
                 for sa_id, sa_label, sa_file, sa_desc in _REVIEW_SUB_AGENTS:
                     prompt_text = _load_review_prompt(sa_file)
                     full_prompt = f"{prompt_text}\n{extra_rules}\n\n{context_preamble}"
-                    futures[submit_with_context(executor, _run_named_agent, sa_id, full_prompt, client)] = (
-                        sa_id
-                    )
+                    futures[submit_with_context(executor, _run_named_agent, sa_id, full_prompt, client)] = sa_id
                 for future in as_completed(futures):
                     agent_id = futures[future]
                     try:
@@ -12490,8 +12486,7 @@ async def _run_research(
         # Launch all sub-agents in parallel
         with ThreadPoolExecutor(max_workers=research_cfg["max_workers"], thread_name_prefix="research") as executor:
             thread_futures = {
-                submit_with_context(executor, _run_research_sub_agent, spec): spec["id"]
-                for spec in sub_agent_specs
+                submit_with_context(executor, _run_research_sub_agent, spec): spec["id"] for spec in sub_agent_specs
             }
 
             # Wrap thread futures as asyncio futures so we can await them

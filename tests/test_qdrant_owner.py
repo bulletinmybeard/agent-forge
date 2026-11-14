@@ -6,7 +6,7 @@ import types
 from unittest.mock import MagicMock
 
 import pytest
-from qdrant_client.models import Filter
+from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from app.security import ADMIN_USER_ID, reset_current_user, set_current_user
 from app.services.knowledge_vector_service import KnowledgeVectorService
@@ -104,8 +104,13 @@ def test_qdrant_tool_filter_skips_the_indexed_corpus(wall):
     assert shared is None
     personal = restrict_filter(settings.knowledge.mail_collection_name, None)
     assert isinstance(personal, Filter)
-    assert personal.must[0].key == "user_id"
-    assert personal.must[0].match.value == _OTHER
+    must = personal.must
+    assert isinstance(must, list)
+    cond = must[0]
+    assert isinstance(cond, FieldCondition)
+    assert cond.key == "user_id"
+    assert isinstance(cond.match, MatchValue)
+    assert cond.match.value == _OTHER
 
 
 def test_delete_personal_points_skips_conversation_memory():

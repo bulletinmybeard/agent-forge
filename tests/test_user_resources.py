@@ -7,13 +7,15 @@ from __future__ import annotations
 
 import fnmatch
 import json
+from typing import cast
 
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import NullPool
 
+from agentforge.connectors import ConnectorRegistry
 from agentforge.connectors.manager import ConnectionManager
-from agentforge.tools import sql_schema_tool as schema
+from agentforge.tools.registry import ToolRegistry
 from web.server.database import ChatDatabase
 from web.server.database.migrate import upgrade
 from web.server.database.models import Connection
@@ -27,6 +29,10 @@ class _Registry:
 
 class _Tools:
     pass
+
+
+def _manager(factory) -> ConnectionManager:
+    return ConnectionManager(factory, cast(ConnectorRegistry, _Registry()), cast(ToolRegistry, _Tools()))
 
 
 class _Redis:
@@ -136,7 +142,7 @@ def test_jobs_and_connections_are_hidden_from_the_other_user(tmp_path):
         )
         session.commit()
 
-    token = set_current_user(other.id)
+    token = set_current_user(cast(str, other.id))
     try:
         db.create_scheduled_job("job-other", "other job", "echo other", "0 0 * * *")
         db.create_monitor_job("mon-other", "other page", "https://example.test/other", cron="0 * * * *")
@@ -159,7 +165,7 @@ def test_jobs_and_connections_are_hidden_from_the_other_user(tmp_path):
         assert [job.id for job in db.list_monitor_jobs()] == ["mon-other"]
         assert db.get_monitor_job("mon-admin") is None
 
-        mgr = ConnectionManager(db.SessionLocal, _Registry(), _Tools())
+        mgr = _manager(db.SessionLocal)
         assert [row["id"] for row in mgr.list_connections()] == ["conn-other"]
         assert mgr.get_connection("conn-admin") is None
         with pytest.raises(ValueError):
@@ -183,13 +189,14 @@ def test_jobs_and_connections_are_hidden_from_the_other_user(tmp_path):
         reset_current_user(token)
 
     assert {job.id for job in db.list_scheduled_jobs()} == {"job-admin", "job-other"}
-    assert {row["id"] for row in ConnectionManager(db.SessionLocal, _Registry(), _Tools()).list_connections()} == {
+    assert {row["id"] for row in _manager(db.SessionLocal).list_connections()} == {
         "conn-admin",
         "conn-other",
     }
 
 
 def test_schema_cache_is_per_user_and_legacy_keys_belong_to_admin(monkeypatch):
+    schema = pytest.importorskip("agentforge.tools.sql_schema_tool")
     redis = _Redis()
     monkeypatch.setattr(schema, "_get_redis", lambda: redis)
     legacy = json.dumps({"table_count": 2, "total_columns": 4, "view_count": 0, "_cached_at": "t0"})
@@ -198,6 +205,7 @@ def test_schema_cache_is_per_user_and_legacy_keys_belong_to_admin(monkeypatch):
     admin = set_current_user(ADMIN_USER_ID)
     try:
         found = schema.get_cached_schema("companydb")
+        assert found is not None
         assert found["table_count"] == 2
         assert "schema_cache:companydb" not in redis.store
         assert f"schema_cache:{ADMIN_USER_ID}:companydb" in redis.store
@@ -210,7 +218,9 @@ def test_schema_cache_is_per_user_and_legacy_keys_belong_to_admin(monkeypatch):
         assert schema.get_cached_schema("companydb") is None
         assert schema.get_cached_schema("lunadb") is None
         schema._set_cached_schema("companydb", {"table_count": 1, "total_columns": 1, "view_count": 0})
-        assert schema.get_cached_schema_metadata("companydb")["table_count"] == 1
+        meta = schema.get_cached_schema_metadata("companydb")
+        assert meta is not None
+        assert meta["table_count"] == 1
         assert schema.clear_all_cached_schemas() == 1
         assert schema.get_cached_schema("companydb") is None
     finally:
@@ -218,7 +228,10 @@ def test_schema_cache_is_per_user_and_legacy_keys_belong_to_admin(monkeypatch):
 
     admin = set_current_user(ADMIN_USER_ID)
     try:
-        assert schema.get_cached_schema("companydb")["table_count"] == 2
-        assert schema.get_cached_schema("lunadb")["table_count"] == 9
+        company = schema.get_cached_schema("companydb")
+        luna = schema.get_cached_schema("lunadb")
+        assert company is not None and luna is not None
+        assert company["table_count"] == 2
+        assert luna["table_count"] == 9
     finally:
         reset_current_user(admin)

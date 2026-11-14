@@ -563,9 +563,7 @@ class ConnectionManager:
         aliases = []
         owned = self.list_connections(user_id=conn.get("user_id"), respect_actor=False)
 
-        same_type = [
-            c for c in owned if c["connector_type"] == conn["connector_type"] and c["status"] == "active"
-        ]
+        same_type = [c for c in owned if c["connector_type"] == conn["connector_type"] and c["status"] == "active"]
         if len(same_type) <= 1:
             aliases.extend(plugin.default_aliases)
 
@@ -573,9 +571,7 @@ class ConnectionManager:
         account_members = 0
         if acct:
             account_members = sum(
-                1
-                for c in owned
-                if c["status"] == "active" and (c.get("account_identifier") or "").strip() == acct
+                1 for c in owned if c["status"] == "active" and (c.get("account_identifier") or "").strip() == acct
             )
         if account_members < 2:
             label_alias = f"@{label_slug(conn['label'])}"

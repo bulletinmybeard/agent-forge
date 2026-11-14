@@ -841,11 +841,7 @@ async def push_worker_event(session_id: str, body: _EventBody):
     db = get_db()
 
     msg_type = body.msg_type or (body.msg or {}).get("type")
-    if (
-        body.job_id
-        and msg_type in ("cancelled", "agent.cancelled")
-        and body.job_id in state.suppress_cancel_jobs
-    ):
+    if body.job_id and msg_type in ("cancelled", "agent.cancelled") and body.job_id in state.suppress_cancel_jobs:
         state.suppress_cancel_jobs.discard(body.job_id)
         return {"ok": True, "suppressed": True}
 

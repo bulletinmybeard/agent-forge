@@ -98,9 +98,7 @@ def admin_username() -> str:
         return DEFAULT_ADMIN_USERNAME
     name = normalize_username(raw)
     if name is None:
-        raise ValueError(
-            "AGENTFORGE_ADMIN_USERNAME must be 2-32 characters: a letter, then letters, digits, _ or -"
-        )
+        raise ValueError("AGENTFORGE_ADMIN_USERNAME must be 2-32 characters: a letter, then letters, digits, _ or -")
     return name
 
 

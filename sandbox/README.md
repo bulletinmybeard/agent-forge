@@ -15,12 +15,12 @@ Only the runner scaffolding ships here. Write your own probe scripts under `sand
 Put it in `sandbox/scripts/` and run it from the repo root (`python sandbox/scripts/my_probe.py`):
 
 ```python
-import sandbox            # MUST be first — patches sys.path + env from config
+import sandbox  # MUST be first — patches sys.path + env from config
 import argparse
 import sandbox_conf as conf
 
 parser = argparse.ArgumentParser()
-conf.add_common_args(parser)          # --profile / --verbose
+conf.add_common_args(parser)  # --profile / --verbose
 args = parser.parse_args()
 
 ai, reasoning_off = conf.make_burst_client(args)

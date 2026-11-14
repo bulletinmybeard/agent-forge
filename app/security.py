@@ -65,6 +65,7 @@ except ModuleNotFoundError:
     def current_user_id() -> str | None:
         return _rag_user_id.get()
 
+
 logger = logging.getLogger(__name__)
 
 # ChatDatabase, set from the web lifespan once the SQLite file is open.

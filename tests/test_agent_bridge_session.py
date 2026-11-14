@@ -19,7 +19,7 @@ def _registry() -> ToolRegistry:
 
 
 def _bridge(sink: list) -> AgentBridge:
-    return AgentBridge(sink.append, ConfirmationBroker(), loop=None)  # type: ignore[arg-type]
+    return AgentBridge(sink.append, ConfirmationBroker(), loop=None)  # ty: ignore[invalid-argument-type]
 
 
 def _names(sink: list, msg_type: str) -> list[str]:

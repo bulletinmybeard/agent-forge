@@ -11,7 +11,11 @@ import logging
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from agentforge.tools.sql_schema_tool import clear_schema_cache_for_user
+try:
+    from agentforge.tools.sql_schema_tool import clear_schema_cache_for_user
+except ImportError:
+    # Private plugin. Absent in CI and in a checkout without the local file.
+    clear_schema_cache_for_user = None
 from app.security import auth_enabled
 from app.services.qdrant_owner import delete_personal_points
 from web.server.identity import (
@@ -336,7 +340,8 @@ def _drop_deleted_user_runtime(user_id: str) -> None:
     except Exception:
         logger.debug("connector unload after user delete failed", exc_info=True)
     try:
-        clear_schema_cache_for_user(user_id)
+        if clear_schema_cache_for_user is not None:
+            clear_schema_cache_for_user(user_id)
     except Exception:
         logger.debug("schema cache clear after user delete failed", exc_info=True)
 

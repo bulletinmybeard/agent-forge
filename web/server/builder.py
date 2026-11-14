@@ -896,9 +896,7 @@ async def _execute_plan(
                 _mark_progress_file(progress_path, task.id, "running", "", progress_lock)
         snapshot = set(complete_ids)
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="build") as pool:
-            futs = {
-                submit_with_context(pool, _run_task, task, "", snapshot): task for task in run_tasks
-            }
+            futs = {submit_with_context(pool, _run_task, task, "", snapshot): task for task in run_tasks}
             for fut in as_completed(futs):
                 task = futs[fut]
                 try:

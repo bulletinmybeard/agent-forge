@@ -221,9 +221,7 @@ class KnowledgeVectorService:
                 with_vectors=False,
             )
             return {
-                str(p.id): p.payload.get("content_hash", "")
-                for p in points
-                if p.payload and payload_visible(p.payload)
+                str(p.id): p.payload.get("content_hash", "") for p in points if p.payload and payload_visible(p.payload)
             }
         except Exception as e:
             logger.warning("Failed to retrieve content hashes: %s", e)

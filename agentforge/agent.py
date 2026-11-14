@@ -1571,9 +1571,7 @@ class AgentLoop:
                 logger.debug("[Agent] Executing %d tool calls in parallel", n_calls)
                 with concurrent.futures.ThreadPoolExecutor(max_workers=min(n_calls, 4)) as exec_pool:
                     # Submit all calls; preserve ordering.
-                    futures = [
-                    submit_with_context(exec_pool, _execute_single, tc) for tc in response.tool_calls
-                ]
+                    futures = [submit_with_context(exec_pool, _execute_single, tc) for tc in response.tool_calls]
                     tool_results = [f.result() for f in futures]
             else:
                 tool_results = [_execute_single(tc) for tc in response.tool_calls]
