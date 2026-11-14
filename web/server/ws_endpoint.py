@@ -12347,7 +12347,6 @@ async def _run_research(
         # Phase A — Planning: decompose query into sub-investigations
         # =====================================================================
         from agentforge.agent import AgentLoop
-        from agentforge.client import AIClient
         from agentforge.review.loop import extract_agent_loop_output
 
         planner_prompt = (
