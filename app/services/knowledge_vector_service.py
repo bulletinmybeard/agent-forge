@@ -4,7 +4,6 @@ Sibling of VectorService — same patterns, dedicated to user-created
 knowledge entries (notes, references, documentation, documents, cheatsheets, snippets).
 """
 
-import hashlib
 import logging
 
 from qdrant_client import QdrantClient
@@ -22,9 +21,9 @@ from qdrant_client.models import (
 from app.config import settings
 from app.services.qdrant_owner import (
     backfill_missing_owner,
-    hash_material,
     owner_condition,
     payload_visible,
+    point_id_digest,
 )
 
 logger = logging.getLogger(__name__)
@@ -463,7 +462,7 @@ class KnowledgeVectorService:
 
     @staticmethod
     def generate_point_id(content_hash: str) -> str:
-        h = hashlib.md5(hash_material(content_hash).encode()).hexdigest()
+        h = point_id_digest(content_hash)
         return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}"
 
 

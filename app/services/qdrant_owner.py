@@ -13,6 +13,7 @@ which is the key the macOS apps send.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 
@@ -85,6 +86,19 @@ def hash_material(content_hash: str) -> str:
     if not actor or actor == ADMIN_USER_ID:
         return content_hash
     return f"{actor}:{content_hash}"
+
+
+def point_id_digest(content_hash: str) -> str:
+    """32 hex digits for a Qdrant point id.
+
+    Admin and no caller keep MD5 of the content hash, the id already stored.
+    Any other user gets SHA-256 of ``user:content``. The user id is not an
+    MD5 input: that digest is only a stable address.
+    """
+    actor = current_user_id()
+    if actor and actor != ADMIN_USER_ID:
+        return hashlib.sha256(f"{actor}:{content_hash}".encode()).hexdigest()[:32]
+    return hashlib.md5(content_hash.encode(), usedforsecurity=False).hexdigest()
 
 
 def restrict_filter(collection: str, qfilter: Filter | None) -> Filter | None:

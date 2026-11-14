@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import types
 from unittest.mock import MagicMock
 
@@ -82,8 +83,14 @@ def test_search_requires_the_caller(wall):
     assert owners[0].match.value == _OTHER
 
 
+def _uuid_from_hex(digest: str) -> str:
+    return f"{digest[:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:]}"
+
+
 def test_admin_point_id_stays_the_historical_hash(monkeypatch):
+    historical = hashlib.md5(b"same-body", usedforsecurity=False).hexdigest()
     plain = KnowledgeVectorService.generate_point_id("same-body")
+    assert plain == _uuid_from_hex(historical)
     monkeypatch.setenv("AGENTFORGE_ADMIN_PASSWORD", "test-password")
     token = set_current_user(ADMIN_USER_ID)
     try:
@@ -92,7 +99,8 @@ def test_admin_point_id_stays_the_historical_hash(monkeypatch):
         reset_current_user(token)
     token = set_current_user(_OTHER)
     try:
-        assert KnowledgeVectorService.generate_point_id("same-body") != plain
+        personal = hashlib.sha256(f"{_OTHER}:same-body".encode()).hexdigest()[:32]
+        assert KnowledgeVectorService.generate_point_id("same-body") == _uuid_from_hex(personal)
     finally:
         reset_current_user(token)
 
