@@ -5949,7 +5949,7 @@ async def _run_chat(
 
         config_msg = protocol.agent_config(
             profile=profile_name,
-            model=model_name,
+            model=_chat_ai_client.display_label,
             tools=0,
             session_id=session_id,
             provider=_chat_ai_client.profile.provider,
@@ -6013,7 +6013,7 @@ async def _run_chat(
                 "phase": "pipeline_running",
                 "detail": {
                     "step": "generating",
-                    "text": f"Generating response ({_chat_ai_client.profile.model})...",
+                    "text": f"Generating response ({_chat_ai_client.display_label})...",
                 },
             },
         )
@@ -6268,7 +6268,7 @@ async def _run_scheduler(
 
         config_msg = protocol.agent_config(
             profile=profile,
-            model=model_name,
+            model=answer_role.profile.display_label,
             tools=0,
             session_id=session_id,
             provider=answer_role.profile.provider,
@@ -6379,8 +6379,8 @@ async def _run_scheduler(
                 _cfg = _ai_client._config
                 p_prev = _cfg.get_profile(prev_name)
                 p_next = _cfg.get_profile(next_name)
-                prev_model = p_prev.model
-                next_model = p_next.model
+                prev_model = p_prev.display_label
+                next_model = p_next.display_label
                 provider = p_next.provider
             except Exception:
                 pass
@@ -6900,7 +6900,7 @@ async def _run_monitor(
 
         config_msg = protocol.agent_config(
             profile=profile,
-            model=model_name,
+            model=_llm_client.display_label,
             tools=0,
             session_id=session_id,
             provider=provider_name,
@@ -7377,7 +7377,7 @@ async def _run_search(
 
         config_msg = protocol.agent_config(
             profile=profile_name,
-            model=model_name,
+            model=answer_role.profile.display_label,
             tools=0,
             session_id=session_id,
             provider=answer_role.profile.provider,
@@ -7951,7 +7951,7 @@ async def _run_web_search(
         actual_tool_count = len(_WEB_SEARCH_TOOLS)
         config_msg = protocol.agent_config(
             profile=profile,
-            model=agent_client.model,
+            model=agent_client.display_label,
             tools=actual_tool_count,
             session_id=session_id,
             provider=agent_client.profile.provider,
@@ -8035,9 +8035,9 @@ async def _run_web_search(
         try:
             from agentforge.client import get_models_used
 
-            _models_chain = get_models_used(agent_client.model)
+            _models_chain = get_models_used(agent_client.display_label)
         except Exception:
-            _models_chain = [agent_client.model] if agent_client.model else []
+            _models_chain = [agent_client.display_label] if agent_client.model else []
         summary_msg = protocol.agent_summary(
             iterations=len(iterations),
             elapsed=total_elapsed,
@@ -8262,7 +8262,7 @@ async def _run_log_analysis(
         actual_tool_count = len(_LOG_ANALYSIS_TOOLS)
         config_msg = protocol.agent_config(
             profile=profile,
-            model=agent_client.model,
+            model=agent_client.display_label,
             tools=actual_tool_count,
             session_id=session_id,
             provider=agent_client.profile.provider,
@@ -8344,9 +8344,9 @@ async def _run_log_analysis(
         try:
             from agentforge.client import get_models_used
 
-            _models_chain = get_models_used(agent_client.model)
+            _models_chain = get_models_used(agent_client.display_label)
         except Exception:
-            _models_chain = [agent_client.model] if agent_client.model else []
+            _models_chain = [agent_client.display_label] if agent_client.model else []
         summary_msg = protocol.agent_summary(
             iterations=len(iterations),
             elapsed=total_elapsed,
@@ -8974,7 +8974,7 @@ async def _run_agent(
         actual_tool_count = len(tool_subset) if tool_subset else rt.tool_count
         config_msg = protocol.agent_config(
             profile=tool_profile,  # show the tool-set name (e.g., "pipeline") in the UI
-            model=agent_client.model,
+            model=agent_client.display_label,
             tools=actual_tool_count,
             session_id=session_id,
             provider=agent_client.profile.provider,
@@ -9179,7 +9179,7 @@ async def _run_agent(
                 await _step_event(
                     "synthesizing",
                     "running",
-                    detail=f"Writing the answer ({agent_client.model})",
+                    detail=f"Writing the answer ({agent_client.display_label})",
                 )
                 synth_response = await asyncio.to_thread(
                     agent_client.chat,
@@ -9264,9 +9264,11 @@ async def _run_agent(
         try:
             from agentforge.client import get_models_used
 
-            _models_chain = get_models_used(getattr(agent_client, "model", None))
+            _shown = getattr(agent_client, "display_label", None) or getattr(agent_client, "model", None)
+            _models_chain = get_models_used(_shown)
         except Exception:
-            _models_chain = [agent_client.model] if getattr(agent_client, "model", None) else []
+            _shown = getattr(agent_client, "display_label", None) or getattr(agent_client, "model", None)
+            _models_chain = [_shown] if _shown else []
 
         if parallel_plan and parallel_plan.get("parallel"):
             # Parallel summary — count shell calls across groups
@@ -9772,7 +9774,7 @@ async def _run_sql(
 
         config_msg = protocol.agent_config(
             profile="sql",
-            model=agent_client.model,
+            model=agent_client.display_label,
             tools=len(tool_subset),
             session_id=session_id,
             provider=agent_client.profile.provider,
@@ -10603,7 +10605,7 @@ async def _run_custom_agent(
         actual_tool_count = len(tool_list) if tool_list else rt.tool_count
         config_msg = protocol.agent_config(
             profile=profile,
-            model=agent_client.model,
+            model=agent_client.display_label,
             tools=actual_tool_count,
             session_id=session_id,
             provider=agent_client.profile.provider,
@@ -10683,9 +10685,9 @@ async def _run_custom_agent(
         try:
             from agentforge.client import get_models_used
 
-            _models_chain = get_models_used(agent_client.model)
+            _models_chain = get_models_used(agent_client.display_label)
         except Exception:
-            _models_chain = [agent_client.model] if agent_client.model else []
+            _models_chain = [agent_client.display_label] if agent_client.model else []
         summary_msg = protocol.agent_summary(
             iterations=len(iterations),
             elapsed=total_elapsed,
@@ -11034,6 +11036,7 @@ async def _run_coding(
         try:
             client = _AIClient(profile=profile_name, session_overrides=overrides)
             model_name = client.profile.model
+            model_label = client.display_label
             provider_name = client.profile.provider
         except Exception as exc:
             logger.warning(
@@ -11042,6 +11045,7 @@ async def _run_coding(
                 exc,
             )
             model_name = f"({profile_name} unresolved)"
+            model_label = model_name
             provider_name = "unknown"
 
         logger.info(
@@ -11055,7 +11059,7 @@ async def _run_coding(
 
         config_msg = protocol.agent_config(
             profile=profile_name,
-            model=model_name,
+            model=model_label,
             tools=5,  # code_find / code_narrow / code_transform / code_verify / code_apply
             session_id=session_id,
             provider=provider_name,
@@ -11818,7 +11822,7 @@ async def _run_review(
         n_tools = 1 if style == "single" else len(_REVIEW_SUB_AGENTS)
         config_msg = protocol.agent_config(
             profile="review",
-            model=_resolved_profile.model,
+            model=_resolved_profile.display_label,
             tools=n_tools,
             session_id=session_id,
             provider=_resolved_profile.provider,
@@ -11860,7 +11864,7 @@ async def _run_review(
             def _on_sub_event(kind: str, data: dict | None) -> None:
                 payload = data or {}
                 if kind == "thinking":
-                    model = payload.get("model") or getattr(client.profile, "model", "") or ""
+                    model = payload.get("model") or getattr(client, "display_label", "") or ""
                     msg: dict[str, Any] = {
                         "type": "review.progress",
                         "phase": "model",
@@ -11936,7 +11940,7 @@ async def _run_review(
                             "id": sa[0],
                             "label": sa[1],
                             "description": sa[3],
-                            "model": client.profile.model,
+                            "model": client.display_label,
                         }
                         for sa in _REVIEW_SUB_AGENTS
                     ],
@@ -11980,7 +11984,7 @@ async def _run_review(
                             "id": "reviewer",
                             "label": "Review",
                             "description": "Whole-diff review: contract, failures, tests",
-                            "model": reviewer_client.profile.model,
+                            "model": reviewer_client.display_label,
                         }
                     ],
                 }

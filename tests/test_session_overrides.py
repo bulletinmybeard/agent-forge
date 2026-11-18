@@ -82,6 +82,34 @@ def test_flat_model_wins_over_profiles_map():
     assert out.temperature == 0.9
 
 
+def test_model_override_drops_stale_label():
+    p = _base(label="minimax-m3")
+    out = apply_session_overrides(
+        p,
+        {"profiles": {"agent": {"model": "kimi-k3:cloud"}}},
+    )
+    assert out.model == "kimi-k3:cloud"
+    assert out.label == ""
+
+
+def test_temperature_override_keeps_label():
+    p = _base(label="minimax-m3")
+    out = apply_session_overrides(p, {"profiles": {"agent": {"temperature": 0.4}}})
+    assert out.model == p.model
+    assert out.label == "minimax-m3"
+    assert out.display_label == "minimax-m3"
+
+
+def test_explicit_label_survives_model_swap():
+    p = _base(label="minimax-m3")
+    out = apply_session_overrides(
+        p,
+        {"profiles": {"agent": {"model": "kimi-k3:cloud", "label": "kimi"}}},
+    )
+    assert out.model == "kimi-k3:cloud"
+    assert out.label == "kimi"
+
+
 def test_aiclient_accepts_session_overrides():
     from agentforge.client import AIClient
     from agentforge.config import get_config

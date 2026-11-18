@@ -178,7 +178,7 @@ async def run_builder(
         await send_and_persist(
             protocol.agent_config(
                 profile="builder",
-                model=profile.model,
+                model=profile.display_label,
                 tools=len(_BUILD_TOOLS) if phase == "build" else len(_PLAN_TOOLS),
                 session_id=session_id,
                 provider=profile.provider,

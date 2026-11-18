@@ -267,6 +267,16 @@ def _coerce_extra_body(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _profile_label(merged: dict[str, Any]) -> str:
+    """Optional display name. ``label`` wins over the ``model_label`` alias."""
+    raw = merged.get("label", None)
+    if raw is None:
+        raw = merged.get("model_label")
+    if raw is None:
+        return ""
+    return str(raw).strip()
+
+
 def _coerce_fallbacks(profile_name: str, value: Any) -> list[str]:
     """Validate the optional ``fallbacks:`` list on a profile."""
     if value is None:
@@ -290,6 +300,11 @@ class AIProfile:
 
     name: str
     model: str
+    # Optional UI name. The provider still receives ``model``. Empty means
+    # callers show ``model`` (or a normalised form of it). Inherited from
+    # the parent profile unless the child sets its own. YAML key ``label``;
+    # ``model_label`` is accepted as an alias.
+    label: str = ""
     provider: str = "ollama"  # "ollama" | "bedrock"
     host: str = "http://localhost:11434"
     timeout: int = 600
@@ -349,6 +364,12 @@ class AIProfile:
     # a nested "options" key merged into sampling options.
     extra_body: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def display_label(self) -> str:
+        """Name to show in the UI. Custom ``label``, otherwise the model id."""
+        text = (self.label or "").strip()
+        return text or self.model
+
     @classmethod
     def from_dict(cls, name: str, data: dict[str, Any], base: dict[str, Any] | None = None) -> AIProfile:
         """Build a profile from a config dict, filling gaps from *base* (top-level ai: section)."""
@@ -368,6 +389,7 @@ class AIProfile:
         return cls(
             name=name,
             model=model,
+            label=_profile_label(merged),
             provider=str(merged.get("provider", "ollama")).lower(),
             host=merged.get("host", "http://localhost:11434"),
             timeout=int(merged.get("timeout", 600)),

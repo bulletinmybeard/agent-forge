@@ -1430,7 +1430,8 @@ async def get_profiles(include_abstract: bool = False):
     individual ``bedrock-claude-*`` / ``deepinfra-*`` / ``openrouter-*`` abstracts
     directly.
     """
-    # Resolved profile info (model + temp + max_tokens + provider + abstract).
+    # Resolved profile info (model + label + temp + max_tokens + provider + abstract).
+    # ``label`` is optional and empty when the profile does not set one.
     profiles = af_settings.ollama.list_selectable_profiles(include_abstract=include_abstract)
 
     # Build the role → profile-name map from config.yaml's ollama.model_roles so
@@ -1469,6 +1470,9 @@ async def get_providers():
       (``AGENTFORGE_PROVIDER`` env var or ``ai.provider_override`` YAML key), or
       ``None`` if no global override is active. The frontend uses this as
       the placeholder for the "use server default" choice.
+    - ``labels`` — optional display name per abstract profile, same keys as
+      ``models``. Omitted when that profile has no ``label``. ``models``
+      stays the provider model id.
 
     Degrades gracefully when the framework ``ConfigManager`` can't init (e.g.,
     a dangling profile reference in YAML): returns Ollama-only so the UI keeps
@@ -1480,8 +1484,11 @@ async def get_providers():
 
     # Group abstract profile name -> model string by declared provider.
     # Used by the frontend ModelSelector to filter its dropdown to models
-    # that match the currently selected provider.
+    # that match the currently selected provider. ``models`` stays a
+    # name -> model-id map. ``labels`` is the optional display name for
+    # the same keys (omitted when the profile has no label).
     models_by_provider: dict[str, dict[str, str]] = {}
+    labels_by_provider: dict[str, dict[str, str]] = {}
     for name, info in profiles.items():
         if not info.get("abstract"):
             continue
@@ -1490,6 +1497,9 @@ async def get_providers():
         if not model:
             continue
         models_by_provider.setdefault(prov, {})[name] = model
+        label = (info.get("label") or "").strip()
+        if label:
+            labels_by_provider.setdefault(prov, {})[name] = label
 
     try:
         fw = get_fw_config()
@@ -1502,6 +1512,7 @@ async def get_providers():
             "available": available or ["ollama"],
             "configured": ["ollama"],
             "models": models_by_provider,
+            "labels": labels_by_provider,
             "default": None,
         }
 
@@ -1521,6 +1532,7 @@ async def get_providers():
         "available": available,
         "configured": configured,
         "models": models_by_provider,
+        "labels": labels_by_provider,
         "default": fw._provider_override,
     }
 
@@ -1564,6 +1576,7 @@ class PromptLabResult(BaseModel):
     profile: str
     provider: str = ""
     model: str = ""
+    label: str = ""
     content: str = ""
     latency_ms: int = 0
     prompt_tokens: int = 0
@@ -1623,6 +1636,7 @@ async def run_prompt_lab(req: PromptLabRequest) -> PromptLabResponse:
                 profile=name,
                 provider=(client.profile.provider or "").lower(),
                 model=client.profile.model or "",
+                label=(client.profile.label or "").strip(),
                 content=resp.content or "",
                 latency_ms=int((time.perf_counter() - start) * 1000),
                 prompt_tokens=int(resp.prompt_tokens or 0),
