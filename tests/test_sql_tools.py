@@ -209,9 +209,17 @@ def test_schema_markdown_groups_composite_foreign_keys():
     assert text.count("| `fk_line` |") == 1
     assert "`line` (`a`, `b`, `c`) → `sub` (`pa`, `pb`, `pc`) ON UPDATE CASCADE ON DELETE RESTRICT" in text
     assert "(`c`, `a`, `b`)" not in text
-    assert "| `fk_ctx` | `context` (`order_id`) | `order` (`order_id`) | RESTRICT | CASCADE | required, at most one |" in text
-    assert "| `fk_note_user` | `note` (`user_id`) | `users` (`id`) | CASCADE | CASCADE | required, at most one |" in text
-    assert "| `fk_line` | `line` (`a`, `b`, `c`) | `sub` (`pa`, `pb`, `pc`) | CASCADE | RESTRICT | required, many |" in text
+    assert (
+        "| `fk_ctx` | `context` (`order_id`) | `order` (`order_id`) | RESTRICT | CASCADE | required, at most one |"
+        in text
+    )
+    assert (
+        "| `fk_note_user` | `note` (`user_id`) | `users` (`id`) | CASCADE | CASCADE | required, at most one |" in text
+    )
+    assert (
+        "| `fk_line` | `line` (`a`, `b`, `c`) | `sub` (`pa`, `pb`, `pc`) | CASCADE | RESTRICT | required, many |"
+        in text
+    )
     bullet = "`fk_line`: `line` (`a`, `b`, `c`) → `sub` (`pa`, `pb`, `pc`) ON UPDATE CASCADE ON DELETE RESTRICT"
     assert text.count(bullet) == 2
     assert _MISSING_ACTIONS_NOTE not in text
@@ -305,14 +313,9 @@ def test_schema_markdown_name_matches_and_unmatched_ids():
     assert "| likely | `hidden_relations`.`relation_id` | `relation` (`id`) |" in name_part
     assert "name ends with `relation_id`" in name_part
     assert "| likely | `datacenters`.`cp_relation_address_id` | `relation_address` (`id`) |" in name_part
-    assert (
-        "| likely | `sales_order`.`sales_order_eu_account_relation_id` | `relation` (`id`) |"
-        in name_part
-    )
+    assert "| likely | `sales_order`.`sales_order_eu_account_relation_id` | `relation` (`id`) |" in name_part
     assert "| likely | `ticket_data`.`ticket` | `ticket` (`ticket`) |" in name_part
-    assert (
-        "| partial | `reports`.`hardware_id` | `hardware` (`id`, `part_of`) |" in name_part
-    )
+    assert "| partial | `reports`.`hardware_id` | `hardware` (`id`, `part_of`) |" in name_part
     assert "this column alone does not identify a row" in name_part
     assert "| partial | `peering`.`vlan` | `vlan` (`number`) |" in name_part
     assert "| partial | `snmpcommands`.`community` | `community` (none) |" in name_part
@@ -329,10 +332,7 @@ def test_schema_markdown_name_matches_and_unmatched_ids():
     assert "relation_id" not in unmatched_part
     assert "user_id" not in unmatched_part
 
-    bullet = (
-        "`fk_orders_user`: `orders` (`user_id`) → `users` (`id`) "
-        "ON UPDATE RESTRICT ON DELETE CASCADE"
-    )
+    bullet = "`fk_orders_user`: `orders` (`user_id`) → `users` (`id`) ON UPDATE RESTRICT ON DELETE CASCADE"
     assert text.count(bullet) == 2
     assert "Name matches (not enforced):" in text
     assert _MISSING_ACTIONS_NOTE not in text

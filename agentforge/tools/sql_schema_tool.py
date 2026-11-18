@@ -411,8 +411,7 @@ def _compact_schema(schema: dict) -> str:
     elif ccount <= 500:
         mode = "abbrev"
         lines.append(
-            "Types: vc=varchar, dec=decimal, dt=datetime, ts=timestamp, "
-            "big=bigint, ti=tinyint, txt=text, fl=float"
+            "Types: vc=varchar, dec=decimal, dt=datetime, ts=timestamp, big=bigint, ti=tinyint, txt=text, fl=float"
         )
     else:
         mode = "names"
@@ -453,9 +452,7 @@ def _compact_schema(schema: dict) -> str:
         extras = []
         fk_parts = []
         for fk in tinfo.get("foreign_keys") or []:
-            fk_parts.append(
-                f"{fk.get('column')}→{fk.get('ref_table')}.{fk.get('ref_column')}"
-            )
+            fk_parts.append(f"{fk.get('column')}→{fk.get('ref_table')}.{fk.get('ref_column')}")
         if fk_parts:
             extras.append("FK " + " | ".join(fk_parts))
         idx_parts = []
@@ -574,11 +571,14 @@ def _visible_cache(key_owner: str | None, actor: str | None) -> bool:
 
 
 def _decode_schema(raw: object) -> dict | None:
-    if not raw:
-        return None
     if isinstance(raw, bytes):
         raw = raw.decode()
-    return json.loads(raw)
+    if not isinstance(raw, str) or not raw:
+        return None
+    loaded = json.loads(raw)
+    if not isinstance(loaded, dict):
+        return None
+    return loaded
 
 
 def _read_schema(r, database: str, owner: str | None) -> dict | None:
@@ -884,38 +884,34 @@ def _md_cell(value: object) -> str:
 
 
 _MISSING_ACTIONS_NOTE = (
-    "ON UPDATE / ON DELETE were not in this schema cache. "
-    "Pass force_refresh=true to sql_save_schema to load them."
+    "ON UPDATE / ON DELETE were not in this schema cache. Pass force_refresh=true to sql_save_schema to load them."
 )
 
 
 def _base_tables(schema: dict) -> dict[str, dict]:
     """Tables only. Views also show up in information_schema.COLUMNS."""
     view_names = {v.get("name") for v in (schema.get("views") or []) if v.get("name")}
-    return {
-        name: info
-        for name, info in (schema.get("tables") or {}).items()
-        if name not in view_names
-    }
+    return {name: info for name, info in (schema.get("tables") or {}).items() if name not in view_names}
 
 
 def _group_foreign_keys(fks: list[dict]) -> list[dict]:
     """Collapse per-column FK rows into one entry per constraint, in key order."""
-    groups: dict[str, dict] = {}
+    groups: dict[str, dict[str, str]] = {}
+    pair_lists: dict[str, list[tuple[int, int, str, str]]] = {}
     order: list[str] = []
     for i, fk in enumerate(fks):
-        constraint = fk.get("constraint") or ""
+        constraint = str(fk.get("constraint") or "")
         key = constraint or f"#{i}"
         slot = groups.get(key)
         if slot is None:
             slot = {
                 "constraint": constraint,
-                "ref_table": fk.get("ref_table") or "",
-                "pairs": [],
+                "ref_table": str(fk.get("ref_table") or ""),
                 "update_rule": str(fk.get("update_rule") or ""),
                 "delete_rule": str(fk.get("delete_rule") or ""),
             }
             groups[key] = slot
+            pair_lists[key] = []
             order.append(key)
         if not slot["update_rule"]:
             slot["update_rule"] = str(fk.get("update_rule") or "")
@@ -926,14 +922,14 @@ def _group_foreign_keys(fks: list[dict]) -> list[dict]:
             pos_n = int(pos) if pos is not None and pos != "" else 10**9
         except (TypeError, ValueError):
             pos_n = 10**9
-        slot["pairs"].append((pos_n, i, fk.get("column") or "", fk.get("ref_column") or ""))
-    grouped = []
+        pair_lists[key].append((pos_n, i, str(fk.get("column") or ""), str(fk.get("ref_column") or "")))
+    grouped: list[dict] = []
     for key in order:
-        slot = groups[key]
-        pairs = sorted(slot.pop("pairs"))
-        slot["columns"] = [col for _, _, col, _ in pairs]
-        slot["ref_columns"] = [ref for _, _, _, ref in pairs]
-        grouped.append(slot)
+        out: dict = dict(groups[key])
+        pairs = sorted(pair_lists[key])
+        out["columns"] = [col for _, _, col, _ in pairs]
+        out["ref_columns"] = [ref for _, _, _, ref in pairs]
+        grouped.append(out)
     return grouped
 
 
@@ -975,10 +971,7 @@ def _action_text(group: dict) -> str:
 
 def _fk_phrase(child: str, group: dict) -> str:
     """`child` (`cols`) → `parent` (`cols`), plus referential actions when known."""
-    text = (
-        f"`{child}` ({_backticked(group['columns'])}) → "
-        f"`{group['ref_table']}` ({_backticked(group['ref_columns'])})"
-    )
+    text = f"`{child}` ({_backticked(group['columns'])}) → `{group['ref_table']}` ({_backticked(group['ref_columns'])})"
     action = _action_text(group)
     if action:
         text = f"{text} {action}"
@@ -995,9 +988,7 @@ def _fk_bullet(child: str, group: dict) -> str:
 def _cardinality(table: dict, columns: list[str]) -> str:
     """required/optional from nullability; at most one when the FK columns are unique."""
     by_name = {c.get("name"): c for c in (table.get("columns") or [])}
-    required = bool(columns) and all(
-        not (by_name.get(name) or {}).get("nullable", True) for name in columns
-    )
+    required = bool(columns) and all(not (by_name.get(name) or {}).get("nullable", True) for name in columns)
     fk_set = set(columns)
     pks = table.get("primary_keys") or []
     unique = bool(pks) and set(pks) <= fk_set
@@ -1039,16 +1030,10 @@ def _exact_table_name(column: str, tables: dict[str, dict]) -> str | None:
 def _match_why(via: str, column: str, target: str, pks: list[str], kind: str) -> str:
     pk = _pk_text(pks)
     if via == "parent":
-        return (
-            "column is `parent_id` and this table's primary key is (`id`); "
-            "usual self-reference, not declared"
-        )
+        return "column is `parent_id` and this table's primary key is (`id`); usual self-reference, not declared"
     if via == "plural":
         singular = column[:-3] if column.endswith("_id") else column
-        reason = (
-            f"name is `{column}`; `{target}` is the plural of `{singular}`; "
-            f"target primary key is {pk}"
-        )
+        reason = f"name is `{column}`; `{target}` is the plural of `{singular}`; target primary key is {pk}"
     elif via == "suffix":
         reason = f"name ends with `{target}_id`; target primary key is {pk}"
     else:
@@ -1113,11 +1098,7 @@ def _name_matches(schema: dict) -> list[dict]:
     tables = _base_tables(schema)
     found = []
     for tname, tinfo in tables.items():
-        declared = {
-            fk.get("column")
-            for fk in (tinfo.get("foreign_keys") or [])
-            if fk.get("column")
-        }
+        declared = {fk.get("column") for fk in (tinfo.get("foreign_keys") or []) if fk.get("column")}
         pks = list(tinfo.get("primary_keys") or [])
         for col in tinfo.get("columns") or []:
             name = col.get("name") or ""
@@ -1134,11 +1115,7 @@ def _unmatched_id_columns(schema: dict, matched: set[tuple[str, str]]) -> list[d
     """`_id` columns with no declared FK and no name match. Own PK columns are skipped."""
     rows = []
     for tname, tinfo in _base_tables(schema).items():
-        declared = {
-            fk.get("column")
-            for fk in (tinfo.get("foreign_keys") or [])
-            if fk.get("column")
-        }
+        declared = {fk.get("column") for fk in (tinfo.get("foreign_keys") or []) if fk.get("column")}
         pks = set(tinfo.get("primary_keys") or [])
         for col in tinfo.get("columns") or []:
             name = col.get("name") or ""

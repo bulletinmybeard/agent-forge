@@ -27,11 +27,7 @@ def _sql_confirm_condition(database: str, query: str) -> str | None:
         preview = query.strip()[:200]
         if len(query.strip()) > 200:
             preview += "..."
-        return (
-            f"! This query modifies data on {database}:\n"
-            f"  {preview}\n"
-            f"Execute anyway?"
-        )
+        return f"! This query modifies data on {database}:\n  {preview}\nExecute anyway?"
     return None
 
 
@@ -59,18 +55,12 @@ def execute_sql(database: str, query: str) -> str:
     try:
         from app.services.db_service import db_service
     except ImportError:
-        return (
-            "ERROR: Database service not available. "
-            "The execute_sql tool requires the scout-service runtime."
-        )
+        return "ERROR: Database service not available. The execute_sql tool requires the scout-service runtime."
 
     # Validate database exists
     if database not in db_service.available_databases:
         available = ", ".join(db_service.available_databases) or "(none configured)"
-        return (
-            f"ERROR: Database '{database}' is not configured.\n"
-            f"Available databases: {available}"
-        )
+        return f"ERROR: Database '{database}' is not configured.\nAvailable databases: {available}"
 
     # Log the query (truncated)
     query_preview = query.strip()[:200]
@@ -113,27 +103,18 @@ def db_query_plan(database: str, query: str) -> str:
     try:
         from app.services.db_service import db_service
     except ImportError:
-        return (
-            "ERROR: Database service not available. "
-            "The db_query_plan tool requires the scout-service runtime."
-        )
+        return "ERROR: Database service not available. The db_query_plan tool requires the scout-service runtime."
 
     if database not in db_service.available_databases:
         available = ", ".join(db_service.available_databases) or "(none configured)"
-        return (
-            f"ERROR: Database '{database}' is not configured.\n"
-            f"Available databases: {available}"
-        )
+        return f"ERROR: Database '{database}' is not configured.\nAvailable databases: {available}"
 
-    # Determine dialect for EXPLAIN syntax
-    try:
-        dialect = db_service.get_dialect(database)
-    except Exception:
-        dialect = "unknown"
+    # get_engine_type returns "mysql" or "postgres" from the config entry.
+    dialect = db_service.get_engine_type(database) or "unknown"
 
     # Build EXPLAIN command based on dialect
     clean_query = query.strip().rstrip(";")
-    if dialect == "postgresql":
+    if dialect == "postgres":
         explain_query = f"EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT) {clean_query}"
     elif dialect == "mysql":
         explain_query = f"EXPLAIN ANALYZE {clean_query}"
