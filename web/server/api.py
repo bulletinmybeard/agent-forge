@@ -1205,11 +1205,12 @@ async def list_agents():
             "title": "SQL Execution",
             "description": (
                 "Generate and execute SQL from natural language. Uses RAG to fetch schema context "
-                "(valid joins, columns), then generates SQL and runs it via execute_sql. Use "
-                "#hashtags to target a database. Destructive queries require confirmation."
+                "(valid joins, columns), then generates SQL and runs it via execute_sql. Can also "
+                "read and write local files. Use #hashtags to target a database. Destructive "
+                "queries require confirmation."
             ),
             "example": "@sql #sales how many new orders this week?",
-            "profile": "cloud-heavy",
+            "profile": "sql",
         },
         {
             "id": "logs",

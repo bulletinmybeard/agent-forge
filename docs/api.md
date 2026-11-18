@@ -437,7 +437,7 @@ Two stores, both populated by the backend after a successful run (not by the cal
 | GET    | `/api/memory/exchanges`              | List stored Q&A exchanges (Qdrant scroll). Query: `limit`, `offset`. |
 | DELETE | `/api/memory/exchanges/{id}`         | Delete one exchange.                                                 |
 | DELETE | `/api/memory/exchanges`              | Clear all exchanges.                                                 |
-| GET    | `/api/memory/schemas`                | Cached SQL schemas (for `@sql`). Includes `schema_tool_available`; never 503s when the private plugin is missing. |
+| GET    | `/api/memory/schemas`                | Cached SQL schemas (for `@sql`). Includes `schema_tool_available`; an import failure returns configured DBs with empty cache metadata instead of 503. |
 | POST   | `/api/memory/schemas/{db}/scan`      | Refresh a schema cache.                                              |
 | DELETE | `/api/memory/schemas/{db}`           | Clear one cached schema.                                             |
 | PUT    | `/api/memory/schemas/cache/disabled` | Toggle "always fetch fresh". Body: `{ disabled }`.                   |

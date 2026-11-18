@@ -103,14 +103,39 @@ def register_core_tools(registry: ToolRegistry) -> int:
 
 
 def register_optional_tools(registry: ToolRegistry) -> int:
-    """Register built-in tools that need credentials (Put.io, Premiumize, ...).
+    """Register built-in tools that need credentials or a config section.
 
-    Each submodule registers only when its env vars are set. Returns the count
-    registered.
+    Cloud tools register only when their env vars are set. SQL tools register
+    when ``sql_databases`` in config.yaml names at least one database.
+    Returns the count registered.
     """
     from .cloud_tools import register_cloud_tools
 
-    return register_cloud_tools(registry)
+    return register_cloud_tools(registry) + register_configured_sql_tools(registry)
+
+
+def register_configured_sql_tools(registry: ToolRegistry) -> int:
+    """Register the SQL query tools when ``sql_databases`` is configured.
+
+    Returns 0 when the section is empty or the app config cannot be imported.
+    A second call does not register the same tools again.
+    """
+    if not _sql_databases_configured():
+        return 0
+    from .sql_schema_tool import register_sql_schema_tools
+    from .sql_tools import register_sql_tools
+
+    return register_sql_tools(registry) + register_sql_schema_tools(registry)
+
+
+def _sql_databases_configured() -> bool:
+    """True when config.yaml ``sql_databases`` has at least one entry."""
+    try:
+        from app.config import settings
+    except Exception:  # noqa: BLE001 — agentforge CLI can run without the app package
+        return False
+    sql = getattr(settings, "sql_databases", None)
+    return bool(getattr(sql, "available_names", None))
 
 
 def load_plugin_tools(registry: ToolRegistry) -> int:

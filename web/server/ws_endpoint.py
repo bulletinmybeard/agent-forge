@@ -9405,6 +9405,11 @@ async def _run_agent(
 # SQL execution mode — RAG schema lookup → agent generates & runs SQL
 # ---------------------------------------------------------------------------
 
+# No round cap. Schema extract plus follow-up queries does not fit in
+# 8 iterations, and the cap forced a no-tools wrap-up mid-task.
+# Duplicate-call guards, error escalation, and cancel still end a runaway.
+_SQL_MAX_ITERATIONS = None
+
 _SQL_SYSTEM_PROMPT_TEMPLATE = """\
 You are AgentForge, an AI assistant for your team.
 The user wants you to query an internal database. Below is the schema context
@@ -9421,6 +9426,11 @@ INSTRUCTIONS:
    that fits in context, and caches the full JSON in Redis for follow-up queries.
    Do NOT query information_schema manually — execute_sql truncates results
    to 100 rows, which loses most of the schema for large databases.
+   Exception: if the user wants that schema saved to a file, call
+   sql_save_schema(database, path) and nothing else. Do not also call
+   sql_extract_schema, and do not paste the schema into the reply or into
+   write_file — the tool writes the Markdown. A directory path such as
+   ~/Downloads is enough; the file name is `<database>-schema.md`.
 2. Study the schema from sql_extract_schema carefully. Identify which tables
    and columns are needed to answer the user's question.
 3. Write a SQL query and execute it using the execute_sql tool.
@@ -9430,6 +9440,9 @@ INSTRUCTIONS:
    Do NOT just dump the raw table — summarise the results conversationally.
    Example: "There were 47 new sales orders created in the past week."
 5. If the query fails, analyse the error and try a corrected query.
+6. When the user names a local file, read it with read_file before you query.
+   When they ask to save a query or a small result, write it with write_file.
+   A full schema breakdown goes to sql_save_schema, not write_file.
 
 {dialect_hint}
 
@@ -9730,12 +9743,16 @@ async def _run_sql(
         from agentforge.agent import AgentLoop
         from agentforge.client import AIClient
 
-        # Use cloud-heavy for SQL — small models (devstral) are weak at
-        # tool calling with complex schema context.
-        agent_client = AIClient(profile="cloud-heavy", session_overrides=overrides)
+        agent_client = AIClient(profile="sql", session_overrides=overrides)
 
-        # Expose execute_sql + schema extraction for this mode
-        tool_subset = ["sql_extract_schema", "execute_sql"]
+        # Schema, query, and local file read/write.
+        tool_subset = [
+            "sql_extract_schema",
+            "sql_save_schema",
+            "execute_sql",
+            "read_file",
+            "write_file",
+        ]
 
         _agent_event = _make_agent_event_callback(send_sync, db, session_id, total_start)
 
@@ -9744,7 +9761,7 @@ async def _run_sql(
             rt.registry,
             system_prompt=sql_system_prompt,
             tools=tool_subset,
-            max_iterations=8,  # schema discovery + generate SQL + retries
+            max_iterations=_SQL_MAX_ITERATIONS,
             verbose=False,
             cancel_event=cancel_event,
             on_event=_agent_event,
@@ -9756,7 +9773,7 @@ async def _run_sql(
         config_msg = protocol.agent_config(
             profile="sql",
             model=agent_client.model,
-            tools=2,  # sql_extract_schema + execute_sql
+            tools=len(tool_subset),
             session_id=session_id,
             provider=agent_client.profile.provider,
             mode="sql",

@@ -200,35 +200,35 @@ def test_schema_cache_is_per_user_and_legacy_keys_belong_to_admin(monkeypatch):
     redis = _Redis()
     monkeypatch.setattr(schema, "_get_redis", lambda: redis)
     legacy = json.dumps({"table_count": 2, "total_columns": 4, "view_count": 0, "_cached_at": "t0"})
-    redis.store["schema_cache:companydb"] = legacy
+    redis.store["schema_cache:demodb"] = legacy
 
     admin = set_current_user(ADMIN_USER_ID)
     try:
-        found = schema.get_cached_schema("companydb")
+        found = schema.get_cached_schema("demodb")
         assert found is not None
         assert found["table_count"] == 2
-        assert "schema_cache:companydb" not in redis.store
-        assert f"schema_cache:{ADMIN_USER_ID}:companydb" in redis.store
+        assert "schema_cache:demodb" not in redis.store
+        assert f"schema_cache:{ADMIN_USER_ID}:demodb" in redis.store
         schema._set_cached_schema("lunadb", {"table_count": 9, "total_columns": 1, "view_count": 0})
     finally:
         reset_current_user(admin)
 
     other = set_current_user("00000000-0000-0000-0000-0000000000aa")
     try:
-        assert schema.get_cached_schema("companydb") is None
+        assert schema.get_cached_schema("demodb") is None
         assert schema.get_cached_schema("lunadb") is None
-        schema._set_cached_schema("companydb", {"table_count": 1, "total_columns": 1, "view_count": 0})
-        meta = schema.get_cached_schema_metadata("companydb")
+        schema._set_cached_schema("demodb", {"table_count": 1, "total_columns": 1, "view_count": 0})
+        meta = schema.get_cached_schema_metadata("demodb")
         assert meta is not None
         assert meta["table_count"] == 1
         assert schema.clear_all_cached_schemas() == 1
-        assert schema.get_cached_schema("companydb") is None
+        assert schema.get_cached_schema("demodb") is None
     finally:
         reset_current_user(other)
 
     admin = set_current_user(ADMIN_USER_ID)
     try:
-        company = schema.get_cached_schema("companydb")
+        company = schema.get_cached_schema("demodb")
         luna = schema.get_cached_schema("lunadb")
         assert company is not None and luna is not None
         assert company["table_count"] == 2

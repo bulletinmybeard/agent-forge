@@ -213,7 +213,7 @@ def clear_exchanges() -> dict[str, Any]:
 
 
 def _import_schema_tool():
-    """Load sql_schema_tool helpers; return None when the private plugin is absent."""
+    """Load sql_schema_tool helpers; return None when the import fails."""
     try:
         from agentforge.tools import sql_schema_tool as mod
 
@@ -242,8 +242,8 @@ def list_schemas() -> dict[str, Any]:
     Cached counts belong to the logged-in user. The database names come from
     the server config and are listed for everyone who can run SQL.
 
-    Never 503s the Memory modal when the optional SQL schema plugin is
-    missing — return configured DBs with empty cache metadata instead.
+    Never 503s the Memory modal when sql_schema_tool cannot be imported —
+    return configured DBs with empty cache metadata instead.
     """
     try:
         from app.services.db_service import db_service
@@ -311,7 +311,7 @@ def scan_schema(database: str) -> dict[str, Any]:
     if schema_mod is None:
         raise HTTPException(
             status_code=503,
-            detail="sql_schema_tool not installed (private plugin missing on this host)",
+            detail="sql_schema_tool could not be imported",
         )
     try:
         from agentforge.tools.routing import get_role_for_tool
@@ -359,7 +359,7 @@ def clear_schema(database: str) -> dict[str, Any]:
     if schema_mod is None:
         raise HTTPException(
             status_code=503,
-            detail="sql_schema_tool not installed (private plugin missing on this host)",
+            detail="sql_schema_tool could not be imported",
         )
     ok = schema_mod.clear_cached_schema(database)
     if not ok:
@@ -374,7 +374,7 @@ def clear_all_schemas() -> dict[str, Any]:
     if schema_mod is None:
         raise HTTPException(
             status_code=503,
-            detail="sql_schema_tool not installed (private plugin missing on this host)",
+            detail="sql_schema_tool could not be imported",
         )
     removed = schema_mod.clear_all_cached_schemas()
     return {"cleared": removed}
@@ -390,7 +390,7 @@ def set_schema_cache_disabled(body: dict[str, Any]) -> dict[str, Any]:
     if schema_mod is None:
         raise HTTPException(
             status_code=503,
-            detail="sql_schema_tool not installed (private plugin missing on this host)",
+            detail="sql_schema_tool could not be imported",
         )
     disabled = bool(body.get("disabled"))
     schema_mod.set_cache_disabled(disabled)
