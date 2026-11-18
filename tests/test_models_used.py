@@ -6,6 +6,22 @@ from agentforge.client import (
 )
 
 
+def test_profile_label_wins_over_model_id():
+    from types import SimpleNamespace
+
+    from agentforge.client import profile_display_label
+
+    labeled = SimpleNamespace(label="glm-5.3-flash", model="glm-5.3-flash:cloud")
+    assert profile_display_label(labeled) == "glm-5.3-flash"
+    bare = SimpleNamespace(label="", model="deepseek/deepseek-v4-flash")
+    assert profile_display_label(bare) == "deepseek-v4-flash"
+
+    reset_models_used()
+    add_model_used(profile_display_label(labeled))
+    add_model_used(profile_display_label(labeled))
+    assert get_models_used(profile_display_label(labeled)) == ["glm-5.3-flash"]
+
+
 def test_normalize_strips_provider_prefix():
     assert normalize_model_label("deepseek/deepseek-v4-flash") == "deepseek-v4-flash"
     assert normalize_model_label("minimax-m3:cloud") == "minimax-m3:cloud"

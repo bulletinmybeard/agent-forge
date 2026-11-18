@@ -323,11 +323,12 @@ Put.io and Premiumize.me file and transfer management. These register only when 
 
 ## Optional SQL tools
 
-Loaded as a plugin (not part of the core set), these back `@sql`. They need the plugin registered via `AGENTFORGE_TOOL_PLUGINS` and a `databases` / `sql_databases` entry in `config.yaml`.
+These ship with the package and back `@sql`. They register when `sql_databases` in `config.yaml` has at least one database. No `AGENTFORGE_TOOL_PLUGINS` entry is required. The separate `databases` block is only for the chunking introspect (`agentforge-chunk-db`).
 
 | Tool                 | Description                                                          |
 | -------------------- | -------------------------------------------------------------------- |
 | `sql_extract_schema` | Extract the full schema (tables, columns, PKs, FKs), cached in Redis |
+| `sql_save_schema`    | Write that schema to a Markdown file without the model regenerating it |
 | `execute_sql`        | Run a SQL query (row-capped; writes confirm)                         |
 | `db_query_plan`      | `EXPLAIN ANALYZE`: execution plan, index usage, timing               |
 
@@ -356,7 +357,7 @@ Full request/response shapes: [api.md — Direct tool run](api.md#direct-tool-ru
 
 - **Locality.** Most tools run on the host (locality `local`). The web tools (`web_search`, `web_fetch`, `web_fetch_rendered`, `web_screengrab`) run `remote`, in the scraper sidecar. Routing is set in `tool_routing.yaml`.
 - **Confirmation.** Destructive tools pause for approval: `delete_file`, `code_edit`, `revert_file`, `revert_lines`, SQL writes, and the Put.io/Premiumize delete + cancel tools. The chat UI shows a dialog with a "yes to all" option for the rest of a run.
-- **Credentials.** Some tools only register (or only work) once their secret is set: TMDB (`TMDB_API_KEY`), Put.io (`PUTIO_TOKEN`), Premiumize (`PREMIUMIZE_API_KEY`), and the SQL plugin (`databases` in `config.yaml`). The infra tools (`qdrant_admin`, `redis_inspect`) talk to the stack's own Qdrant/Redis, no extra secret.
+- **Credentials.** Some tools only register (or only work) once their secret is set: TMDB (`TMDB_API_KEY`), Put.io (`PUTIO_TOKEN`), Premiumize (`PREMIUMIZE_API_KEY`), and the SQL tools (`sql_databases` in `config.yaml`). The infra tools (`qdrant_admin`, `redis_inspect`) talk to the stack's own Qdrant/Redis, no extra secret.
 - **External binaries.** Some tools shell out and only work if the binary is present: `ffmpeg` (video), ImageMagick (images, icons), `yt-dlp`, `jq`/`yq`, `ncdu`, `tree`, `gh`, `k6`, `ripgrep`, `remindctl` (Apple Reminders, macOS), `terminal-notifier` (desktop notifications, macOS). Missing binaries fail that one tool, not the run.
 - **Adding tools.** Third-party packages register their own via a `register(registry)` entry point under the `agentforge.tools` group, or the `AGENTFORGE_TOOL_PLUGINS` env var. See [plugin-authoring.md](plugin-authoring.md).
 - **Direct REST.** Allowlisted tools can also run outside the agent loop via `/api/tools/run` (see [Direct tool-run API](#direct-tool-run-api)).

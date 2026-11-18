@@ -47,6 +47,19 @@ FallbackHook = Callable[[str, str, BaseException], None]
 _models_used: ContextVar[list[str] | None] = ContextVar("agentforge_models_used", default=None)
 
 
+def profile_display_label(profile: Any, model: str | None = None) -> str:
+    """UI name for a profile.
+
+    A configured ``label`` wins. Otherwise the same shortening
+    :func:`normalize_model_label` already applies to the model id.
+    """
+    custom = str(getattr(profile, "label", "") or "").strip()
+    if custom:
+        return custom
+    fallback = model if model is not None else getattr(profile, "model", None)
+    return normalize_model_label(fallback)
+
+
 def normalize_model_label(model: str | None) -> str:
     """Short stable label for summary display.
 
@@ -226,7 +239,13 @@ class AIClient:
 
     @property
     def model(self) -> str:
+        """Provider model id. Not the UI label."""
         return self._profile.model
+
+    @property
+    def display_label(self) -> str:
+        """Name to show for this client. Custom label, else the shortened model id."""
+        return profile_display_label(self._profile)
 
     @property
     def backend(self) -> Backend:
@@ -519,7 +538,7 @@ class AIClient:
                 f"profile {self._profile.name!r} ({self._profile.provider}) has no /v1/systemone support"
             )
         result = fn(state, questions, images)
-        add_model_used(result.get("model") or self._profile.model)
+        add_model_used(profile_display_label(self._profile, result.get("model") or self._profile.model))
         return result
 
     async def asystemone(
@@ -534,7 +553,7 @@ class AIClient:
                 f"profile {self._profile.name!r} ({self._profile.provider}) has no /v1/systemone support"
             )
         result = await fn(state, questions, images)
-        add_model_used(result.get("model") or self._profile.model)
+        add_model_used(profile_display_label(self._profile, result.get("model") or self._profile.model))
         return result
 
     # -- chat with fallback (sync) -----------------------------------------
@@ -568,7 +587,7 @@ class AIClient:
                     )
                     # Prefer the configured profile model (honours session
                     # overrides); fall back to provider-reported name.
-                    add_model_used(profile.model or getattr(resp, "model", None))
+                    add_model_used(profile_display_label(profile, profile.model or getattr(resp, "model", None)))
                     return resp
                 except BaseException as exc:
                     if self._is_cancellation(exc):
@@ -632,7 +651,7 @@ class AIClient:
                         deep_think=deep_think,
                         keep_alive=keep_alive,
                     )
-                    add_model_used(profile.model or getattr(resp, "model", None))
+                    add_model_used(profile_display_label(profile, profile.model or getattr(resp, "model", None)))
                     return resp
                 except BaseException as exc:
                     if self._is_cancellation(exc):
@@ -714,7 +733,7 @@ class AIClient:
                     )
                 continue
             # First chunk obtained — commit to this profile.
-            add_model_used(profile.model)
+            add_model_used(profile_display_label(profile))
             yield first
             yield from gen
             return
@@ -766,7 +785,7 @@ class AIClient:
                         on_fallback,
                     )
                 continue
-            add_model_used(profile.model)
+            add_model_used(profile_display_label(profile))
             yield first
             async for chunk in agen:
                 yield chunk

@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-11-18
+
+### Added
+
+- **SQL tools.** `execute_sql`, `db_query_plan`, `sql_extract_schema`, and `sql_save_schema` ship in the package. They register when `sql_databases` in `config.yaml` has at least one database. `AGENTFORGE_TOOL_PLUGINS` is not required. The `databases` block stays the chunking introspect (`agentforge-chunk-db`). `sql_save_schema(database, path)` writes the schema as Markdown (`<database>-schema.md` when `path` is a directory). See [docs/tools.md](docs/tools.md#optional-sql-tools)
+- **Profile `label`.** Optional display name on an AI profile (`label`, or `model_label` as an alias). The provider still receives `model`. A role profile inherits it. `GET /api/profiles` includes `label` (`""` when unset). `GET /api/providers` adds `labels` for abstract profiles that set one; `models` stays the model id. Prompt-lab results include `label`. The config card, the "Calling …" status, fallback badges, and the summary model chain show the label when it is set. A session override that swaps the model id clears the label unless that override sets one
+
+### Changed
+
+- **`@sql`.** The mode uses the `sql` profile (`reasoner`, temperature 0.1, fallback `agent-light`) instead of `cloud-heavy`. The loop has no iteration cap. Duplicate-call guards, error escalation, and cancel still stop a runaway. The tool list is `sql_extract_schema`, `sql_save_schema`, `execute_sql`, `read_file`, and `write_file`. A request to save the schema calls `sql_save_schema` only. `GET /api/memory/schemas` still returns configured databases with empty cache metadata when the schema module cannot be imported. Scan, clear, and the cache toggle return 503 with `sql_schema_tool could not be imported` in that case
+
+### Fixed
+
+- **Swagger.** `/docs`, `/redoc`, and `/openapi.json` are outside the API-key gate on the API and the web app. Authorize accepts `Authorization: Bearer <key>` or `x-api-key`. Try it out still hits the gate. Every other route stays closed
+
 ## [0.20.0] - 2026-11-14
 
 ### Added

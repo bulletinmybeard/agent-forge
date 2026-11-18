@@ -50,6 +50,11 @@ def apply_session_overrides(
         except (TypeError, ValueError):
             pass
 
+    # A swapped model id no longer matches the profile's display label.
+    # An explicit label in the per-profile entry is kept.
+    if patch.get("model") and str(patch["model"]) != profile.model and "label" not in patch:
+        patch["label"] = ""
+
     if not patch:
         return profile
     return replace(profile, **patch)
@@ -68,3 +73,5 @@ def _merge_entry(patch: dict[str, Any], entry: dict[str, Any]) -> None:
             patch["max_tokens"] = int(entry["max_tokens"])
         except (TypeError, ValueError):
             pass
+    if entry.get("label") or entry.get("model_label"):
+        patch["label"] = str(entry.get("label") or entry.get("model_label")).strip()

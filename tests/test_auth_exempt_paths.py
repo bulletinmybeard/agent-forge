@@ -1,4 +1,4 @@
-"""API-key gate: only liveness, worker callbacks, and OAuth redirects are open.
+"""API-key gate: liveness, worker callbacks, OAuth redirects, and Swagger are open.
 
 The exempt list is the one place where widening a prefix silently un-gates a
 whole tree (``/api`` would open every route), so pin both halves: what must
@@ -23,6 +23,10 @@ from app.security import is_exempt
         # An external provider redirects the browser here with no key to attach.
         "/api/connectors/auth/callback",
         "/api/film/simkl/callback",
+        "/docs",
+        "/docs/oauth2-redirect",
+        "/redoc",
+        "/openapi.json",
     ],
 )
 def test_open_paths(path: str):
@@ -42,7 +46,31 @@ def test_open_paths(path: str):
         "/healthcheck",
         "/api/connectors/auth/callbackx",
         "/internalx",
+        "/docsx",
+        "/redocx",
+        "/openapi",
     ],
 )
 def test_gated_paths(path: str):
     assert not is_exempt(path)
+
+
+def test_openapi_advertises_both_keys():
+    from fastapi import FastAPI
+
+    from app.security import _HTTP_API_KEY_HEADER, install_api_key_auth
+
+    app = FastAPI()
+
+    @app.get("/api/sessions")
+    def _sessions():
+        return []
+
+    install_api_key_auth(app)
+    schema = app.openapi()
+    schemes = schema["components"]["securitySchemes"]
+    assert schemes["HTTPBearer"]["scheme"] == "bearer"
+    assert schemes["ApiKeyHeader"]["name"] == _HTTP_API_KEY_HEADER
+    assert {"HTTPBearer": []} in schema["security"]
+    assert {"ApiKeyHeader": []} in schema["security"]
+    assert "/api/sessions" in schema["paths"]

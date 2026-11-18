@@ -99,8 +99,9 @@ dedup:
 #     source_name: "warehouse"
 #     schema: "public"
 
-# Named DB connections for the execute_sql tool (optional, private — supply
-# your own). The tool resolves #hashtag -> database name -> URL.
+# Named DB connections for execute_sql, sql_extract_schema, and db_query_plan.
+# Optional. With at least one entry, those tools register on startup.
+# The tool resolves #hashtag -> database name -> URL.
 # sql_databases:
 #   mydb:
 #     name: "My Database"

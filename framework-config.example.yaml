@@ -65,6 +65,7 @@ ai:
     vision:         { profile: visual,  max_tokens: 4000 }
     cloud-light:    { profile: light }
     cloud-heavy:    { profile: heavy,   temperature: 0.1 }
+    sql:            { profile: reasoner, temperature: 0.1, fallbacks: [agent-light] }
     cloud-coder:    { profile: coder }
     local-embedding: { profile: embed }
 

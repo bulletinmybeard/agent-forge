@@ -43,7 +43,7 @@ from agentforge.tools.page_text import clip_tool_output
 from agentforge.tools.routing import dispatch_mode, my_role
 from agentforge.tools.shell import take_executed_shell_command
 
-from .client import AIClient, ChatResponse, add_model_used
+from .client import AIClient, ChatResponse, add_model_used, profile_display_label
 from .config import get_config
 from .context import PipelineContext
 from .tools import ToolRegistry
@@ -409,7 +409,11 @@ class AgentLoop:
         profile = getattr(self._client, "profile", None)
         payload: dict[str, Any] = {
             "status": "calling_model",
-            "model": getattr(profile, "model", "") or getattr(self._client, "model", "") or "",
+            "model": (
+                profile_display_label(profile)
+                if profile is not None
+                else (getattr(self._client, "display_label", "") or getattr(self._client, "model", "") or "")
+            ),
             "profile": getattr(profile, "name", "") or "",
             "provider": getattr(profile, "provider", "") or "",
             "messages": len(messages),
@@ -432,8 +436,8 @@ class AgentLoop:
             cfg = self._client._config
             prev = cfg.get_profile(prev_name)
             nxt = cfg.get_profile(next_name)
-            prev_model = prev.model
-            next_model = nxt.model
+            prev_model = prev.display_label
+            next_model = nxt.display_label
             provider = nxt.provider
         except Exception:
             logger.debug("[Agent] fallback profile lookup failed", exc_info=True)

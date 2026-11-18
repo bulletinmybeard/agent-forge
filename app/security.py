@@ -25,6 +25,9 @@ Clients present a key as:
 ``/health`` and the internal worker callbacks (``/internal/*``) are exempt — the
 latter ride the internal Docker network and are not a person. ``POST /api/auth/login``
 is the only other anonymous route, and only that exact path.
+
+``/docs``, ``/redoc``, and ``/openapi.json`` are also open. Swagger has to load
+before its Authorize button can attach a key. Every other route stays gated.
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ import logging
 import os
 from contextvars import ContextVar, Token
 
+from fastapi.openapi.utils import get_openapi
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.websockets import WebSocket
@@ -95,6 +99,11 @@ _EXEMPT_PREFIXES = (
     "/internal",
     "/api/connectors/auth/callback",
     "/api/film/simkl/callback",
+    # Swagger UI, ReDoc, and the schema they fetch. A browser cannot send
+    # Authorization until the page has loaded. Try it out is not exempt.
+    "/docs",
+    "/redoc",
+    "/openapi.json",
 )
 
 
@@ -233,12 +242,49 @@ def _http_key(request: Request) -> str | None:
     return request.headers.get(_HTTP_API_KEY_HEADER) or None
 
 
+def install_openapi_security(app) -> None:
+    """Tell Swagger about the two keys this middleware accepts.
+
+    Does not enforce anything. The middleware does. Declaring the schemes
+    makes /docs show Authorize and send the header on Try it out.
+    """
+
+    def custom_openapi() -> dict:
+        if app.openapi_schema:
+            return app.openapi_schema
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            openapi_version=app.openapi_version,
+            summary=app.summary,
+            description=app.description,
+            routes=app.routes,
+            tags=app.openapi_tags,
+            servers=app.servers,
+        )
+        schemes = schema.setdefault("components", {}).setdefault("securitySchemes", {})
+        schemes["HTTPBearer"] = {"type": "http", "scheme": "bearer"}
+        schemes["ApiKeyHeader"] = {
+            "type": "apiKey",
+            "in": "header",
+            "name": _HTTP_API_KEY_HEADER,
+        }
+        # Either credential is enough. OpenAPI treats a list of one-scheme
+        # objects as OR.
+        schema["security"] = [{"HTTPBearer": []}, {"ApiKeyHeader": []}]
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = custom_openapi
+
+
 def install_api_key_auth(app) -> None:
     """Register the HTTP auth middleware. No-op at request time when disabled.
 
     Only guards HTTP requests; the WebSocket upgrade bypasses HTTP middleware
     (different ASGI scope) and is checked in the endpoint via :func:`negotiate_ws`.
     """
+    install_openapi_security(app)
 
     @app.middleware("http")
     async def _api_key_mw(request: Request, call_next):  # noqa: ANN001

@@ -28,6 +28,13 @@ class ResolvedProfile:
     host: str
     api_key: str
     provider: str = "ollama"
+    label: str = ""
+
+    @property
+    def display_label(self) -> str:
+        """UI name. Custom ``label``, otherwise the provider model id."""
+        text = (self.label or "").strip()
+        return text or self.model
 
     @property
     def headers(self) -> dict[str, str]:
@@ -124,6 +131,7 @@ class OllamaSettings(BaseSettings):
             host=fw_prof.base_url or fw_prof.host,
             api_key=fw_prof.api_key or "",
             provider=(fw_prof.provider or "ollama").lower(),
+            label=(fw_prof.label or "").strip(),
         )
 
     def get_role(self, role: str) -> ResolvedRole:
@@ -167,8 +175,11 @@ class OllamaSettings(BaseSettings):
         return self.get_role(role).profile
 
     def list_selectable_profiles(self, include_abstract: bool = False) -> dict[str, dict]:
-        """Return ``{profile_name: {model, temperature, max_tokens, provider, abstract}}``
+        """Return ``{profile_name: {model, label, temperature, max_tokens, provider, abstract}}``
         for every profile, with inheritance + provider override applied.
+
+        ``label`` is the optional display name from the profile (empty when
+        unset). ``model`` stays the provider model id.
 
         Abstract profiles (base model definitions tagged ``abstract: true``)
         are excluded by default — they exist only to be inherited. Set
@@ -235,6 +246,7 @@ class OllamaSettings(BaseSettings):
                 continue
             result[name] = {
                 "model": model,
+                "label": (prof.label or "").strip(),
                 "temperature": float(prof.temperature),
                 "max_tokens": int(prof.max_tokens),
                 "provider": (prof.provider or "ollama").lower(),

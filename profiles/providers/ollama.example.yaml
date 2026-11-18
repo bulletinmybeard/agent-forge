@@ -24,6 +24,7 @@ profiles:
     abstract: true
     provider: ollama
     model: "ministral-3:14b-cloud"
+    # label: ministral-3   # optional UI name; `model` stays the provider id
     temperature: 0.5
     max_tokens: 2000
 
